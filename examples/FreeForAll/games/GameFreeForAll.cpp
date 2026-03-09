@@ -11,6 +11,12 @@
 // Radio messages (even = request)
 //   MSG_LIT  (0x10) : unicast to the player who was optically detected.
 //
+// Radio replies (odd = reply, msgType = request + 1)
+//   Reply to MSG_LIT (0x11), payload[0] indicates outcome:
+//     MSG_REPLY_TAKEN (0x00) : hit registered; player still alive (lives > 0).
+//     MSG_REPLY_SHONE (0x01) : hit registered; player eliminated (lives == 0).
+//     MSG_REPLY_OUT   (0x02) : player was already out; hit had no effect.
+//
 // Config vars
 //   startLives   : lives at game start (default 3).
 //   respawnSecs  : seconds until auto-respawn (default 30).
@@ -41,7 +47,8 @@ namespace FFA {
 enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 
 // ---- Radio message types ----
-enum Msg : uint8_t { MSG_LIT = 0x10 };
+enum Msg      : uint8_t { MSG_LIT = 0x10 };
+enum MsgReply : uint8_t { MSG_REPLY_TAKEN = 0x00, MSG_REPLY_SHONE = 0x01, MSG_REPLY_OUT = 0x02 };
 
 // ---- Config variables ----
 static int startLives  = 3;     // lives at start / after respawn
@@ -153,12 +160,13 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
 
-    // Each incoming MSG_LIT costs one life; acknowledge with a reply.
+    // Each incoming MSG_LIT costs one life; reply signals the outcome.
     for (uint8_t i = 0; i < radio.count; i++) {
         if (radio.events[i].type == RadioEventType::MessageReceived &&
             radio.events[i].packet.msgType == MSG_LIT) {
             if (lives > 0) lives--;
-            out.radio.reply(radio.events[i].packet);   // MSG_LIT + 1 = 0x11
+            uint8_t replyPayload = (lives > 0) ? MSG_REPLY_TAKEN : MSG_REPLY_SHONE;
+            out.radio.reply(radio.events[i].packet, &replyPayload, 1);
         }
     }
 
@@ -205,9 +213,18 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
     // NO_HIT / LOW_POW: missed shot — no radio message.
 }
 
-static void doOutGame(const InputReport&, const RadioReport&,
-                      LightAir_DisplayCtrl&, GameOutput&) {
+static void doOutGame(const InputReport&, const RadioReport& radio,
+                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();   // keep countdown running while waiting to respawn
+
+    // Reject any incoming MSG_LIT — player is out; inform the sender.
+    for (uint8_t i = 0; i < radio.count; i++) {
+        if (radio.events[i].type == RadioEventType::MessageReceived &&
+            radio.events[i].packet.msgType == MSG_LIT) {
+            uint8_t replyPayload = MSG_REPLY_OUT;
+            out.radio.reply(radio.events[i].packet, &replyPayload, 1);
+        }
+    }
 }
 
 static const StateBehavior behaviors[] = {
