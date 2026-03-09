@@ -1,0 +1,5 @@
+
+Radio message system : standard packet
+Radio message system : reply manager (HIT, etc.)
+LightAir_SoundCtrl : make possible continuous sounds (like for flag holding)
+LCD controller ? How do I define it once to be used both by UI and the game? Can I just use an already existing implementation like adafruit library?
