@@ -62,7 +62,7 @@ enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3 };
 static int startLives   = 3;     // lives at start / after respawn
 static int respawnSecs  = 30;    // seconds until auto-respawn
 static int startEnergy  = 50;    // energy at start / after respawn
-static int rechargeSecs = 1000;  // secs after trigger release before energy restored
+static int rechargeSecs = 10;    // secs after trigger release before energy restored
 static int gameTime     = 900;   // total game duration in seconds
 
 // ---- Runtime variables ----
