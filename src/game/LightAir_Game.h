@@ -2,6 +2,9 @@
 #include "LightAir_GameVar.h"
 #include "LightAir_StateRule.h"
 #include "LightAir_StateBehavior.h"
+#include "LightAir_DirectRadioRule.h"
+#include "LightAir_ReplyRadioRule.h"
+#include "LightAir_WinnerVar.h"
 
 // ----------------------------------------------------------------
 // LightAir_Game — complete descriptor of a table-driven game.
@@ -18,10 +21,20 @@
 //   name           — short display name (≤15 chars) shown in the
 //                    game-selection menu.
 //
-//   vars / varCount — tracked game variables.  INT vars with
-//                    isConfig=true appear in the config menu.
-//                    Vars with stateMask != 0 are auto-bound to
-//                    the display by GameRunner::begin().
+//   configVars / configCount — variables shown and edited in the
+//                    pre-game config menu (integers with min/max/step).
+//
+//   monitorVars / monitorCount — variables auto-bound to the LCD by
+//                    GameRunner::begin() based on each var's stateMask.
+//
+//   directRadioRules / directRadioRuleCount — incoming message handlers.
+//                    Evaluated before StateRules.  First match per event
+//                    sends a reply and runs the action.  Unmatched messages
+//                    receive a standard empty reply automatically.
+//
+//   replyRadioRules / replyRadioRuleCount — reply and timeout handlers.
+//                    Evaluated after DirectRadioRules, before StateRules.
+//                    First match per event runs the action.
 //
 //   rules / ruleCount — state-transition table, evaluated in order.
 //                    First matching rule fires per cycle.
@@ -44,7 +57,7 @@
 // ----------------------------------------------------------------
 // Minimal example — Free for All:
 //
-//   // --- games/FreeForAll.cpp ---
+//   // --- rulesets/GameFreeForAll.cpp ---
 //   #include <LightAir.h>
 //
 //   enum State : uint8_t { IN_GAME, OUT_GAME };
@@ -54,9 +67,12 @@
 //   static uint8_t gState;
 //   extern Enlight enlight;   // defined in sketch
 //
-//   static GameVar vars[] = {
-//       GameVar::Int("Lives", &lives, 1<<IN_GAME, ICON_LIFE,  0,0, true, 1,10,1),
-//       GameVar::Int("Score", &score, 1<<IN_GAME, ICON_SCORE, 1,0),
+//   static const ConfigVar configVars[] = {
+//       { "Lives", &lives, 1, 10, 1 },
+//   };
+//   static const MonitorVar monitorVars[] = {
+//       MonitorVar::Int("Lives", &lives, 1<<IN_GAME, ICON_LIFE,  0, 0),
+//       MonitorVar::Int("Score", &score, 1<<IN_GAME, ICON_SCORE, 1, 0),
 //   };
 //
 //   static bool gotHit(const InputReport&, const RadioReport& r) {
@@ -86,14 +102,18 @@
 //   const LightAir_Game game_ffa = {
 //       .typeId         = 0x00000001,
 //       .name           = "Free for All",
-//       .vars           = vars,      .varCount       = 2,
-//       .rules          = rules,     .ruleCount      = 2,
-//       .behaviors      = behaviors, .behaviorCount  = 2,
-//       .currentState   = &gState,   .initialState   = IN_GAME,
+//       .configVars     = configVars,  .configCount    = 1,
+//       .monitorVars    = monitorVars, .monitorCount   = 2,
+//       .rules          = rules,       .ruleCount      = 2,
+//       .behaviors      = behaviors,   .behaviorCount  = 2,
+//       .currentState   = &gState,     .initialState   = IN_GAME,
 //       .onBegin        = nullptr,
+//       .winnerVars     = winnerVars,  .winnerVarCount = 2,
+//       .scoringState   = GAME_END,
+//       .scoreMsgType   = MSG_SCORE_COLLECT,
 //   };
 //
-//   // --- games/AllGames.cpp ---
+//   // --- rulesets/AllGames.cpp ---
 //   extern const LightAir_Game game_ffa;
 //   void registerAllGames(LightAir_GameManager& mgr) {
 //       mgr.registerGame(game_ffa);
@@ -103,8 +123,17 @@ struct LightAir_Game {
     uint32_t             typeId;
     const char*          name;
 
-    GameVar*             vars;
-    uint8_t              varCount;
+    const ConfigVar*     configVars;
+    uint8_t              configCount;
+
+    const MonitorVar*    monitorVars;
+    uint8_t              monitorCount;
+
+    const DirectRadioRule* directRadioRules;
+    uint8_t                directRadioRuleCount;
+
+    const ReplyRadioRule*  replyRadioRules;
+    uint8_t                replyRadioRuleCount;
 
     const StateRule*     rules;
     uint8_t              ruleCount;
@@ -118,4 +147,24 @@ struct LightAir_Game {
     // Called by GameRunner::begin() after display binding sets are built.
     // nullptr = skip.
     void (*onBegin)(LightAir_DisplayCtrl&, LightAir_Radio&);
+
+    // ---- End-game score collection and winner election (optional) ----
+    //
+    // When the game enters scoringState, every player broadcasts its own
+    // scores; each device accumulates received data and computes the winner
+    // locally once all expected scores arrive.  GameRunner manages the roster,
+    // accumulation, fusion re-broadcast, and winner display entirely.
+    //
+    // Set winnerVars = nullptr or scoringState = 255 to disable.
+    //
+    // Slot size is winnerVarCount × 4 bytes (one int32_t per variable).
+    // Constraint: 4 + rosterCount × slotSize ≤ RADIO_MAX_PAYLOAD (239).
+    //
+    // winnerVars[] priority order: index 0 = primary, index 1 = tie-breaker…
+    // Use PlayerDefs::playerShort[roster[i]] for player names in messages.
+
+    const WinnerVar* winnerVars;      // ordered scoring rules; nullptr = disabled
+    uint8_t          winnerVarCount;
+    uint8_t          scoringState;    // state that activates collection; 255 = disabled
+    uint8_t          scoreMsgType;    // even msgType for the per-player score broadcast
 };

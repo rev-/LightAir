@@ -96,7 +96,34 @@ namespace GameDefaults {
     constexpr uint8_t  MSG_CONFIG        = 0x20; // radio msgType for config broadcast (even)
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
-    constexpr uint8_t  RADIO_OUT_PAYLOAD = 32;   // max payload bytes per queued message
+    constexpr uint8_t  RADIO_OUT_PAYLOAD = 239;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
     constexpr uint8_t  MAX_GAMES         = 8;    // max games registered in GameManager
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
+    constexpr uint8_t  MAX_WINNER_VARS   = 8;    // max entries in a winnerVars[] table
+    constexpr uint32_t SCORE_RETRY_MS    = 2000; // ms between score re-broadcasts during scoringState
+}
+
+// ---------------------------------------------------------------
+// Player identity tables
+//
+// Player IDs are uint8_t values 0-15 used both as the logical
+// radio address (last byte of the spoofed MAC) and as an index
+// into these tables for display and winner announcements.
+// ---------------------------------------------------------------
+namespace PlayerDefs {
+    constexpr uint8_t MAX_PLAYER_ID = 16;
+
+    // Long readable names (≤11 chars + null).
+    constexpr char playerNames[MAX_PLAYER_ID][12] = {
+        "00-None",   "01-Clear",   "02-Green",   "03-Yellow",
+        "04-Blue",   "05-Orange",  "06-Red",     "07-Lime",
+        "08-Magenta","09-Purple",  "10-Unknown", "11-Unknown",
+        "12-Unknown","13-Unknown", "14-Unknown", "15-Unknown",
+    };
+
+    // Short 3-capital-letter labels (3 chars + null).
+    constexpr char playerShort[MAX_PLAYER_ID][4] = {
+        "NON","CLR","GRN","YLW","BLU","ORG","RED","LME",
+        "MAG","PUR","UN0","UN1","UN2","UN3","UN4","UN5",
+    };
 }
