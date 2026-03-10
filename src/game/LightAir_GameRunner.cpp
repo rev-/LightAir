@@ -96,9 +96,7 @@ void LightAir_GameRunner::update() {
     flushOutput(output);
 
     // Enforce fixed loop duration.
-    uint32_t elapsed = millis() - loopStart;
-    if (elapsed < GameDefaults::LOOP_MS)
-        delay(GameDefaults::LOOP_MS - elapsed);
+    while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
 }
 
 /* =========================================================
