@@ -35,6 +35,7 @@ struct RadioReplyMsg {
     uint8_t  senderId;
     uint8_t  origMsgType;
     uint32_t origTimestamp;
+    uint8_t  subType;   // payload[0] of reply; 0 = no payload
 };
 
 struct RadioOutput {
@@ -75,11 +76,14 @@ struct RadioOutput {
 
     // Queue a reply to a received packet.
     // msgType will be set to original.msgType + 1; timestamp is echoed.
-    void reply(const RadioPacket& original) {
+    // subType != 0 places that value in payload[0] of the reply,
+    // letting the sender distinguish different reply semantics.
+    void reply(const RadioPacket& original, uint8_t subType = 0) {
         if (replyCount >= GameDefaults::RADIO_REPLY_MAX) return;
         RadioReplyMsg& r   = replies[replyCount++];
         r.senderId         = original.senderId;
         r.origMsgType      = original.msgType;
         r.origTimestamp    = original.timestamp;
+        r.subType          = subType;
     }
 };

@@ -2,6 +2,8 @@
 #include "LightAir_GameVar.h"
 #include "LightAir_StateRule.h"
 #include "LightAir_StateBehavior.h"
+#include "LightAir_DirectRadioRule.h"
+#include "LightAir_ReplyRadioRule.h"
 
 // ----------------------------------------------------------------
 // LightAir_Game — complete descriptor of a table-driven game.
@@ -23,6 +25,15 @@
 //
 //   monitorVars / monitorCount — variables auto-bound to the LCD by
 //                    GameRunner::begin() based on each var's stateMask.
+//
+//   directRadioRules / directRadioRuleCount — incoming message handlers.
+//                    Evaluated before StateRules.  First match per event
+//                    sends a reply and runs the action.  Unmatched messages
+//                    receive a standard empty reply automatically.
+//
+//   replyRadioRules / replyRadioRuleCount — reply and timeout handlers.
+//                    Evaluated after DirectRadioRules, before StateRules.
+//                    First match per event runs the action.
 //
 //   rules / ruleCount — state-transition table, evaluated in order.
 //                    First matching rule fires per cycle.
@@ -113,6 +124,12 @@ struct LightAir_Game {
 
     const MonitorVar*    monitorVars;
     uint8_t              monitorCount;
+
+    const DirectRadioRule* directRadioRules;
+    uint8_t                directRadioRuleCount;
+
+    const ReplyRadioRule*  replyRadioRules;
+    uint8_t                replyRadioRuleCount;
 
     const StateRule*     rules;
     uint8_t              ruleCount;

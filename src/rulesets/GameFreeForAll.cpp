@@ -8,8 +8,14 @@
 //   OUT_GAME (1) : player is out; waits for auto-respawn; display shows time.
 //   GAME_END (2) : game over; display shows final time/points/energySpent/shoneTimes.
 //
-// Radio messages (even = request)
+// Radio messages (even = request, odd = reply)
 //   MSG_LIT  (0x10) : unicast to the player who was optically detected.
+//   MSG_LIT reply (0x11) : sent back by the target; payload[0] = reply sub-type.
+//
+// Reply sub-types (payload[0] of the 0x11 reply)
+//   REPLY_TAKEN (1) : target absorbed the hit; lives > 0 after decrement.
+//   REPLY_SHONE (2) : target was eliminated; lives reached 0.
+//   REPLY_DOWN  (3) : target was already OUT_GAME; hit ignored.
 //
 // Config vars
 //   startLives   : lives at game start (default 3).
@@ -18,13 +24,18 @@
 //   recharge     : ms after trigger release before full energy is restored (default 1000).
 //   gameTime     : total game duration in seconds (default 900).
 //
-// Shine flow
+// Shine flow (sender side)
 //   1. TRIG_1 PRESSED/HELD → enlight.run(REPS)  (non-blocking, ~REPS*8 ms)
 //   2. enlight.poll() → PLAYER_HIT → radio.sendTo(target, MSG_LIT)
 //      NO_HIT / LOW_POW: missed shot, no radio message.
+//   3. Receiving REPLY_SHONE → points++ + UI "lit".
+//      Receiving REPLY_TAKEN → UI "lit" only.
 //
-// Shone flow
-//   Receiving MSG_LIT → lives-- → transition to OUT_GAME.
+// Shone flow (receiver side)
+//   Receiving MSG_LIT:
+//     lives > 1 → lives--, reply REPLY_TAKEN.
+//     lives <= 1 → lives--, reply REPLY_SHONE → state machine → OUT_GAME.
+//   OUT_GAME → reply REPLY_DOWN, no effect.
 //   Respawn: automatic after respawnSecs seconds → transition back to IN_GAME.
 //
 // Game-end flow
@@ -40,8 +51,9 @@ namespace FFA {
 // ---- States ----
 enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 
-// ---- Radio message types ----
-enum Msg : uint8_t { MSG_LIT = 0x10 };
+// ---- Radio message types and reply sub-types ----
+enum Msg         : uint8_t { MSG_LIT     = 0x10 };
+enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3 };
 
 // ---- Config variables ----
 static int startLives  = 3;     // lives at start / after respawn
@@ -84,6 +96,40 @@ static const MonitorVar monitorVars[] = {
     MonitorVar::Int("Points",   &points,       1u<<GAME_END, ICON_SCORE,  1, 0),
     MonitorVar::Int("Energy",   &energySpent,  1u<<GAME_END, ICON_ENERGY, 0, 1),
     MonitorVar::Int("Shone",    &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1),
+};
+
+// ---- DirectRadioRules — incoming message handlers ----
+
+static bool hitAndAlive (const RadioPacket&) { return lives > 1;  }
+static bool hitAndKilled(const RadioPacket&) { return lives <= 1; }
+
+static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
+static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
+
+static const DirectRadioRule directRadioRules[] = {
+    //  state     msgType   condition      replySubType  onReceive
+    { IN_GAME,  MSG_LIT, hitAndAlive,  REPLY_TAKEN, onLitTaken },
+    { IN_GAME,  MSG_LIT, hitAndKilled, REPLY_SHONE, onLitShone },
+    { OUT_GAME, MSG_LIT, nullptr,      REPLY_DOWN,  nullptr    },
+};
+
+// ---- ReplyRadioRules — reply and timeout handlers ----
+
+static void onReplyTaken(const RadioPacket&, const RadioPacket&,
+                         LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
+}
+
+static void onReplyShone(const RadioPacket&, const RadioPacket&,
+                         LightAir_DisplayCtrl&, GameOutput& out) {
+    points++;
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
+}
+
+static const ReplyRadioRule replyRadioRules[] = {
+    //  activeInStateMask               eventType                       subType       condition  onReply
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN, nullptr, onReplyTaken },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE, nullptr, onReplyShone },
 };
 
 // ---- onBegin: reset all runtime state from config ----
@@ -152,19 +198,9 @@ static const StateRule rules[] = {
 
 // ---- Per-state behaviors ----
 
-static void doInGame(const InputReport& inp, const RadioReport& radio,
+static void doInGame(const InputReport& inp, const RadioReport&,
                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
-
-    // Each incoming MSG_LIT costs one life; acknowledge with a reply.
-    for (uint8_t i = 0; i < radio.count; i++) {
-        if (radio.events[i].type == RadioEventType::MessageReceived &&
-            radio.events[i].packet.msgType == MSG_LIT) {
-            if (lives > 0) lives--;
-            out.radio.reply(radio.events[i].packet);   // MSG_LIT + 1 = 0x11
-        }
-    }
-
 
     static bool     triggerWasActive = false;
     static uint32_t releaseAt        = 0;
@@ -199,12 +235,11 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             energy = startEnergy;
     }
 
-    // Poll Enlight; a hit means we shone someone — send them MSG_LIT.
+    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
+    // points++ is deferred to onReplyShone when the target confirms elimination.
     EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT) {
-        points++;
+    if (r.status == EnlightStatus::PLAYER_HIT)
         out.radio.sendTo(r.id, MSG_LIT);
-    }
     // NO_HIT / LOW_POW: missed shot — no radio message.
 }
 
@@ -225,12 +260,14 @@ static const StateBehavior behaviors[] = {
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_ffa = {
-    /* typeId         */ 0x00000001,
-    /* name           */ "Free for All",
-    /* configVars     */ FFA::configVars,  /* configCount  */ 5,
-    /* monitorVars    */ FFA::monitorVars, /* monitorCount */ 8,
-    /* rules          */ FFA::rules,       /* ruleCount    */ 4,
-    /* behaviors      */ FFA::behaviors,   /* behaviorCount*/ 3,
-    /* currentState   */ &FFA::gState,     /* initialState */ FFA::IN_GAME,
-    /* onBegin        */ FFA::onBegin,
+    /* typeId                */ 0x00000001,
+    /* name                  */ "Free for All",
+    /* configVars            */ FFA::configVars,         /* configCount            */ 5,
+    /* monitorVars           */ FFA::monitorVars,        /* monitorCount           */ 8,
+    /* directRadioRules      */ FFA::directRadioRules,   /* directRadioRuleCount   */ 3,
+    /* replyRadioRules       */ FFA::replyRadioRules,    /* replyRadioRuleCount    */ 2,
+    /* rules                 */ FFA::rules,              /* ruleCount              */ 4,
+    /* behaviors             */ FFA::behaviors,          /* behaviorCount          */ 3,
+    /* currentState          */ &FFA::gState,            /* initialState           */ FFA::IN_GAME,
+    /* onBegin               */ FFA::onBegin,
 };

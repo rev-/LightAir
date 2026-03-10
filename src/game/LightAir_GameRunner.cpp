@@ -70,7 +70,52 @@ void LightAir_GameRunner::update() {
     // ---- Step 2: LOGIC ----
     GameOutput output;
 
-    // Evaluate transition rules for the current state (first match wins).
+    // Step 2a: DirectRadioRules — handle all incoming MessageReceived events.
+    // First matching rule fires per event; unmatched events get a standard empty reply.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type != RadioEventType::MessageReceived) continue;
+
+        bool matched = false;
+        for (uint8_t i = 0; i < _game->directRadioRuleCount; i++) {
+            const DirectRadioRule& r = _game->directRadioRules[i];
+            if (r.fromState != *_game->currentState) continue;
+            if (r.msgType   != ev.packet.msgType)    continue;
+            if (r.condition && !r.condition(ev.packet)) continue;
+
+            if (r.onReceive) r.onReceive(ev.packet, *_display, output);
+            output.radio.reply(ev.packet, r.replySubType);
+            matched = true;
+            break;
+        }
+        if (!matched)
+            output.radio.reply(ev.packet);  // standard empty reply — prevents sender timeout
+    }
+
+    // Step 2b: ReplyRadioRules — handle all ReplyReceived and Timeout events.
+    // First matching rule fires per event.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type != RadioEventType::ReplyReceived &&
+            ev.type != RadioEventType::Timeout) continue;
+
+        uint8_t state = *_game->currentState;
+        for (uint8_t i = 0; i < _game->replyRadioRuleCount; i++) {
+            const ReplyRadioRule& r = _game->replyRadioRules[i];
+            if (!(r.activeInStateMask & (1u << state))) continue;
+            if (r.eventType != ev.type) continue;
+            if (ev.type == RadioEventType::ReplyReceived &&
+                r.replySubType != 0 &&
+                (ev.packet.payloadLen == 0 || ev.packet.payload[0] != r.replySubType)) continue;
+            if (r.condition && !r.condition(ev.packet, ev.original)) continue;
+
+            if (r.onReply) r.onReply(ev.packet, ev.original, *_display, output);
+            break;
+        }
+    }
+
+    // Step 2c: StateRules — evaluate transitions (first match wins).
+    // Sees game state already modified by both radio rule tables above.
     for (uint8_t i = 0; i < _game->ruleCount; i++) {
         const StateRule& r = _game->rules[i];
         if (r.fromState != *_game->currentState) continue;
@@ -82,7 +127,7 @@ void LightAir_GameRunner::update() {
         break;
     }
 
-    // Run the behavior for the (possibly new) current state.
+    // Step 2d: StateBehavior — per-state continuous logic.
     for (uint8_t i = 0; i < _game->behaviorCount; i++) {
         if (_game->behaviors[i].state != *_game->currentState) continue;
         if (_game->behaviors[i].onUpdate)
@@ -125,7 +170,10 @@ void LightAir_GameRunner::flushOutput(const GameOutput& out) {
     // Radio replies
     for (uint8_t i = 0; i < out.radio.replyCount; i++) {
         const RadioReplyMsg& r = out.radio.replies[i];
-        _radio->replyTo(r.senderId, r.origMsgType, r.origTimestamp);
+        if (r.subType)
+            _radio->replyTo(r.senderId, r.origMsgType, r.origTimestamp, &r.subType, 1);
+        else
+            _radio->replyTo(r.senderId, r.origMsgType, r.origTimestamp);
     }
 
     // UI events (skipped if no UICtrl was provided)
