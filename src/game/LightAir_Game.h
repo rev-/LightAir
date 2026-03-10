@@ -44,7 +44,7 @@
 // ----------------------------------------------------------------
 // Minimal example — Free for All:
 //
-//   // --- games/FreeForAll.cpp ---
+//   // --- rulesets/GameFreeForAll.cpp ---
 //   #include <LightAir.h>
 //
 //   enum State : uint8_t { IN_GAME, OUT_GAME };
@@ -93,7 +93,7 @@
 //       .onBegin        = nullptr,
 //   };
 //
-//   // --- games/AllGames.cpp ---
+//   // --- rulesets/AllGames.cpp ---
 //   extern const LightAir_Game game_ffa;
 //   void registerAllGames(LightAir_GameManager& mgr) {
 //       mgr.registerGame(game_ffa);

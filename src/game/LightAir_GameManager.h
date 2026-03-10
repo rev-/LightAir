@@ -14,7 +14,7 @@
 //   LightAir_GameRunner   runner;
 //
 //   // --- setup() ---
-//   registerAllGames(manager);         // defined in games/AllGames.cpp
+//   registerAllGames(manager);         // defined in rulesets/AllGames.cpp
 //   const LightAir_Game& sel =
 //       manager.selectGame(rawDisplay, input, InputDefaults::KEYPAD_ID);
 //   runner.begin(sel, displayCtrl, input, radio);
