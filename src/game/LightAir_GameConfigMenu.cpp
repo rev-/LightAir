@@ -16,11 +16,9 @@ uint16_t game_serialize_config(const LightAir_Game& game,
     memcpy(buf, &id, 4);
     uint16_t pos = 4;
 
-    // One int32 per isConfig INT var, in declaration order.
-    for (uint8_t v = 0; v < game.varCount && pos + 4 <= maxLen; v++) {
-        const GameVar& var = game.vars[v];
-        if (var.type != VarType::INT || !var.isConfig) continue;
-        int32_t val = (int32_t)*var.asInt;
+    // One int32 per configVar, in declaration order.
+    for (uint8_t v = 0; v < game.configCount && pos + 4 <= maxLen; v++) {
+        int32_t val = (int32_t)*game.configVars[v].value;
         memcpy(buf + pos, &val, 4);
         pos += 4;
     }
@@ -36,16 +34,15 @@ bool game_apply_config(const LightAir_Game& game,
     if (id != game.typeId) return false;
 
     uint16_t pos = 4;
-    for (uint8_t v = 0; v < game.varCount && pos + 4 <= len; v++) {
-        const GameVar& var = game.vars[v];
-        if (var.type != VarType::INT || !var.isConfig) continue;
+    for (uint8_t v = 0; v < game.configCount && pos + 4 <= len; v++) {
+        const ConfigVar& var = game.configVars[v];
         int32_t val;
         memcpy(&val, buf + pos, 4);
         pos += 4;
         // Clamp to declared range.
-        if (val < var.cfgMin) val = var.cfgMin;
-        if (val > var.cfgMax) val = var.cfgMax;
-        *var.asInt = (int)val;
+        if (val < var.min) val = var.min;
+        if (val > var.max) val = var.max;
+        *var.value = (int)val;
     }
     return true;
 }
@@ -63,17 +60,14 @@ LightAir_GameConfigMenu::LightAir_GameConfigMenu(const LightAir_Game& game,
     : _game(game), _display(display), _input(input),
       _keypadId(keypadId), _radio(radio), _msgType(msgType)
 {
-    // Pre-compute map of config var positions.
-    for (uint8_t v = 0; v < game.varCount && _configCount < DisplayDefaults::MAX_BINDINGS; v++) {
-        const GameVar& var = game.vars[v];
-        if (var.type == VarType::INT && var.isConfig)
-            _configIdx[_configCount++] = v;
-    }
+    _configCount = game.configCount < DisplayDefaults::MAX_BINDINGS
+                 ? game.configCount
+                 : DisplayDefaults::MAX_BINDINGS;
 }
 
 void LightAir_GameConfigMenu::renderMenu(uint8_t cfgVar) {
     const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
-    const GameVar& var = _game.vars[_configIdx[cfgVar]];
+    const ConfigVar& var = _game.configVars[cfgVar];
     char buf[24];
 
     _display.clear();
@@ -87,8 +81,8 @@ void LightAir_GameConfigMenu::renderMenu(uint8_t cfgVar) {
     _display.print(0, fh, var.name);
 
     // Row 2: "< value >"
-    int step = var.cfgStep ? var.cfgStep : 1;
-    snprintf(buf, sizeof(buf), "<  %d  >  (step %d)", *var.asInt, step);
+    int step = var.step ? var.step : 1;
+    snprintf(buf, sizeof(buf), "<  %d  >  (step %d)", *var.value, step);
     _display.print(0, fh * 2, buf);
 
     // Row 3: controls
@@ -135,8 +129,8 @@ MenuResult LightAir_GameConfigMenu::run() {
 
     while (true) {
         char key = waitForKey();
-        const GameVar& var = _game.vars[_configIdx[cur]];
-        int step = var.cfgStep ? var.cfgStep : 1;
+        const ConfigVar& var = _game.configVars[cur];
+        int step = var.step ? var.step : 1;
 
         switch (key) {
             case '^':
@@ -146,16 +140,16 @@ MenuResult LightAir_GameConfigMenu::run() {
                 if (cur < _configCount - 1) { cur++; renderMenu(cur); }
                 break;
             case '<': {
-                int val = *var.asInt - step;
-                if (val < var.cfgMin) val = var.cfgMin;
-                *var.asInt = val;
+                int val = *var.value - step;
+                if (val < var.min) val = var.min;
+                *var.value = val;
                 renderMenu(cur);
                 break;
             }
             case '>': {
-                int val = *var.asInt + step;
-                if (val > var.cfgMax) val = var.cfgMax;
-                *var.asInt = val;
+                int val = *var.value + step;
+                if (val > var.max) val = var.max;
+                *var.value = val;
                 renderMenu(cur);
                 break;
             }

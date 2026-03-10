@@ -18,10 +18,11 @@
 //   name           — short display name (≤15 chars) shown in the
 //                    game-selection menu.
 //
-//   vars / varCount — tracked game variables.  INT vars with
-//                    isConfig=true appear in the config menu.
-//                    Vars with stateMask != 0 are auto-bound to
-//                    the display by GameRunner::begin().
+//   configVars / configCount — variables shown and edited in the
+//                    pre-game config menu (integers with min/max/step).
+//
+//   monitorVars / monitorCount — variables auto-bound to the LCD by
+//                    GameRunner::begin() based on each var's stateMask.
 //
 //   rules / ruleCount — state-transition table, evaluated in order.
 //                    First matching rule fires per cycle.
@@ -54,9 +55,12 @@
 //   static uint8_t gState;
 //   extern Enlight enlight;   // defined in sketch
 //
-//   static GameVar vars[] = {
-//       GameVar::Int("Lives", &lives, 1<<IN_GAME, ICON_LIFE,  0,0, true, 1,10,1),
-//       GameVar::Int("Score", &score, 1<<IN_GAME, ICON_SCORE, 1,0),
+//   static const ConfigVar configVars[] = {
+//       { "Lives", &lives, 1, 10, 1 },
+//   };
+//   static const MonitorVar monitorVars[] = {
+//       MonitorVar::Int("Lives", &lives, 1<<IN_GAME, ICON_LIFE,  0, 0),
+//       MonitorVar::Int("Score", &score, 1<<IN_GAME, ICON_SCORE, 1, 0),
 //   };
 //
 //   static bool gotHit(const InputReport&, const RadioReport& r) {
@@ -86,7 +90,8 @@
 //   const LightAir_Game game_ffa = {
 //       .typeId         = 0x00000001,
 //       .name           = "Free for All",
-//       .vars           = vars,      .varCount       = 2,
+//       .configVars     = configVars, .configCount    = 1,
+//       .monitorVars    = monitorVars,.monitorCount   = 2,
 //       .rules          = rules,     .ruleCount      = 2,
 //       .behaviors      = behaviors, .behaviorCount  = 2,
 //       .currentState   = &gState,   .initialState   = IN_GAME,
@@ -103,8 +108,11 @@ struct LightAir_Game {
     uint32_t             typeId;
     const char*          name;
 
-    GameVar*             vars;
-    uint8_t              varCount;
+    const ConfigVar*     configVars;
+    uint8_t              configCount;
+
+    const MonitorVar*    monitorVars;
+    uint8_t              monitorCount;
 
     const StateRule*     rules;
     uint8_t              ruleCount;

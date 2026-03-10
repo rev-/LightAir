@@ -9,27 +9,26 @@
 //
 //   [uint32_t typeId][int32_t var0][int32_t var1]...[int32_t varN]
 //
-//   Only INT vars with isConfig=true are serialized, in the order
-//   they appear in LightAir_Game::vars[].
+//   All configVars are serialized in declaration order.
 //   typeId lets receivers verify the blob belongs to the right game
 //   before applying it.
 // ----------------------------------------------------------------
 
-// Serialize the isConfig INT vars of a game into a byte buffer.
+// Serialize all configVars of a game into a byte buffer.
 // Returns bytes written, or 0 if maxLen < 4.
 uint16_t game_serialize_config(const LightAir_Game& game,
                                 uint8_t* buf, uint16_t maxLen);
 
 // Apply a received config blob.
 // Returns false if typeId doesn't match or blob is too short.
-// Values are clamped to [cfgMin, cfgMax].
+// Values are clamped to [min, max].
 bool game_apply_config(const LightAir_Game& game,
                         const uint8_t* buf, uint16_t len);
 
 // ----------------------------------------------------------------
 // LightAir_GameConfigMenu — blocking pre-game config editor.
 //
-// Shows all isConfig INT vars one at a time.  The player adjusts
+// Shows all configVars one at a time.  The player adjusts
 // values with the keypad, then either confirms (A) or cancels (B).
 // On confirmation the menu optionally broadcasts the config blob
 // to all other players via radio.
@@ -96,10 +95,8 @@ private:
     LightAir_Radio&      _radio;
     uint8_t              _msgType;
 
-    // Count of isConfig INT vars (computed in constructor).
+    // Number of config vars shown in the menu (capped at MAX_BINDINGS).
     uint8_t _configCount = 0;
-    // Maps config-var index → game.vars[] index.
-    uint8_t _configIdx[DisplayDefaults::MAX_BINDINGS];  // reusing MAX_BINDINGS as a sane cap
 
     void renderMenu(uint8_t varIdx);
     bool promptShare();

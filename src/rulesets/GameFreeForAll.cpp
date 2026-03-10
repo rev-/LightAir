@@ -62,25 +62,28 @@ static uint8_t   gState;
 static uint32_t  respawnAt;   // millis() when respawn fires
 static uint32_t  lastTickAt;  // millis() of last per-second decrement
 
-// ---- Game var declarations ----
-static GameVar vars[] = {
-    //                                                               col row  cfg    min    max   step
-    // Shown in IN_GAME
-    GameVar::Int("Lives",    &lives,        1u<<IN_GAME,            ICON_LIFE,   0, 0, false),
-    GameVar::Int("Energy",   &energy,       1u<<IN_GAME,            ICON_ENERGY, 1, 0, false),
-    GameVar::Int("Time",     &gameTimeLeft, (1u<<IN_GAME)|(1u<<OUT_GAME), ICON_TIME, 0, 1, false),
-    GameVar::Int("Points",   &points,       1u<<IN_GAME,            ICON_SCORE,  1, 1, false),
-    // Config (stateMask=0 → not monitored, only in config menu)
-    GameVar::Int("Start",    &startLives,   0, ICON_LIFE,   0, 0, true,   1,    10,     1),
-    GameVar::Int("Respawn",  &respawnSecs,  0, ICON_LIFE,   0, 0, true,   5,   120,     5),
-    GameVar::Int("Energy",   &startEnergy,  0, ICON_ENERGY, 0, 0, true,  10,   100,    10),
-    GameVar::Int("Recharge", &recharge,     0, ICON_ENERGY, 0, 0, true,   0, 10000,  1000),
-    GameVar::Int("Time",     &gameTime,     0, ICON_TIME,   0, 0, true,  60,   900,    60),
-    // Shown in GAME_END (same pointers, different positions / stateMask)
-    GameVar::Int("Time",     &gameTime,     1u<<GAME_END, ICON_TIME,   0, 0, false),
-    GameVar::Int("Points",   &points,       1u<<GAME_END, ICON_SCORE,  1, 0, false),
-    GameVar::Int("Energy",   &energySpent,  1u<<GAME_END, ICON_ENERGY, 0, 1, false),
-    GameVar::Int("Shone",    &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1, false),
+// ---- Config vars (startup menu) ----
+static const ConfigVar configVars[] = {
+    //           name         value          min    max    step
+    { "Start",    &startLives,   1,    10,      1 },
+    { "Respawn",  &respawnSecs,  5,   120,      5 },
+    { "Energy",   &startEnergy, 10,   100,     10 },
+    { "Recharge", &recharge,     0, 10000,   1000 },
+    { "Time",     &gameTime,    60,   900,     60 },
+};
+
+// ---- Monitor vars (LCD display during play) ----
+static const MonitorVar monitorVars[] = {
+    // IN_GAME display
+    MonitorVar::Int("Lives",    &lives,        1u<<IN_GAME,                  ICON_LIFE,   0, 0),
+    MonitorVar::Int("Energy",   &energy,       1u<<IN_GAME,                  ICON_ENERGY, 1, 0),
+    MonitorVar::Int("Time",     &gameTimeLeft, (1u<<IN_GAME)|(1u<<OUT_GAME), ICON_TIME,   0, 1),
+    MonitorVar::Int("Points",   &points,       1u<<IN_GAME,                  ICON_SCORE,  1, 1),
+    // GAME_END display (gameTime shared with configVars)
+    MonitorVar::Int("Time",     &gameTime,     1u<<GAME_END, ICON_TIME,   0, 0),
+    MonitorVar::Int("Points",   &points,       1u<<GAME_END, ICON_SCORE,  1, 0),
+    MonitorVar::Int("Energy",   &energySpent,  1u<<GAME_END, ICON_ENERGY, 0, 1),
+    MonitorVar::Int("Shone",    &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1),
 };
 
 // ---- onBegin: reset all runtime state from config ----
@@ -224,9 +227,10 @@ static const StateBehavior behaviors[] = {
 const LightAir_Game game_ffa = {
     /* typeId         */ 0x00000001,
     /* name           */ "Free for All",
-    /* vars           */ FFA::vars,      /* varCount      */ 13,
-    /* rules          */ FFA::rules,     /* ruleCount     */  4,
-    /* behaviors      */ FFA::behaviors, /* behaviorCount */  3,
-    /* currentState   */ &FFA::gState,   /* initialState  */ FFA::IN_GAME,
+    /* configVars     */ FFA::configVars,  /* configCount  */ 5,
+    /* monitorVars    */ FFA::monitorVars, /* monitorCount */ 8,
+    /* rules          */ FFA::rules,       /* ruleCount    */ 4,
+    /* behaviors      */ FFA::behaviors,   /* behaviorCount*/ 3,
+    /* currentState   */ &FFA::gState,     /* initialState */ FFA::IN_GAME,
     /* onBegin        */ FFA::onBegin,
 };

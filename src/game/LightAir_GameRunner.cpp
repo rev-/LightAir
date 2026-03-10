@@ -17,11 +17,11 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     _ui      = ui;
     _bindingCount = 0;
 
-    // -- Build display binding sets from GameVar::stateMask --
+    // -- Build display binding sets from MonitorVar::stateMask --
 
     // Pass 1: collect unique state indices that need a binding set.
-    for (uint8_t v = 0; v < game.varCount; v++) {
-        uint32_t mask = game.vars[v].stateMask;
+    for (uint8_t v = 0; v < game.monitorCount; v++) {
+        uint32_t mask = game.monitorVars[v].stateMask;
         for (uint8_t s = 0; s < 32 && mask; s++, mask >>= 1) {
             if (!(mask & 1)) continue;
             bool found = false;
@@ -35,10 +35,9 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
         }
     }
 
-    // Pass 2: bind each var to the sets for its monitored states.
-    for (uint8_t v = 0; v < game.varCount; v++) {
-        const GameVar& var = game.vars[v];
-        if (!var.stateMask) continue;
+    // Pass 2: bind each monitor var to the sets for its states.
+    for (uint8_t v = 0; v < game.monitorCount; v++) {
+        const MonitorVar& var = game.monitorVars[v];
         for (uint8_t b = 0; b < _bindingCount; b++) {
             if (!(var.stateMask & (1u << _bindings[b].state))) continue;
             display.selectBindingSet(_bindings[b].setId);
