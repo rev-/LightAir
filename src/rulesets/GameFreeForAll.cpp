@@ -1,4 +1,6 @@
 #include <LightAir.h>
+#include <string.h>
+#include <climits>
 
 // ================================================================
 // Free For All — every player shines every other player.
@@ -52,7 +54,7 @@ namespace FFA {
 enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 
 // ---- Radio message types and reply sub-types ----
-enum Msg         : uint8_t { MSG_LIT     = 0x10 };
+enum Msg         : uint8_t { MSG_LIT = 0x10, MSG_RR_COLLECT = 0x12, MSG_WINNER = 0x14 };
 enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3 };
 
 // ---- Config variables ----
@@ -133,6 +135,66 @@ static const ReplyRadioRule replyRadioRules[] = {
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN, nullptr, onReplyTaken },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE, nullptr, onReplyShone },
 };
+
+// ---- Round-robin roster (non-static: filled by pre-start condition) ----
+//
+// Access from outside this file as FFA::gRoster / FFA::gRosterCount.
+// Player IDs map directly to PlayerDefs::playerShort[id] for display.
+uint8_t gRoster[PlayerDefs::MAX_PLAYER_ID];
+uint8_t gRosterCount = 0;
+
+// Slot layout: int32_t points (bytes 0–3), int32_t shoneTimes (bytes 4–7).
+static void fillRRSlot(uint8_t* buf) {
+    int32_t p = (int32_t)points;
+    int32_t s = (int32_t)shoneTimes;
+    memcpy(buf,     &p, 4);
+    memcpy(buf + 4, &s, 4);
+}
+
+// Winner: most points. Tie-break: fewest shoneTimes. Still tied: list all names.
+static void onRoundRobinResult(const uint8_t* slots, const uint8_t* roster,
+                               uint8_t count, LightAir_DisplayCtrl& disp, GameOutput&) {
+    int32_t bestPts   = INT32_MIN;
+    int32_t bestShone = INT32_MAX;
+    uint8_t bestIdx   = 0;
+    bool    tied      = false;
+
+    for (uint8_t i = 0; i < count; i++) {
+        int32_t pts, shone;
+        memcpy(&pts,   slots + i * 8,     4);
+        memcpy(&shone, slots + i * 8 + 4, 4);
+        if (pts > bestPts || (pts == bestPts && shone < bestShone)) {
+            bestPts   = pts;
+            bestShone = shone;
+            bestIdx   = i;
+            tied      = false;
+        } else if (pts == bestPts && shone == bestShone) {
+            tied = true;
+        }
+    }
+
+    char msg[32];
+    if (!tied) {
+        snprintf(msg, sizeof(msg), "%s WINS!",
+                 PlayerDefs::playerShort[roster[bestIdx]]);
+    } else {
+        // Collect all tied player short-names into a space-separated list.
+        char names[24] = {};
+        uint8_t off = 0;
+        for (uint8_t i = 0; i < count && off < 20; i++) {
+            int32_t pts, shone;
+            memcpy(&pts,   slots + i * 8,     4);
+            memcpy(&shone, slots + i * 8 + 4, 4);
+            if (pts == bestPts && shone == bestShone) {
+                if (off) names[off++] = ' ';
+                memcpy(names + off, PlayerDefs::playerShort[roster[i]], 3);
+                off += 3;
+            }
+        }
+        snprintf(msg, sizeof(msg), "TIE: %s", names);
+    }
+    disp.showMessage(msg, 0);
+}
 
 // ---- onBegin: reset all runtime state from config ----
 static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&) {
@@ -272,4 +334,11 @@ const LightAir_Game game_ffa = {
     /* behaviors             */ FFA::behaviors,          /* behaviorCount          */ 3,
     /* currentState          */ &FFA::gState,            /* initialState           */ FFA::IN_GAME,
     /* onBegin               */ FFA::onBegin,
+    /* roster                */ FFA::gRoster,            /* rosterCount            */ &FFA::gRosterCount,
+    /* roundRobinState       */ FFA::GAME_END,
+    /* rrMsgType             */ FFA::MSG_RR_COLLECT,
+    /* winnerMsgType         */ FFA::MSG_WINNER,
+    /* rrSlotSize            */ 8,
+    /* fillRRSlot            */ FFA::fillRRSlot,
+    /* onRoundRobinResult    */ FFA::onRoundRobinResult,
 };

@@ -16,9 +16,8 @@
 // messages are collected and sent atomically at the end of each
 // loop iteration.
 //
-// Payload is capped at GameDefaults::RADIO_OUT_PAYLOAD (32 bytes).
-// Most game messages carry 0–8 bytes; use LightAir_Radio::broadcast
-// directly if you need a larger payload (rare in game logic).
+// Payload is capped at GameDefaults::RADIO_OUT_PAYLOAD bytes,
+// which equals RADIO_MAX_PAYLOAD (239) — the full ESP-NOW limit.
 // ----------------------------------------------------------------
 
 struct RadioOutMsg {
@@ -49,7 +48,7 @@ struct RadioOutput {
                    const uint8_t* payload = nullptr, uint8_t len = 0,
                    uint8_t resend = 1) {
         if (count >= GameDefaults::RADIO_OUT_MAX) return;
-        if (len > GameDefaults::RADIO_OUT_PAYLOAD) len = GameDefaults::RADIO_OUT_PAYLOAD;
+        if (len > GameDefaults::RADIO_OUT_PAYLOAD) return;  // exceeds physical limit
         RadioOutMsg& m = msgs[count++];
         m.isBroadcast = true;
         m.targetId    = 0xFF;
@@ -64,7 +63,7 @@ struct RadioOutput {
                 const uint8_t* payload = nullptr, uint8_t len = 0,
                 uint8_t resend = 0) {
         if (count >= GameDefaults::RADIO_OUT_MAX) return;
-        if (len > GameDefaults::RADIO_OUT_PAYLOAD) len = GameDefaults::RADIO_OUT_PAYLOAD;
+        if (len > GameDefaults::RADIO_OUT_PAYLOAD) return;  // exceeds physical limit
         RadioOutMsg& m = msgs[count++];
         m.isBroadcast = false;
         m.targetId    = targetId;

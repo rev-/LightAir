@@ -143,4 +143,34 @@ struct LightAir_Game {
     // Called by GameRunner::begin() after display binding sets are built.
     // nullptr = skip.
     void (*onBegin)(LightAir_DisplayCtrl&, LightAir_Radio&);
+
+    // ---- Round-robin end-game score collection (optional) ----
+    //
+    // When the game enters roundRobinState, GameRunner initiates a chain
+    // message that collects each player's score slot in roster order.
+    // The last hop broadcasts a winner announcement; every device then
+    // calls onRoundRobinResult to format and display the outcome.
+    //
+    // Set roster = nullptr (or roundRobinState = 255) to disable.
+    // roster[] is filled by the pre-start condition before the game begins.
+    //
+    // Slot layout (rrSlotSize bytes per player, game-defined):
+    //   fillRRSlot writes own rrSlotSize bytes into slotBuf.
+    //   onRoundRobinResult receives slots[i*rrSlotSize] for each roster[i].
+    //   Use PlayerDefs::playerShort[roster[i]] for 3-letter player names.
+
+    const uint8_t* roster;           // player IDs in chain order
+    uint8_t*       rosterCount;      // pointer — updated by pre-start condition at runtime
+    uint8_t        roundRobinState;  // state that activates RR; 255 = disabled
+    uint8_t        rrMsgType;        // even msgType for the collect chain
+    uint8_t        winnerMsgType;    // even msgType for the winner broadcast
+    uint8_t        rrSlotSize;       // bytes per player slot
+
+    void (*fillRRSlot)(uint8_t* slotBuf);  // game writes rrSlotSize bytes for own player
+
+    void (*onRoundRobinResult)(const uint8_t* slots,   // slots[i*rrSlotSize] = player i data
+                               const uint8_t* roster,  // roster[i] = player ID
+                               uint8_t        count,
+                               LightAir_DisplayCtrl&,
+                               GameOutput&);
 };

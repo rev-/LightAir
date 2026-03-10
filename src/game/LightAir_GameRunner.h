@@ -64,6 +64,9 @@ private:
     StateBinding _bindings[DisplayDefaults::MAX_SETS];
     uint8_t      _bindingCount = 0;
 
+    // Round-robin state: true while in roundRobinState, prevents re-trigger.
+    bool _rrActive = false;
+
     void activateStateDisplay(uint8_t state);
     void flushOutput(const GameOutput& out);
 };

@@ -146,6 +146,9 @@ public:
     bool replyTo(uint8_t senderId, uint8_t origMsgType, uint32_t origTimestamp,
                  const uint8_t* payload = nullptr, uint8_t payloadLen = 0);
 
+    // Logical player ID (set at construction from NVS; last byte of own MAC).
+    uint8_t playerId() const { return _playerId; }
+
     // Update session token (call at each game start / reset).
     void setSessionToken(uint8_t token) { _sessionToken = token; }
 
