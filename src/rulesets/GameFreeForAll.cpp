@@ -21,7 +21,7 @@
 //   startLives   : lives at game start (default 3).
 //   respawnSecs  : seconds until auto-respawn (default 30).
 //   startEnergy  : energy at game start / after respawn (default 50).
-//   recharge     : ms after trigger release before full energy is restored (default 1000).
+//   rechargeSecs : seconds after trigger release before full energy is restored (default 10).
 //   gameTime     : total game duration in seconds (default 900).
 //
 // Shine flow (sender side)
@@ -56,11 +56,12 @@ enum Msg         : uint8_t { MSG_LIT     = 0x10 };
 enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3 };
 
 // ---- Config variables ----
-static int startLives  = 3;     // lives at start / after respawn
-static int respawnSecs = 30;    // seconds until auto-respawn
-static int startEnergy = 50;    // energy at start / after respawn
-static int recharge    = 1000;  // ms after trigger release before energy restored
-static int gameTime    = 900;   // total game duration in seconds
+// default value, if not changed in startup menu
+static int startLives   = 3;     // lives at start / after respawn
+static int respawnSecs  = 30;    // seconds until auto-respawn
+static int startEnergy  = 50;    // energy at start / after respawn
+static int rechargeSecs = 1000;  // secs after trigger release before energy restored
+static int gameTime     = 900;   // total game duration in seconds
 
 // ---- Runtime variables ----
 static int lives        = 3;
@@ -75,12 +76,13 @@ static uint32_t  respawnAt;   // millis() when respawn fires
 static uint32_t  lastTickAt;  // millis() of last per-second decrement
 
 // ---- Config vars (startup menu) ----
+// all vars must be int, 
 static const ConfigVar configVars[] = {
-    //           name         value          min    max    step
-    { "Start",    &startLives,   1,    10,      1 },
+    //name         value          min    max    step
+    { "Lives",    &startLives,   1,    5,      1 },
     { "Respawn",  &respawnSecs,  5,   120,      5 },
     { "Energy",   &startEnergy, 10,   100,     10 },
-    { "Recharge", &recharge,     0, 10000,   1000 },
+    { "Recharge", &rechargeSecs, 0,    20,      5 },
     { "Time",     &gameTime,    60,   900,     60 },
 };
 
@@ -100,16 +102,16 @@ static const MonitorVar monitorVars[] = {
 
 // ---- DirectRadioRules — incoming message handlers ----
 
-static bool hitAndAlive (const RadioPacket&) { return lives > 1;  }
-static bool hitAndKilled(const RadioPacket&) { return lives <= 1; }
+static bool litAndTaken (const RadioPacket&) { return lives > 1;  }
+static bool litAndShone (const RadioPacket&) { return lives <= 1; }
 
 static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
 static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
 
 static const DirectRadioRule directRadioRules[] = {
     //  state     msgType   condition      replySubType  onReceive
-    { IN_GAME,  MSG_LIT, hitAndAlive,  REPLY_TAKEN, onLitTaken },
-    { IN_GAME,  MSG_LIT, hitAndKilled, REPLY_SHONE, onLitShone },
+    { IN_GAME,  MSG_LIT, litAndTaken,  REPLY_TAKEN, onLitTaken },
+    { IN_GAME,  MSG_LIT, litAndShone,  REPLY_SHONE, onLitShone },
     { OUT_GAME, MSG_LIT, nullptr,      REPLY_DOWN,  nullptr    },
 };
 
@@ -222,16 +224,16 @@ static void doInGame(const InputReport& inp, const RadioReport&,
         }
     }
 
-    // Detect release edge → start recharge cooldown.
+    // Detect release edge → start rechargeSecs cooldown.
     if (triggerWasActive && !triggerActive)
         releaseAt = millis();
     triggerWasActive = triggerActive;
 
     // Restore full energy once cooldown has elapsed.
     if (!triggerActive && energy < startEnergy) {
-        if (recharge == 0)
+        if (rechargeSecs == 0)
             energy = startEnergy;
-        else if (millis() - releaseAt >= (uint32_t)recharge)
+        else if ((millis() - releaseAt)/1000 >= (uint32_t)rechargeSecs)
             energy = startEnergy;
     }
 
