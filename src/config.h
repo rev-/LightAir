@@ -99,6 +99,8 @@ namespace GameDefaults {
     constexpr uint8_t  RADIO_OUT_PAYLOAD = 239;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
     constexpr uint8_t  MAX_GAMES         = 8;    // max games registered in GameManager
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
+    constexpr uint8_t  MAX_WINNER_VARS   = 8;    // max entries in a winnerVars[] table
+    constexpr uint32_t SCORE_RETRY_MS    = 2000; // ms between score re-broadcasts during scoringState
 }
 
 // ---------------------------------------------------------------

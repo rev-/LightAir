@@ -4,6 +4,7 @@
 #include "LightAir_StateBehavior.h"
 #include "LightAir_DirectRadioRule.h"
 #include "LightAir_ReplyRadioRule.h"
+#include "LightAir_WinnerVar.h"
 
 // ----------------------------------------------------------------
 // LightAir_Game — complete descriptor of a table-driven game.
@@ -101,12 +102,15 @@
 //   const LightAir_Game game_ffa = {
 //       .typeId         = 0x00000001,
 //       .name           = "Free for All",
-//       .configVars     = configVars, .configCount    = 1,
-//       .monitorVars    = monitorVars,.monitorCount   = 2,
-//       .rules          = rules,     .ruleCount      = 2,
-//       .behaviors      = behaviors, .behaviorCount  = 2,
-//       .currentState   = &gState,   .initialState   = IN_GAME,
+//       .configVars     = configVars,  .configCount    = 1,
+//       .monitorVars    = monitorVars, .monitorCount   = 2,
+//       .rules          = rules,       .ruleCount      = 2,
+//       .behaviors      = behaviors,   .behaviorCount  = 2,
+//       .currentState   = &gState,     .initialState   = IN_GAME,
 //       .onBegin        = nullptr,
+//       .winnerVars     = winnerVars,  .winnerVarCount = 2,
+//       .scoringState   = GAME_END,
+//       .scoreMsgType   = MSG_SCORE_COLLECT,
 //   };
 //
 //   // --- rulesets/AllGames.cpp ---
@@ -144,33 +148,23 @@ struct LightAir_Game {
     // nullptr = skip.
     void (*onBegin)(LightAir_DisplayCtrl&, LightAir_Radio&);
 
-    // ---- Round-robin end-game score collection (optional) ----
+    // ---- End-game score collection and winner election (optional) ----
     //
-    // When the game enters roundRobinState, GameRunner initiates a chain
-    // message that collects each player's score slot in roster order.
-    // The last hop broadcasts a winner announcement; every device then
-    // calls onRoundRobinResult to format and display the outcome.
+    // When the game enters scoringState, every player broadcasts its own
+    // scores; each device accumulates received data and computes the winner
+    // locally once all expected scores arrive.  GameRunner manages the roster,
+    // accumulation, fusion re-broadcast, and winner display entirely.
     //
-    // Set roster = nullptr (or roundRobinState = 255) to disable.
-    // roster[] is filled by the pre-start condition before the game begins.
+    // Set winnerVars = nullptr or scoringState = 255 to disable.
     //
-    // Slot layout (rrSlotSize bytes per player, game-defined):
-    //   fillRRSlot writes own rrSlotSize bytes into slotBuf.
-    //   onRoundRobinResult receives slots[i*rrSlotSize] for each roster[i].
-    //   Use PlayerDefs::playerShort[roster[i]] for 3-letter player names.
+    // Slot size is winnerVarCount × 4 bytes (one int32_t per variable).
+    // Constraint: 4 + rosterCount × slotSize ≤ RADIO_MAX_PAYLOAD (239).
+    //
+    // winnerVars[] priority order: index 0 = primary, index 1 = tie-breaker…
+    // Use PlayerDefs::playerShort[roster[i]] for player names in messages.
 
-    const uint8_t* roster;           // player IDs in chain order
-    uint8_t*       rosterCount;      // pointer — updated by pre-start condition at runtime
-    uint8_t        roundRobinState;  // state that activates RR; 255 = disabled
-    uint8_t        rrMsgType;        // even msgType for the collect chain
-    uint8_t        winnerMsgType;    // even msgType for the winner broadcast
-    uint8_t        rrSlotSize;       // bytes per player slot
-
-    void (*fillRRSlot)(uint8_t* slotBuf);  // game writes rrSlotSize bytes for own player
-
-    void (*onRoundRobinResult)(const uint8_t* slots,   // slots[i*rrSlotSize] = player i data
-                               const uint8_t* roster,  // roster[i] = player ID
-                               uint8_t        count,
-                               LightAir_DisplayCtrl&,
-                               GameOutput&);
+    const WinnerVar* winnerVars;      // ordered scoring rules; nullptr = disabled
+    uint8_t          winnerVarCount;
+    uint8_t          scoringState;    // state that activates collection; 255 = disabled
+    uint8_t          scoreMsgType;    // even msgType for the per-player score broadcast
 };
