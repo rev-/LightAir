@@ -5,6 +5,13 @@
 #include "LightAir_DirectRadioRule.h"
 #include "LightAir_ReplyRadioRule.h"
 #include "LightAir_WinnerVar.h"
+#include "LightAir_TotemRole.h"
+
+// ----------------------------------------------------------------
+// MenuResult — returned by blocking pre-game menu classes
+//   (LightAir_GameConfigMenu, LightAir_ParticipantMenu).
+// ----------------------------------------------------------------
+enum class MenuResult : uint8_t { Confirmed, Cancelled };
 
 // ----------------------------------------------------------------
 // LightAir_Game — complete descriptor of a table-driven game.
@@ -167,4 +174,15 @@ struct LightAir_Game {
     uint8_t          winnerVarCount;
     uint8_t          scoringState;    // state that activates collection; 255 = disabled
     uint8_t          scoreMsgType;    // even msgType for the per-player score broadcast
+
+    // ---- Participant requirements (validated by LightAir_ParticipantMenu) ----
+    //
+    // The participant menu runs after configMenu and before runner.begin().
+    // It lets the host register which player IDs and totem IDs are taking part.
+    // Set minPlayers = 0 and totemRoles = nullptr when there are no constraints;
+    // the menu still runs so participants can be registered for score collection.
+    //
+    uint8_t          minPlayers;       // minimum shooter-player count required (0 = no constraint)
+    const TotemRole* totemRoles;       // totem roles this game supports; nullptr = none
+    uint8_t          totemRoleCount;   // number of entries in totemRoles[]
 };

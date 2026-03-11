@@ -73,8 +73,6 @@ bool game_apply_config(const LightAir_Game& game,
 //   }
 // ----------------------------------------------------------------
 
-enum class MenuResult : uint8_t { Confirmed, Cancelled };
-
 class LightAir_GameConfigMenu {
 public:
     LightAir_GameConfigMenu(const LightAir_Game& game,

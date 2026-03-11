@@ -65,11 +65,26 @@ void LightAir_GameRunner::clearRoster() {
     _rosterCount = 0;
 }
 
-void LightAir_GameRunner::addToRoster(uint8_t playerId) {
-    if (_rosterCount >= PlayerDefs::MAX_PLAYER_ID) return;
+void LightAir_GameRunner::addToRoster(uint8_t id) {
+    if (_rosterCount >= GameDefaults::MAX_PARTICIPANTS) return;
     for (uint8_t i = 0; i < _rosterCount; i++)
-        if (_roster[i] == playerId) return;  // ignore duplicate
-    _roster[_rosterCount++] = playerId;
+        if (_roster[i] == id) return;  // ignore duplicate
+    _roster[_rosterCount++] = id;
+}
+
+/* =========================================================
+ *   TOTEMS
+ * ========================================================= */
+
+void LightAir_GameRunner::clearTotems() {
+    _totemCount = 0;
+}
+
+void LightAir_GameRunner::addTotem(uint8_t id, uint8_t roleIdx) {
+    if (_totemCount >= GameDefaults::MAX_PARTICIPANTS) return;
+    for (uint8_t i = 0; i < _totemCount; i++)
+        if (_totems[i].id == id) return;  // ignore duplicate
+    _totems[_totemCount++] = { id, roleIdx };
 }
 
 /* =========================================================
@@ -300,10 +315,12 @@ void LightAir_GameRunner::scoreBroadcastFused(GameOutput& output) const {
 }
 
 // Find the winner from accumulated slots and call showMessage() on the display.
+// Shows two tray lines:
+//   top    — "[NAME] WINS!"  or  "TIE: [NAMES]"
+//   bottom — "You arrived Xth"  (only if own ID is in the roster)
 void LightAir_GameRunner::scoreAnnounce() const {
-    uint8_t slotSize = _game->winnerVarCount * 4;
-    uint8_t bestIdx  = 0;
-    bool    tied     = false;
+    uint8_t bestIdx = 0;
+    bool    tied    = false;
 
     for (uint8_t r = 1; r < _rosterCount; r++) {
         if (!(_scoreAccumMask & (1u << r))) continue;
@@ -317,12 +334,13 @@ void LightAir_GameRunner::scoreAnnounce() const {
         }
     }
 
+    // --- Winner / tie message ---
     char msg[32];
     if (!tied) {
         snprintf(msg, sizeof(msg), "%s WINS!",
                  PlayerDefs::playerShort[_roster[bestIdx]]);
     } else {
-        // Collect tied player short-names, space-separated.
+        // Collect tied participant short-names, space-separated.
         const uint8_t* slotBest = _scoreSlots[bestIdx];
         char    names[24] = {};
         uint8_t off       = 0;
@@ -336,7 +354,29 @@ void LightAir_GameRunner::scoreAnnounce() const {
         }
         snprintf(msg, sizeof(msg), "TIE: %s", names);
     }
-    _display->showMessage(msg, 0);
+
+    // --- Own position (shown below winner; tray pushes newest msg to top) ---
+    // Show position first so it ends up on the bottom row when winner is pushed on top.
+    uint8_t myId   = _radio->playerId();
+    uint8_t mySlot = 0xFF;
+    for (uint8_t r = 0; r < _rosterCount; r++)
+        if (_roster[r] == myId) { mySlot = r; break; }
+
+    if (mySlot != 0xFF && (_scoreAccumMask & (1u << mySlot))) {
+        uint8_t rank = 1;
+        for (uint8_t r = 0; r < _rosterCount; r++) {
+            if (r == mySlot) continue;
+            if (!(_scoreAccumMask & (1u << r))) continue;
+            if (scoreSlotBeats(_scoreSlots[r], _scoreSlots[mySlot])) rank++;
+        }
+        const char* sfx = (rank == 1) ? "st" : (rank == 2) ? "nd"
+                        : (rank == 3) ? "rd" : "th";
+        char pos[24];
+        snprintf(pos, sizeof(pos), "You arrived %u%s", rank, sfx);
+        _display->showMessage(pos, 0);   // → bottom row after winner pushed on top
+    }
+
+    _display->showMessage(msg, 0);  // → top row
 }
 
 /* =========================================================

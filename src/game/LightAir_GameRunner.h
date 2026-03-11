@@ -24,14 +24,18 @@
 // LightAir_UICtrl is optional.  If not provided, UI events queued
 // in GameOutput::ui are silently discarded.
 //
-// Roster management
-//   The roster is the ordered list of player IDs expected to
-//   participate in end-game score collection.  It is filled by the
-//   pre-start condition before begin() is called:
+// Roster and totem management
+//   The roster is the ordered list of participant IDs (players and
+//   totems) expected to take part in end-game score collection.
+//   Call clearRoster()/addToRoster() and clearTotems()/addTotem()
+//   from LightAir_ParticipantMenu (or directly) before begin():
 //
 //     runner.clearRoster();
-//     runner.addToRoster(playerId_1);
+//     runner.clearTotems();
+//     runner.addToRoster(playerId_1);      // shooter player
 //     runner.addToRoster(playerId_2);
+//     runner.addToRoster(totemId_1);       // totem (also scores)
+//     runner.addTotem(totemId_1, roleIdx); // record its role
 //     ...
 //
 // Usage:
@@ -63,10 +67,23 @@ public:
     void update();
 
     // ---- Roster management ----
-    // Call clearRoster() + addToRoster() from the pre-start condition to register
-    // the players expected to participate in end-game score collection.
+    // Call clearRoster() + addToRoster() before begin() to register all
+    // participants (players and totems) expected in end-game score collection.
     void clearRoster();
-    void addToRoster(uint8_t playerId);  // ignores duplicates; caps at MAX_PLAYER_ID
+    void addToRoster(uint8_t id);  // ignores duplicates; caps at MAX_PARTICIPANTS
+
+    // ---- Totem management ----
+    // Call clearTotems() + addTotem() before begin() to record totem roles.
+    // roleIdx is an index into game.totemRoles[].
+    void clearTotems();
+    void addTotem(uint8_t id, uint8_t roleIdx);  // ignores duplicates; caps at MAX_PARTICIPANTS
+
+    // Read-back accessors (for game logic or post-game queries).
+    uint8_t rosterCount()          const { return _rosterCount; }
+    uint8_t rosterId(uint8_t i)    const { return _roster[i]; }
+    uint8_t totemCount()           const { return _totemCount; }
+    uint8_t totemId(uint8_t i)     const { return _totems[i].id; }
+    uint8_t totemRole(uint8_t i)   const { return _totems[i].roleIdx; }
 
 private:
     const LightAir_Game*  _game    = nullptr;
@@ -80,16 +97,21 @@ private:
     StateBinding _bindings[DisplayDefaults::MAX_SETS];
     uint8_t      _bindingCount = 0;
 
-    // ---- Roster ----
-    uint8_t _roster[PlayerDefs::MAX_PLAYER_ID];
+    // ---- Roster (players + totems for score collection) ----
+    uint8_t _roster[GameDefaults::MAX_PARTICIPANTS];
     uint8_t _rosterCount = 0;
+
+    // ---- Totem entries (id → role index) ----
+    struct TotemEntry { uint8_t id; uint8_t roleIdx; };
+    TotemEntry _totems[GameDefaults::MAX_PARTICIPANTS];
+    uint8_t    _totemCount = 0;
 
     // ---- End-game score accumulation ----
     bool     _scoreActive      = false;   // true while in scoringState; prevents re-trigger
     bool     _scoreResultShown = false;   // winner display already triggered
     uint32_t _scoreAccumMask   = 0;       // bit r set = _scoreSlots[r] is valid
     uint32_t _scoreSentAt      = 0;       // millis() of last broadcast; 0 = not yet sent
-    uint8_t  _scoreSlots[PlayerDefs::MAX_PLAYER_ID][GameDefaults::MAX_WINNER_VARS * 4];
+    uint8_t  _scoreSlots[GameDefaults::MAX_PARTICIPANTS][GameDefaults::MAX_WINNER_VARS * 4];
 
     // ---- Helpers ----
     void activateStateDisplay(uint8_t state);
