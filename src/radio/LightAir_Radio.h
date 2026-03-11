@@ -149,6 +149,10 @@ public:
     // Logical player ID (set at construction from NVS; last byte of own MAC).
     uint8_t playerId() const { return _playerId; }
 
+    // Participant role (set at construction from NVS).
+    // 0 = shooter/player.  1+ = totem (role-1 = TotemRole index in current game).
+    uint8_t role() const { return _role; }
+
     // Update session token (call at each game start / reset).
     void setSessionToken(uint8_t token) { _sessionToken = token; }
 

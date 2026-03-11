@@ -45,4 +45,3 @@
 #include "game/LightAir_GameRunner.h"
 #include "game/LightAir_GameManager.h"
 #include "game/LightAir_GameConfigMenu.h"
-#include "game/LightAir_ParticipantMenu.h"
