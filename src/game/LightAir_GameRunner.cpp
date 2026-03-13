@@ -88,6 +88,32 @@ void LightAir_GameRunner::addTotem(uint8_t id, uint8_t roleIdx) {
 }
 
 /* =========================================================
+ *   TEAM MAP
+ * ========================================================= */
+
+void LightAir_GameRunner::setTeam(uint8_t id, uint8_t team) {
+    if (id < PlayerDefs::MAX_PLAYER_ID) _teamMap[id] = team;
+}
+
+uint8_t LightAir_GameRunner::teamOf(uint8_t id) const {
+    if (id < PlayerDefs::MAX_PLAYER_ID) return _teamMap[id];
+    return 0;
+}
+
+/* =========================================================
+ *   GENERIC TOTEM ROLES
+ * ========================================================= */
+
+void LightAir_GameRunner::setGenericTotemRole(uint8_t slot, uint8_t role) {
+    if (slot < TotemDefs::MAX_TOTEMS) _genericRoles[slot] = role;
+}
+
+uint8_t LightAir_GameRunner::genericTotemRole(uint8_t slot) const {
+    if (slot < TotemDefs::MAX_TOTEMS) return _genericRoles[slot];
+    return GenericTotemRoles::NONE;
+}
+
+/* =========================================================
  *   UPDATE — one loop iteration
  * ========================================================= */
 

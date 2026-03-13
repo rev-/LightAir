@@ -108,6 +108,56 @@ namespace GameDefaults {
 }
 
 // ---------------------------------------------------------------
+// Totem identity tables
+//
+// Totem IDs go downward from 254 (totem01=254, totem02=253, …).
+// Up to MAX_TOTEMS=16 totems are supported (IDs 239–254).
+// ---------------------------------------------------------------
+namespace TotemDefs {
+    constexpr uint8_t MAX_TOTEM_ID = 254;
+    constexpr uint8_t MAX_TOTEMS   = 16;   // IDs 239–254
+
+    constexpr uint8_t totemIndex(uint8_t id)   { return MAX_TOTEM_ID - id; }
+    constexpr uint8_t idFromIndex(uint8_t idx) { return MAX_TOTEM_ID - idx; }
+    constexpr bool    isTotemId(uint8_t id) {
+        return id >= (MAX_TOTEM_ID - MAX_TOTEMS + 1) && id <= MAX_TOTEM_ID;
+    }
+
+    // Short numeric labels (3 chars + null) — kept as char array for future naming schemes.
+    constexpr char totemShort[MAX_TOTEMS][4] = {
+        "01","02","03","04","05","06","07","08",
+        "09","10","11","12","13","14","15","16",
+    };
+    // Long readable names (≤11 chars + null).
+    constexpr char totemNames[MAX_TOTEMS][12] = {
+        "Totem 01","Totem 02","Totem 03","Totem 04",
+        "Totem 05","Totem 06","Totem 07","Totem 08",
+        "Totem 09","Totem 10","Totem 11","Totem 12",
+        "Totem 13","Totem 14","Totem 15","Totem 16",
+    };
+}
+
+// ---------------------------------------------------------------
+// Generic totem roles
+//
+// Used by LightAir_GameSetupMenu to assign freeform roles to
+// totem devices not covered by named TotemVar entries.
+// ---------------------------------------------------------------
+namespace GenericTotemRoles {
+    constexpr uint8_t NONE  = 0;
+    constexpr uint8_t BASE  = 1;
+    constexpr uint8_t FLAG  = 2;
+    constexpr uint8_t DOM   = 3;
+    constexpr uint8_t NAV   = 4;
+    constexpr uint8_t BONUS = 5;
+    constexpr uint8_t MALUS = 6;
+    constexpr uint8_t COUNT = 7;
+    constexpr char    names[COUNT][8] = {
+        "----", "BASE", "FLAG", "DOM", "NAV", "BONUS", "MALUS"
+    };
+}
+
+// ---------------------------------------------------------------
 // Player identity tables
 //
 // Player IDs are uint8_t values 0-15 used both as the logical

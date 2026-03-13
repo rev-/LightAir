@@ -5,11 +5,10 @@
 #include "LightAir_DirectRadioRule.h"
 #include "LightAir_ReplyRadioRule.h"
 #include "LightAir_WinnerVar.h"
-#include "LightAir_TotemRole.h"
+#include "LightAir_TotemVar.h"
 
 // ----------------------------------------------------------------
-// MenuResult — returned by blocking pre-game menu classes
-//   (LightAir_GameConfigMenu, LightAir_ParticipantMenu).
+// MenuResult — returned by blocking pre-game menu classes.
 // ----------------------------------------------------------------
 enum class MenuResult : uint8_t { Confirmed, Cancelled };
 
@@ -175,14 +174,19 @@ struct LightAir_Game {
     uint8_t          scoringState;    // state that activates collection; 255 = disabled
     uint8_t          scoreMsgType;    // even msgType for the per-player score broadcast
 
-    // ---- Participant requirements (validated by LightAir_ParticipantMenu) ----
+    // ---- Totem roles and team configuration ----
     //
-    // The participant menu runs after configMenu and before runner.begin().
-    // It lets the host register which player IDs and totem IDs are taking part.
-    // Set minPlayers = 0 and totemRoles = nullptr when there are no constraints;
-    // the menu still runs so participants can be registered for score collection.
+    // totemVars[] lists named totem roles (e.g. "Base", "Flag") that the host
+    // assigns to specific totem device IDs in LightAir_GameSetupMenu (S4c).
+    // Any totem slot not covered by totemVars can be given a GenericTotemRole.
     //
-    uint8_t          minPlayers;       // minimum shooter-player count required (0 = no constraint)
-    const TotemRole* totemRoles;       // totem roles this game supports; nullptr = none
-    uint8_t          totemRoleCount;   // number of entries in totemRoles[]
+    // hasTeams enables the Teams submenu (S4b) where the host assigns each
+    // player to team O or team X.  teamBitmask points to a file-scope int
+    // in the ruleset; bit i=1 means player i is on team X.  Set to nullptr
+    // when hasTeams==false.
+    //
+    const TotemVar*  totemVars;        // named totem role slots; nullptr = none
+    uint8_t          totemVarCount;    // number of entries in totemVars[]
+    bool             hasTeams;         // true = host assigns O/X teams in setup
+    int*             teamBitmask;      // bit i=1 → player i on team X; nullptr if !hasTeams
 };

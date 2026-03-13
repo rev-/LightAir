@@ -10,7 +10,6 @@
 // Identification keys
 #define CAL_KEY_ID              "id"
 #define CAL_KEY_TEAM            "team"
-#define CAL_KEY_ROLE            "role"   // participant role: 0=player, 1+=totem role index+1
 
 // Calibration for Enlight: near/far channel baselines and white balance factors
 #define CAL_KEY_RCAL            "rcal"         // far  channel baselines
@@ -45,13 +44,11 @@
 struct PlayerConfig {
     uint8_t id;    // logical player ID (= mycolor); maps to LightAir_Radio playerId
     uint8_t team;  // team assignment; game-defined meaning
-    uint8_t role;  // participant role: 0 = shooter/player, 1+ = totem (role-1 = TotemRole index)
 };
 
 bool player_config_load(PlayerConfig& cfg);
 bool player_config_save(const PlayerConfig& cfg);
-bool player_config_save_team(uint8_t team);    // update only team without touching id/role
-bool player_config_save_role(uint8_t role);    // update only role without touching id/team
+bool player_config_save_team(uint8_t team);    // update only team without touching id
 
 struct EnlightCalib {
     uint32_t    rcal, gcal, bcal;             // far  channel baselines

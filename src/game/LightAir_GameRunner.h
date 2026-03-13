@@ -1,4 +1,5 @@
 #pragma once
+#include "../config.h"
 #include "LightAir_Game.h"
 #include "LightAir_GameOutput.h"
 #include "../input/LightAir_InputCtrl.h"
@@ -85,6 +86,18 @@ public:
     uint8_t totemId(uint8_t i)     const { return _totems[i].id; }
     uint8_t totemRole(uint8_t i)   const { return _totems[i].roleIdx; }
 
+    // ---- Team map ----
+    // Call setTeam() from LightAir_GameSetupMenu::commitToRunner() before begin().
+    // teamOf() returns 0=O or 1=X; 0 if id is out of range.
+    void    setTeam(uint8_t id, uint8_t team);
+    uint8_t teamOf(uint8_t id)  const;
+
+    // ---- Generic totem roles ----
+    // slot = TotemDefs::totemIndex(id) (0 = totem01 = ID 254).
+    // Call setGenericTotemRole() from commitToRunner() before begin().
+    void    setGenericTotemRole(uint8_t slot, uint8_t role);
+    uint8_t genericTotemRole(uint8_t slot) const;
+
 private:
     const LightAir_Game*  _game    = nullptr;
     LightAir_DisplayCtrl* _display = nullptr;
@@ -105,6 +118,12 @@ private:
     struct TotemEntry { uint8_t id; uint8_t roleIdx; };
     TotemEntry _totems[GameDefaults::MAX_PARTICIPANTS];
     uint8_t    _totemCount = 0;
+
+    // ---- Team assignments ----
+    uint8_t _teamMap[PlayerDefs::MAX_PLAYER_ID]  = {};  // 0=O, 1=X per player ID
+
+    // ---- Generic totem roles (by TotemDefs slot index) ----
+    uint8_t _genericRoles[TotemDefs::MAX_TOTEMS] = {};  // GenericTotemRoles value per slot
 
     // ---- End-game score accumulation ----
     bool     _scoreActive      = false;   // true while in scoringState; prevents re-trigger

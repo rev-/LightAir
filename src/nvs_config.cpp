@@ -25,12 +25,11 @@ static bool nvs_init_once() {
 
 bool player_config_load(PlayerConfig& cfg) {
     if (!nvs_init_once()) return false;
-    cfg = { 0xFF, 0xFF, 0x00 };  // id=unset, team=unset, role=player
+    cfg = { 0xFF, 0xFF };  // id=unset, team=unset
     nvs_handle_t h;
     if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return true; // defaults OK
     nvs_get_u8(h, CAL_KEY_ID,   &cfg.id);
     nvs_get_u8(h, CAL_KEY_TEAM, &cfg.team);
-    nvs_get_u8(h, CAL_KEY_ROLE, &cfg.role);
     nvs_close(h);
     return true;
 }
@@ -41,7 +40,6 @@ bool player_config_save(const PlayerConfig& cfg) {
     if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
     nvs_set_u8(h, CAL_KEY_ID,   cfg.id);
     nvs_set_u8(h, CAL_KEY_TEAM, cfg.team);
-    nvs_set_u8(h, CAL_KEY_ROLE, cfg.role);
     esp_err_t e = nvs_commit(h); nvs_close(h);
     return e == ESP_OK;
 }
@@ -51,15 +49,6 @@ bool player_config_save_team(uint8_t team) {
     nvs_handle_t h;
     if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
     nvs_set_u8(h, CAL_KEY_TEAM, team);
-    esp_err_t e = nvs_commit(h); nvs_close(h);
-    return e == ESP_OK;
-}
-
-bool player_config_save_role(uint8_t role) {
-    if (!nvs_init_once()) return false;
-    nvs_handle_t h;
-    if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
-    nvs_set_u8(h, CAL_KEY_ROLE, role);
     esp_err_t e = nvs_commit(h); nvs_close(h);
     return e == ESP_OK;
 }

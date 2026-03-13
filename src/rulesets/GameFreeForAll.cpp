@@ -281,7 +281,8 @@ const LightAir_Game game_ffa = {
     /* winnerVars            */ FFA::winnerVars,         /* winnerVarCount         */ 2,
     /* scoringState          */ FFA::GAME_END,
     /* scoreMsgType          */ FFA::MSG_SCORE_COLLECT,
-    /* minPlayers            */ 0,       // no minimum — any number of players may join
-    /* totemRoles            */ nullptr, // FFA uses no totems
-    /* totemRoleCount        */ 0,
+    /* totemVars             */ nullptr, // FFA uses no named totem roles
+    /* totemVarCount         */ 0,
+    /* hasTeams              */ false,
+    /* teamBitmask           */ nullptr,
 };
