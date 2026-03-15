@@ -112,19 +112,20 @@ private:
     int32_t*    _sintab    = nullptr;
     uint32_t    _cosOffset = 0;
 
-    // Per-phase saturation counters, one per kernel source (far = sine LED, near = cosine LED).
-    // Kept separate because saturation from one source does not necessarily contaminate the other:
-    // e.g. a very close reflector that clips the ADC at the cosine peak leaves the sine kernel
-    // (ks ≈ 0 at that phase) unaffected, so we can still accumulate the sample for the far channel.
+    // Per-phase saturation counter.
+    // _satPhaseCount[j] is incremented whenever a triple at phase j = (_arrayiter % GP)
+    // hits SAT_HIGH or SAT_LOW on any channel.  Maximum value per phase per run() call is
+    // repetitions × _periodsPerCycle (≤ 13 per DMA cycle at V6R2 defaults); uint16_t is
+    // sufficient for up to ~5000 repetitions before overflow.
     //
-    //   _satCountFar[j]   indexed by sine  phase  idx   = _arrayiter % GP
-    //   _satCountNear[j]  indexed by cosine phase  idx_c = (idx + _cosOffset) % GP
-    //
-    // Both use the same sin²-weighted correction formula in classify() because each array is
-    // indexed by the respective kernel's own phase coordinate.
-    uint32_t*   _satCountFar  = nullptr;
-    uint32_t*   _satCountNear = nullptr;
-    long long   _sin2total    = 0;  // Σ_j sintab[j]²; precomputed in buildSintab()
+    // A single array is enough for both far and near corrections because classify() weights
+    // it differently for each channel:
+    //   far  correction ← Σ_j satPhaseCount[j] × sintab[j]²          (sin² weight)
+    //   near correction ← Σ_j satPhaseCount[j] × sintab[(j+cosOffset)%GP]²  (cos² weight)
+    // The squared-kernel weighting provides automatic phase attribution: a saturation at the
+    // cosine peak (sin[j] = 0) contributes zero to the far correction and maximum to the near.
+    uint16_t*   _satPhaseCount = nullptr;
+    long long   _sin2total     = 0;  // Σ_j sintab[j]² = Σ_j cos[j]²; precomputed in buildSintab()
 
     // LED DIO SPI
     spi_device_handle_t _ledDevice   = nullptr;
