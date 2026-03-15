@@ -167,7 +167,7 @@ int Enlight::gridLookup(float outr, float outang) const {
  * ============================================================ */
 bool Enlight::begin() {
     if (!generateWaveform()) return false;
-    buildSintab(0); if (!_sintab) return false;
+    buildSintab(_cal.phaseOff); if (!_sintab) return false;
     buildGrid();
 
     gpio_config_t gc={};

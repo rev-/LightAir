@@ -65,6 +65,7 @@ bool enlight_calib_load(EnlightCalib& cal) {
         NVS_GET_U32  (h, CAL_KEY_GCAL_NEAR,      cal.gcalNear,    0);
         NVS_GET_U32  (h, CAL_KEY_BCAL_NEAR,      cal.bcalNear,    0);
         NVS_GET_U32  (h, CAL_KEY_LIMPOW,         cal.limpow,      0);
+        NVS_GET_U32  (h, CAL_KEY_PHASE_OFF,      cal.phaseOff,    0);
         NVS_GET_FLOAT(h, CAL_KEY_RFACT,          cal.rfact,       1.0f);
         NVS_GET_FLOAT(h, CAL_KEY_BFACT,          cal.bfact,       1.0f);
         NVS_GET_FLOAT(h, CAL_KEY_NEAR_RATIO_MAX, cal.nearRatioMax, 1e9f);
@@ -98,6 +99,7 @@ bool enlight_calib_save(const EnlightCalib& cal) {
     nvs_set_u32 (h, CAL_KEY_GCAL_NEAR,      cal.gcalNear);
     nvs_set_u32 (h, CAL_KEY_BCAL_NEAR,      cal.bcalNear);
     nvs_set_u32 (h, CAL_KEY_LIMPOW,         cal.limpow);
+    nvs_set_u32 (h, CAL_KEY_PHASE_OFF,      cal.phaseOff);
     nvs_set_blob(h, CAL_KEY_RFACT,          &cal.rfact,        sizeof(float));
     nvs_set_blob(h, CAL_KEY_BFACT,          &cal.bfact,        sizeof(float));
     nvs_set_blob(h, CAL_KEY_NEAR_RATIO_MAX, &cal.nearRatioMax, sizeof(float));

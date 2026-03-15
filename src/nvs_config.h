@@ -27,6 +27,7 @@
 // If nearRatio > nearRatioMax -> status = NEAR.
 // Calibrate at minimum acceptable working distance.
 #define CAL_KEY_NEAR_RATIO_MAX  "near_ratio"   // float blob
+#define CAL_KEY_PHASE_OFF       "phase_off"    // LED excitation delay in samples
 // Far hit-boxes in (outr, outang) space.
 // [0]=outr_max [1]=outr_min [2]=outang_max [3]=outang_min
 // Key "hb_N_K": N=player(1-based), K=corner 0..3. Sentinel -10 = inactive.
@@ -54,6 +55,7 @@ struct EnlightCalib {
     uint32_t    rcal, gcal, bcal;             // far  channel baselines
     uint32_t    rcalNear, gcalNear, bcalNear; // near channel baselines
     uint32_t    limpow;
+    uint32_t    phaseOff;                     // sintab phase offset (LED excitation delay, in samples)
     float       rfact, bfact;
     float       nearRatioMax;
     float       hitBox[CALIB_MAX_PLAYERS][4]; // sentinel -10 = inactive
