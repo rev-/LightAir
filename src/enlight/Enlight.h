@@ -112,6 +112,20 @@ private:
     int32_t*    _sintab    = nullptr;
     uint32_t    _cosOffset = 0;
 
+    // Per-phase saturation counters, one per kernel source (far = sine LED, near = cosine LED).
+    // Kept separate because saturation from one source does not necessarily contaminate the other:
+    // e.g. a very close reflector that clips the ADC at the cosine peak leaves the sine kernel
+    // (ks ≈ 0 at that phase) unaffected, so we can still accumulate the sample for the far channel.
+    //
+    //   _satCountFar[j]   indexed by sine  phase  idx   = _arrayiter % GP
+    //   _satCountNear[j]  indexed by cosine phase  idx_c = (idx + _cosOffset) % GP
+    //
+    // Both use the same sin²-weighted correction formula in classify() because each array is
+    // indexed by the respective kernel's own phase coordinate.
+    uint32_t*   _satCountFar  = nullptr;
+    uint32_t*   _satCountNear = nullptr;
+    long long   _sin2total    = 0;  // Σ_j sintab[j]²; precomputed in buildSintab()
+
     // LED DIO SPI
     spi_device_handle_t _ledDevice   = nullptr;
     uint8_t*            _ledTxBuf    = nullptr;

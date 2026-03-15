@@ -17,6 +17,8 @@ Enlight::~Enlight() {
     heap_caps_free(_adcTxBuf);
     heap_caps_free(_adcRxBuf);
     heap_caps_free(_sintab);
+    heap_caps_free(_satCountFar);
+    heap_caps_free(_satCountNear);
 }
 
 /* ============================================================
@@ -104,6 +106,21 @@ void Enlight::buildSintab(uint32_t phase) {
     const float k = 2.0f * (float)M_PI / (float)_goertzPeriod;
     for (uint32_t i = 0; i < _goertzPeriod; i++)
         _sintab[i] = (int32_t)roundf((float)SIN_MAG * sinf(k * (float)(i + phase)));
+
+    // Precompute Σ sintab[j]² once; reused as the correction denominator in classify().
+    _sin2total = 0;
+    for (uint32_t i = 0; i < _goertzPeriod; i++)
+        _sin2total += (long long)_sintab[i] * _sintab[i];
+
+    // Allocate per-phase saturation counters -- one array per LED source.
+    // Size = _goertzPeriod; zeroed by heap_caps_calloc so run() only needs memset.
+    heap_caps_free(_satCountFar);  heap_caps_free(_satCountNear);
+    _satCountFar  = (uint32_t*)heap_caps_calloc(_goertzPeriod, sizeof(uint32_t),
+                                                 MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    _satCountNear = (uint32_t*)heap_caps_calloc(_goertzPeriod, sizeof(uint32_t),
+                                                 MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    if (!_satCountFar || !_satCountNear)
+        ESP_LOGE(TAG, "satCount alloc failed");
 }
 
 /* ============================================================
@@ -231,6 +248,9 @@ bool Enlight::run(uint32_t repetitions) {
     taskEXIT_CRITICAL(&_mux);
     _rout=_gout=_bout=_rnear=_gnear=_bnear=_rawsum=0;
     _arrayiter=_satCount=0;
+    // Zero both saturation-count arrays so each run() starts from a clean slate.
+    if (_satCountFar)  memset(_satCountFar,  0, _goertzPeriod * sizeof(uint32_t));
+    if (_satCountNear) memset(_satCountNear, 0, _goertzPeriod * sizeof(uint32_t));
     _active=true;
     gpio_set_level((gpio_num_t)_cfg.afeOn,1);
     spawnCycle();
@@ -263,66 +283,145 @@ void Enlight::buildAdcTxBuffer() {
 
 /* ============================================================
  *   processAdcCycle()
- *   Far  kernel: sintab[idx]
- *   Near kernel: sintab[(idx+_cosOffset)%_goertzPeriod]
- *   Both accumulated in the same pass; no extra allocation.
+ *   Far  kernel: sintab[idx]             (sine-modulated LED, SDO)
+ *   Near kernel: sintab[(idx+_cosOffset)%GP]  (cosine-modulated LED, SDIOUT)
+ *
+ *   Saturation control -- independent per LED source
+ *   -----------------------------------------------
+ *   The two LEDs are driven by physically separate PDM outputs, so one can
+ *   saturate the ADC while the other remains well within range.  We attribute
+ *   saturation to a source only when that source is in its positive half-cycle
+ *   (i.e. adding extra photons above the DC average):
+ *
+ *     sat_far  = clipped AND ks > 0  (far  LED bright  → sine   accumulator unreliable)
+ *     sat_near = clipped AND kc > 0  (near LED bright  → cosine accumulator unreliable)
+ *
+ *   This means a sample clipped at the cosine peak (kc = MAX, ks ≈ 0) is still
+ *   included in the far accumulator, and vice versa.  Each exclusion is recorded
+ *   in the matching satCount array so classify() can correct the calibration
+ *   baseline for the reduced number of valid samples.
  * ============================================================ */
 void Enlight::processAdcCycle() {
-    const uint32_t triples=_adcConvsPerCycle/ADC_CHANNELS;
-    for (uint32_t t=0;t<triples;t++) {
-        const uint32_t base=t*ADC_CHANNELS+ADC_PIPELINE_DELAY;
-        auto r12=[&](uint32_t s)->uint16_t{
-            return(((uint16_t)_adcRxBuf[s*2]<<8)|_adcRxBuf[s*2+1])&0x0FFF;};
-        const uint16_t rv=r12(base), gv=r12(base+1), bv=r12(base+2);
-        _rawsum+=rv+gv+bv;
-        const bool sat=(rv>=SAT_HIGH||rv<=SAT_LOW||gv>=SAT_HIGH||gv<=SAT_LOW
-                       ||bv>=SAT_HIGH||bv<=SAT_LOW);
-        if (sat) { _satCount++; }
-        else {
-            const uint32_t idx=_arrayiter%_goertzPeriod;
-            const int32_t  ks=_sintab[idx];
-            const int32_t  kc=_sintab[(idx+_cosOffset)%_goertzPeriod];
-            _rout+=(long long)rv*ks; _gout+=(long long)gv*ks; _bout+=(long long)bv*ks;
-            _rnear+=(long long)rv*kc; _gnear+=(long long)gv*kc; _bnear+=(long long)bv*kc;
-        }
+    const uint32_t triples = _adcConvsPerCycle / ADC_CHANNELS;
+    for (uint32_t t = 0; t < triples; t++) {
+        const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+        auto r12 = [&](uint32_t s) -> uint16_t {
+            return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
+        };
+        const uint16_t rv = r12(base), gv = r12(base+1), bv = r12(base+2);
+        _rawsum += rv + gv + bv;
+
+        const uint32_t idx   = _arrayiter % _goertzPeriod;
+        const uint32_t idx_c = (idx + _cosOffset) % _goertzPeriod;
+        const int32_t  ks    = _sintab[idx];    // far  kernel weight at this sample
+        const int32_t  kc    = _sintab[idx_c];  // near kernel weight at this sample
+
+        const bool sat = (rv >= SAT_HIGH || rv <= SAT_LOW ||
+                          gv >= SAT_HIGH || gv <= SAT_LOW ||
+                          bv >= SAT_HIGH || bv <= SAT_LOW);
+
+        // Independent saturation gate: only exclude from a channel when its own
+        // LED source is in the positive (bright) half of its modulation cycle.
+        const bool sat_far  = sat && (ks > 0);
+        const bool sat_near = sat && (kc > 0);
+
+        // Accumulate for each channel independently.
+        if (!sat_far)  { _rout  += (long long)rv*ks; _gout  += (long long)gv*ks; _bout  += (long long)bv*ks; }
+        if (!sat_near) { _rnear += (long long)rv*kc; _gnear += (long long)gv*kc; _bnear += (long long)bv*kc; }
+
+        // Record per-phase exclusion counts so classify() can scale back the
+        // calibration baseline to match the number of samples actually used.
+        // satCountFar  is indexed by sine  phase (idx);   satCountNear by cosine phase (idx_c).
+        if (sat_far)        _satCountFar[idx]++;
+        if (sat_near)       _satCountNear[idx_c]++;
+        if (sat_far || sat_near) _satCount++;  // total clipped triples for diagnostics
+
         _arrayiter++;
     }
 }
 
 /* ============================================================
  *   classify()
+ *
+ *   Calibration baseline correction for saturation exclusions
+ *   ---------------------------------------------------------
+ *   During accumulation, saturated samples are excluded from one or both
+ *   correlators.  The stored calibration values (rcal, rcalNear, …) were
+ *   measured with ALL samples present.  If we subtract the full baseline from
+ *   a partial accumulator we over-subtract and get a negative (zeroed) result.
+ *
+ *   The correction uses the fact that each sample's contribution to the
+ *   baseline is weighted by sintab[j]² at its phase bucket j (kernel ≈ sin,
+ *   power ≈ sin²).  The fraction of baseline energy that was excluded is:
+ *
+ *     frac = Σ_j satCount[j] × sintab[j]²  /  (N_per_phase × Σ_j sintab[j]²)
+ *
+ *   Effective baseline = cal × (1 − frac)
+ *
+ *   satCountFar  indexed by sine  phase  → corrects rcal / gcal / bcal
+ *   satCountNear indexed by cosine phase → corrects rcalNear / gcalNear / bcalNear
+ *   Both arrays use the same formula because each is indexed by its own kernel's phase.
  * ============================================================ */
 EnlightResult Enlight::classify() {
-    const long long rout=(_rout>(long long)_cal.rcal)?_rout-_cal.rcal:0LL;
-    const long long gout=(_gout>(long long)_cal.gcal)?_gout-_cal.gcal:0LL;
-    const long long bout=(_bout>(long long)_cal.bcal)?_bout-_cal.bcal:0LL;
-    _rnear=(_rnear>(long long)_cal.rcalNear)?_rnear-_cal.rcalNear:0LL;
-    _gnear=(_gnear>(long long)_cal.gcalNear)?_gnear-_cal.gcalNear:0LL;
-    _bnear=(_bnear>(long long)_cal.bcalNear)?_bnear-_cal.bcalNear:0LL;
+    // Compute sin²-weighted saturation fractions for far and near channels independently.
+    float frac_far = 0.0f, frac_near = 0.0f;
+    if (_satCountFar && _satCountNear && _sin2total > 0) {
+        long long sin2_far = 0, sin2_near = 0;
+        for (uint32_t j = 0; j < _goertzPeriod; j++) {
+            const long long sj2 = (long long)_sintab[j] * _sintab[j];
+            sin2_far  += (long long)_satCountFar[j]  * sj2;
+            sin2_near += (long long)_satCountNear[j] * sj2;
+        }
+        // N_per_phase: average number of samples that landed in each phase bucket.
+        const long long n_per_phase = (long long)(_arrayiter / _goertzPeriod);
+        const long long denom = n_per_phase * _sin2total;  // total expected sin²-weighted count
+        if (denom > 0) {
+            frac_far  = (float)sin2_far  / (float)denom;
+            frac_near = (float)sin2_near / (float)denom;
+        }
+    }
 
-    ESP_LOGD(TAG,"rawsum=%lld far=(%lld,%lld,%lld) near=(%lld,%lld,%lld) sat=%lu",
-             _rawsum,rout,gout,bout,_rnear,_gnear,_bnear,(unsigned long)_satCount);
+    // Corrected baselines: scale calibration down by the excluded fraction.
+    // fmaxf(0,…) guards against numerical noise pushing frac slightly above 1.
+    const long long eff_rcal     = (long long)fmaxf(0.0f, (float)_cal.rcal     * (1.0f - frac_far));
+    const long long eff_gcal     = (long long)fmaxf(0.0f, (float)_cal.gcal     * (1.0f - frac_far));
+    const long long eff_bcal     = (long long)fmaxf(0.0f, (float)_cal.bcal     * (1.0f - frac_far));
+    const long long eff_rcalNear = (long long)fmaxf(0.0f, (float)_cal.rcalNear * (1.0f - frac_near));
+    const long long eff_gcalNear = (long long)fmaxf(0.0f, (float)_cal.gcalNear * (1.0f - frac_near));
+    const long long eff_bcalNear = (long long)fmaxf(0.0f, (float)_cal.bcalNear * (1.0f - frac_near));
 
-    if (_rawsum<=(long long)_cal.limpow) return {EnlightStatus::LOW_POW,0};
+    const long long rout  = (_rout  > eff_rcal)     ? _rout  - eff_rcal     : 0LL;
+    const long long gout  = (_gout  > eff_gcal)     ? _gout  - eff_gcal     : 0LL;
+    const long long bout  = (_bout  > eff_bcal)     ? _bout  - eff_bcal     : 0LL;
+    _rnear = (_rnear > eff_rcalNear) ? _rnear - eff_rcalNear : 0LL;
+    _gnear = (_gnear > eff_gcalNear) ? _gnear - eff_gcalNear : 0LL;
+    _bnear = (_bnear > eff_bcalNear) ? _bnear - eff_bcalNear : 0LL;
 
-    const float farSum =(float)(llabs(rout) +llabs(gout) +llabs(bout));
-    const float nearSum=(float)(llabs(_rnear)+llabs(_gnear)+llabs(_bnear));
-    if (farSum>0.0f && (nearSum/farSum)>_cal.nearRatioMax) {
-        ESP_LOGD(TAG,"NEAR ratio=%.3f",(double)(nearSum/farSum));
+    ESP_LOGD(TAG, "rawsum=%lld far=(%lld,%lld,%lld) near=(%lld,%lld,%lld) "
+                  "sat=%lu frac_far=%.4f frac_near=%.4f",
+             _rawsum, rout, gout, bout, _rnear, _gnear, _bnear,
+             (unsigned long)_satCount, (double)frac_far, (double)frac_near);
+
+    if (_rawsum <= (long long)_cal.limpow) return {EnlightStatus::LOW_POW, 0};
+
+    const float farSum  = (float)(llabs(rout)  + llabs(gout)  + llabs(bout));
+    const float nearSum = (float)(llabs(_rnear) + llabs(_gnear) + llabs(_bnear));
+    if (farSum > 0.0f && (nearSum / farSum) > _cal.nearRatioMax) {
+        ESP_LOGD(TAG, "NEAR ratio=%.3f", (double)(nearSum / farSum));
         return classifyNear();
     }
 
-    float outr=rout*_cal.rfact, outb=bout*_cal.bfact, outg=(float)gout;
-    const float s=outr+outb+outg;
-    if (s<=0.0f) return {EnlightStatus::NO_HIT,0};
-    outr/=s; outg/=s;
-    const float outang=(outr<1.0f)?(outg/(1.0f-outr)):1.0f;
-    const int hit=gridLookup(outr,outang);
-    if (hit>0) {
-        ESP_LOGI(TAG,"HIT player %d (outr=%.3f outang=%.3f)",hit,outr,outang);
-        return {EnlightStatus::PLAYER_HIT,(uint8_t)hit};
+    float outr = rout * _cal.rfact, outb = bout * _cal.bfact, outg = (float)gout;
+    const float s = outr + outb + outg;
+    if (s <= 0.0f) return {EnlightStatus::NO_HIT, 0};
+    outr /= s; outg /= s;
+    const float outang = (outr < 1.0f) ? (outg / (1.0f - outr)) : 1.0f;
+    const int hit = gridLookup(outr, outang);
+    if (hit > 0) {
+        ESP_LOGI(TAG, "HIT player %d (outr=%.3f outang=%.3f)", hit, outr, outang);
+        return {EnlightStatus::PLAYER_HIT, (uint8_t)hit};
     }
-    return {EnlightStatus::NO_HIT,0};
+    return {EnlightStatus::NO_HIT, 0};
 }
 
 /* ============================================================
