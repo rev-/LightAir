@@ -253,6 +253,10 @@ bool Enlight::run(uint32_t repetitions) {
     return true;
 }
 
+EnlightRawMeasure Enlight::rawMeasure() const {
+    return { _rout, _gout, _bout, _rnear, _gnear, _bnear, _satCount, _arrayiter };
+}
+
 EnlightResult Enlight::poll() {
     if (!_active) return {EnlightStatus::IDLE,0};
     if (!_complete) return {EnlightStatus::RUNNING,0};

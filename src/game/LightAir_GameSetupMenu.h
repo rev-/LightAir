@@ -7,6 +7,8 @@
 #include "../radio/LightAir_Radio.h"
 #include "../config.h"
 
+class EnlightCalibRoutine;
+
 // ----------------------------------------------------------------
 // Config blob format (used by game_serialize_config / game_apply_config):
 //
@@ -67,6 +69,10 @@ public:
     // Blocking.  Returns Confirmed or Cancelled.
     MenuResult run();
 
+    // Optional: register a calibration routine to run when 'B' is held at boot.
+    // Must be called before run().
+    void setCalibRoutine(EnlightCalibRoutine& r) { _calibRoutine = &r; }
+
     // Valid after Confirmed return.
     const LightAir_Game& selectedGame() const { return *_game; }
 
@@ -79,6 +85,7 @@ private:
     LightAir_Radio&       _radio;
     uint8_t               _msgType;
 
+    EnlightCalibRoutine* _calibRoutine = nullptr;
     bool                 _isDm   = false;
     const LightAir_Game* _game   = nullptr;
     uint8_t              _gameIdx = 0;

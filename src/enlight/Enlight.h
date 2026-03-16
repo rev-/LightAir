@@ -49,6 +49,14 @@ struct EnlightResult {
                                 // colour id (NEAR, 0 until near grid defined)
 };
 
+// Raw correlator output after a completed run — exposed for calibration routines.
+struct EnlightRawMeasure {
+    long long rout, gout, bout;    // far  correlator sums (signed)
+    long long rnear, gnear, bnear; // near correlator sums (signed)
+    uint32_t  satCount;            // saturated triples in this run
+    uint32_t  totalSamples;        // total triples processed (_arrayiter)
+};
+
 // Grid classifier: O(log N) lookup in non-overlapping (outr, outang) boxes
 struct GridClassifier {
     float   xThresh[GRID_MAX_THRESH];
@@ -95,6 +103,16 @@ public:
     //   { NEAR,       c }  near object; c = colour id (0 until grid defined)
     //   { IDLE,       0 }  before any run()
     EnlightResult poll();
+
+    // Raw correlator accumulators from the last completed run.
+    // Valid to call immediately after poll() returns a non-RUNNING status.
+    // Values are reset by run(), so call this before the next run().
+    EnlightRawMeasure rawMeasure() const;
+
+    // Rebuild the sine/cosine lookup table with the given phase offset.
+    // Also precomputes _sin2total and reallocates _satPhaseCount.
+    // Safe to call outside of an active run().
+    void buildSintab(uint32_t phase);
 
 private:
     EnlightConfig   _cfg;
@@ -161,7 +179,6 @@ private:
     TaskArgs        _taskArgs      = {};
 
     bool          generateWaveform();
-    void          buildSintab(uint32_t phase);
     void          buildGrid();
     int           gridLookup(float outr, float outang) const;
     void          buildAdcTxBuffer();

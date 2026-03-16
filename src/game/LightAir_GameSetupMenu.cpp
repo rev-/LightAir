@@ -1,4 +1,5 @@
 #include "LightAir_GameSetupMenu.h"
+#include "../enlight/EnlightCalibRoutine.h"
 #include <Arduino.h>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -157,30 +158,43 @@ MenuResult LightAir_GameSetupMenu::run() {
  * ========================================================= */
 
 void LightAir_GameSetupMenu::loadOrDetectDm() {
-    // Check if ^ is currently PRESSED right now.
-    bool caretPressed = false;
+    // Sample initial key state.
+    bool caretPressed = false, bPressed = false;
     {
         const InputReport& rep = _input.poll();
         for (uint8_t i = 0; i < rep.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = rep.keyEvents[i];
             if (ke.keypadId != _keypadId) continue;
             if (ke.key == '^' &&
-                (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD)) {
+                (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD))
                 caretPressed = true;
-            }
+            if (ke.key == 'B' &&
+                (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD))
+                bPressed = true;
         }
     }
 
+    // Confirm ^ hold → DM mode.
     if (caretPressed) {
-        // Wait LONG_PRESS_MS to confirm it's a hold, not a tap.
         delay(InputDefaults::LONG_PRESS_MS);
         const InputReport& rep2 = _input.poll();
         for (uint8_t i = 0; i < rep2.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = rep2.keyEvents[i];
             if (ke.keypadId != _keypadId) continue;
-            if (ke.key == '^' && ke.state == KeyState::HELD) {
+            if (ke.key == '^' && ke.state == KeyState::HELD)
                 saveIsDm(true);
-            }
+        }
+    }
+
+    // Confirm B hold → calibration mode (runs before normal setup resumes).
+    if (bPressed && _calibRoutine) {
+        delay(InputDefaults::LONG_PRESS_MS);
+        const InputReport& rep2 = _input.poll();
+        for (uint8_t i = 0; i < rep2.keyEventCount; i++) {
+            const InputReport::KeyEntry& ke = rep2.keyEvents[i];
+            if (ke.keypadId != _keypadId) continue;
+            if (ke.key == 'B' && ke.state == KeyState::HELD)
+                _calibRoutine->run();
         }
     }
 
