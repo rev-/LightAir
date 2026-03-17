@@ -53,13 +53,14 @@ bool LightAir_RadioESPNow::send(const uint8_t mac[6],
     return true;
 }
 
-bool LightAir_RadioESPNow::receive(uint8_t* data, int& len, int maxLen) {
+bool LightAir_RadioESPNow::receive(uint8_t* data, int& len, int maxLen, int8_t& rssi) {
     taskENTER_CRITICAL(&_mux);
     bool avail = (_head != _tail);
     if (avail) {
         int copyLen = (_queue[_tail].len < maxLen) ? _queue[_tail].len : maxLen;
         memcpy(data, _queue[_tail].data, copyLen);
-        len   = copyLen;
+        len  = copyLen;
+        rssi = _queue[_tail].rssi;
         _tail = (_tail + 1) % ESPNOW_RECV_QUEUE;
     }
     taskEXIT_CRITICAL(&_mux);
@@ -69,16 +70,21 @@ bool LightAir_RadioESPNow::receive(uint8_t* data, int& len, int maxLen) {
 // ----------------------------------------------------------------
 // Static ESP-NOW callback — WiFi task, core 0
 // ----------------------------------------------------------------
-void LightAir_RadioESPNow::onRecv(const uint8_t* /*mac*/,
+void LightAir_RadioESPNow::onRecv(const esp_now_recv_info_t* recv_info,
                                    const uint8_t* data, int len) {
     LightAir_RadioESPNow* self = _instance;
     if (!self || len <= 0 || len > ESPNOW_MAX_PKT_LEN) return;
+
+    int8_t rssi = (recv_info && recv_info->rx_ctrl)
+                  ? (int8_t)recv_info->rx_ctrl->rssi
+                  : 0;
 
     taskENTER_CRITICAL(&self->_mux);
     int nextHead = (self->_head + 1) % ESPNOW_RECV_QUEUE;
     if (nextHead != self->_tail) {           // drop silently if full
         memcpy(self->_queue[self->_head].data, data, len);
-        self->_queue[self->_head].len = len;
+        self->_queue[self->_head].len  = len;
+        self->_queue[self->_head].rssi = rssi;
         self->_head = nextHead;
     }
     taskEXIT_CRITICAL(&self->_mux);

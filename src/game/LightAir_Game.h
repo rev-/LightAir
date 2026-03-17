@@ -6,11 +6,36 @@
 #include "LightAir_ReplyRadioRule.h"
 #include "LightAir_WinnerVar.h"
 #include "LightAir_TotemVar.h"
+#include "../ui/LightAir_UICtrl.h"
+#include "../config.h"
 
 // ----------------------------------------------------------------
 // MenuResult — returned by blocking pre-game menu classes.
 // ----------------------------------------------------------------
 enum class MenuResult : uint8_t { Confirmed, Cancelled };
+
+// ----------------------------------------------------------------
+// ScoreTable — snapshot of collected end-game scores passed to
+// an optional onScoreAnnounce callback.  Allows rulesets to
+// perform custom winner computation (e.g. team aggregation)
+// instead of the default individual-player ranking.
+//
+// roster[0..rosterCount-1]  — player IDs in collection order
+// accumMask                 — bit r = slots[r] is valid
+// slots[r]                  — winnerVarCount × int32_t LE for roster[r]
+// teamMap[id]               — 0=O, 1=X for player id (size MAX_PLAYER_ID)
+// myPlayerId                — this device's logical player ID
+// ----------------------------------------------------------------
+struct ScoreTable {
+    uint8_t          rosterCount;
+    const uint8_t*   roster;
+    uint32_t         accumMask;
+    const uint8_t  (*slots)[GameDefaults::MAX_WINNER_VARS * 4];
+    uint8_t          winnerVarCount;
+    const WinnerVar* winnerVars;
+    const uint8_t*   teamMap;    // size PlayerDefs::MAX_PLAYER_ID
+    uint8_t          myPlayerId;
+};
 
 // ----------------------------------------------------------------
 // LightAir_Game — complete descriptor of a table-driven game.
@@ -151,8 +176,9 @@ struct LightAir_Game {
     uint8_t              initialState;
 
     // Called by GameRunner::begin() after display binding sets are built.
+    // ui is the optional UICtrl pointer passed to GameRunner::begin(); may be nullptr.
     // nullptr = skip.
-    void (*onBegin)(LightAir_DisplayCtrl&, LightAir_Radio&);
+    void (*onBegin)(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*);
 
     // ---- End-game score collection and winner election (optional) ----
     //
@@ -173,6 +199,12 @@ struct LightAir_Game {
     uint8_t          winnerVarCount;
     uint8_t          scoringState;    // state that activates collection; 255 = disabled
     uint8_t          scoreMsgType;    // even msgType for the per-player score broadcast
+
+    // Optional custom winner announcement.  If non-null, called instead of the
+    // default individual-player ranking after all scores are collected.
+    // Use for team-aggregate or other non-individual winner logic.
+    // nullptr = use default ranking (scoreSlotBeats / scoreAnnounce).
+    void (*onScoreAnnounce)(const ScoreTable&, LightAir_DisplayCtrl&);
 
     // ---- Totem roles and team configuration ----
     //

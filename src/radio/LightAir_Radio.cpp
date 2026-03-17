@@ -220,7 +220,7 @@ bool LightAir_Radio::sendConfig(const uint8_t* data, uint16_t totalLen, uint8_t 
 // ----------------------------------------------------------------
 // processPacket() — classify one received packet; append to _report
 // ----------------------------------------------------------------
-void LightAir_Radio::processPacket(const RadioPacket& pkt) {
+void LightAir_Radio::processPacket(const RadioPacket& pkt, int8_t rssi) {
     // 1. Session token gate
     bool isConfig = (pkt.sessionToken == RadioToken::UNSET &&
                      _sessionToken    == RadioToken::UNSET);
@@ -247,6 +247,7 @@ void LightAir_Radio::processPacket(const RadioPacket& pkt) {
         evt.type             = RadioEventType::ReplyReceived;
         evt.packet           = pkt;
         evt.original         = _pending[idx].pkt;
+        evt.rssi             = rssi;
         _pending[idx].active = false;
         return;
     }
@@ -255,6 +256,7 @@ void LightAir_Radio::processPacket(const RadioPacket& pkt) {
     RadioEvent& evt = _report.events[_report.count++];
     evt.type        = RadioEventType::MessageReceived;
     evt.packet      = pkt;
+    evt.rssi        = rssi;
 }
 
 // ----------------------------------------------------------------
@@ -266,13 +268,14 @@ const RadioReport& LightAir_Radio::poll() {
     // Drain all received packets from the transport queue
     uint8_t rawBuf[sizeof(RadioPacket)];
     int     rawLen = 0;
-    while (_transport.receive(rawBuf, rawLen, sizeof(RadioPacket))) {
+    int8_t  rawRssi = 0;
+    while (_transport.receive(rawBuf, rawLen, sizeof(RadioPacket), rawRssi)) {
         const int kMinLen = (int)offsetof(RadioPacket, payload);
         if (rawLen < kMinLen) continue;  // malformed — skip
 
         RadioPacket pkt = {};
         memcpy(&pkt, rawBuf, rawLen);
-        processPacket(pkt);
+        processPacket(pkt, rawRssi);
     }
 
     // Check all pending messages for timeout

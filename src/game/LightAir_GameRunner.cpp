@@ -54,7 +54,7 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     activateStateDisplay(game.initialState);
 
     // User-provided setup (radio init, opening messages, etc.)
-    if (game.onBegin) game.onBegin(display, radio);
+    if (game.onBegin) game.onBegin(display, radio, ui);
 }
 
 /* =========================================================
@@ -341,10 +341,28 @@ void LightAir_GameRunner::scoreBroadcastFused(GameOutput& output) const {
 }
 
 // Find the winner from accumulated slots and call showMessage() on the display.
-// Shows two tray lines:
+// If the game provides onScoreAnnounce, delegates entirely to that callback
+// (used for team-aggregate or other non-individual winner logic).
+// Otherwise shows two tray lines:
 //   top    — "[NAME] WINS!"  or  "TIE: [NAMES]"
 //   bottom — "You arrived Xth"  (only if own ID is in the roster)
 void LightAir_GameRunner::scoreAnnounce() const {
+    // Delegate to game-specific announce if provided.
+    if (_game->onScoreAnnounce) {
+        ScoreTable table;
+        table.rosterCount   = _rosterCount;
+        table.roster        = _roster;
+        table.accumMask     = _scoreAccumMask;
+        table.slots         = _scoreSlots;
+        table.winnerVarCount = _game->winnerVarCount;
+        table.winnerVars    = _game->winnerVars;
+        table.teamMap       = _teamMap;
+        table.myPlayerId    = _radio->playerId();
+        _game->onScoreAnnounce(table, *_display);
+        return;
+    }
+
+    // Default: individual-player ranking.
     uint8_t bestIdx = 0;
     bool    tied    = false;
 

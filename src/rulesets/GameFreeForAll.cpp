@@ -141,7 +141,7 @@ static const WinnerVar winnerVars[] = {
 };
 
 // ---- onBegin: reset all runtime state from config ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&) {
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*) {
     lives        = startLives;
     energy       = startEnergy;
     gameTimeLeft = gameTime;
@@ -285,4 +285,5 @@ const LightAir_Game game_ffa = {
     /* totemVarCount         */ 0,
     /* hasTeams              */ false,
     /* teamBitmask           */ nullptr,
+    /* onScoreAnnounce       */ nullptr, // use default individual ranking
 };

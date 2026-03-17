@@ -79,6 +79,7 @@ struct RadioEvent {
     RadioEventType type;
     RadioPacket    packet;    // received packet   (ReplyReceived / MessageReceived)
     RadioPacket    original;  // our sent packet   (ReplyReceived / Timeout)
+    int8_t         rssi;      // signal strength dBm (receiver-side metadata; never transmitted)
 };
 
 // ----------------------------------------------------------------
@@ -187,5 +188,5 @@ private:
     int  findPending(uint8_t replyMsgType, uint32_t timestamp) const;
     bool isDuplicate(uint8_t senderId, uint32_t timestamp) const;
     void recordDedup(uint8_t senderId, uint32_t timestamp);
-    void processPacket(const RadioPacket& pkt);  // classify and add to _report
+    void processPacket(const RadioPacket& pkt, int8_t rssi);  // classify and add to _report
 };

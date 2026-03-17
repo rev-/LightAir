@@ -28,6 +28,7 @@ public:
 
     // Pull the next received packet into data (capacity maxLen bytes).
     // Sets len to the number of bytes written.
+    // Sets rssi to the measured signal strength (dBm); 0 if unavailable.
     // Returns false when the receive queue is empty.
-    virtual bool receive(uint8_t* data, int& len, int maxLen) = 0;
+    virtual bool receive(uint8_t* data, int& len, int maxLen, int8_t& rssi) = 0;
 };
