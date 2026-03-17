@@ -38,17 +38,17 @@ bool game_apply_config(const LightAir_Game& game,
 // LightAir_GameSetupMenu — unified DM/player pre-game menu.
 //
 // Screens:
-//   S0  DM detection (^ held at boot → DM mode saved to NVS)
-//   S1  "Last: <game>  A:Restart  B:New"
-//   S2  Scrollable game list (^/V; A=start, B=setup)
-//   S4  Setup sub-menu (Config / Teams / Totems)
-//   S4a Config vars (3 visible; </> change, ^/V navigate, B back)
-//   S4b Teams (3 visible; </> toggle O/X, ^/V navigate, B back)
-//   S4c Totems (16 slots; </> cycle role, ^/V navigate, B back)
-//   S5  Pre-start: share config → discovery → summary → confirm
+//   Home  "Welcome to LightAir / Player <name>"  A:Play  ^:Settings
+//   Sx    Settings menu (Calibration, ID/DM)
+//   S1    "Last: <game>  A:Restart  B:New"        [DM only]
+//   S2    Scrollable game list (^/V; A=start, B=setup)
+//   S4    Setup sub-menu (Config / Teams / Totems)
+//   S4a   Config vars (3 visible; </> change, ^/V navigate, B back)
+//   S4b   Teams (3 visible; </> toggle O/X, ^/V navigate, B back)
+//   S4c   Totems (16 slots; </> cycle role, ^/V navigate, B back)
+//   S5    Pre-start: share config → discovery → summary → confirm
 //
-// Non-DM devices sit in a passive "waiting" loop and receive the
-// config blob from the host; A/TRIG1 accepts the game, B cancels.
+// Non-DM devices go from Home → A:Play → passive wait for host config.
 //
 // Usage:
 //   LightAir_GameSetupMenu menu(manager, runner, rawDisplay,
@@ -69,7 +69,7 @@ public:
     // Blocking.  Returns Confirmed or Cancelled.
     MenuResult run();
 
-    // Optional: register a calibration routine to run when 'B' is held at boot.
+    // Optional: register a calibration routine accessible from Settings → Calibration.
     // Must be called before run().
     void setCalibRoutine(EnlightCalibRoutine& r) { _calibRoutine = &r; }
 
@@ -103,8 +103,9 @@ private:
     uint8_t _seenIds[MAX_DISC] = {};
     uint8_t _seenCount = 0;
 
-    // ---- S0 ----
-    void loadOrDetectDm();
+    // ---- Home / Settings ----
+    void runSettingsMenu();
+    void runIdSettings();
     void saveIsDm(bool val);
     bool loadIsDm();
 

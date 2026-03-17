@@ -1,5 +1,6 @@
 #include "LightAir_GameSetupMenu.h"
 #include "../enlight/EnlightCalibRoutine.h"
+#include "../nvs_config.h"
 #include <Arduino.h>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -133,8 +134,32 @@ LightAir_GameSetupMenu::LightAir_GameSetupMenu(LightAir_GameManager& mgr,
  * ========================================================= */
 
 MenuResult LightAir_GameSetupMenu::run() {
-    // ---- S0: DM detection ----
-    loadOrDetectDm();
+    _isDm = loadIsDm();
+
+    // ---- Home screen ----
+    while (true) {
+        const uint8_t fh  = DisplayDefaults::FONT_HEIGHT;
+        const uint8_t pid = _radio.playerId();
+        char playerLine[20];
+        snprintf(playerLine, sizeof(playerLine), "Player %s",
+                 (pid < PlayerDefs::MAX_PLAYER_ID) ? PlayerDefs::playerNames[pid] : "???");
+        _display.clear();
+        _display.setColor(true);
+        _display.print(0, 0,      "Welcome to LightAir");
+        _display.print(0, fh,     playerLine);
+        _display.print(0, fh * 3, "A:Play  ^:Settings");
+        _display.flush();
+
+        char key = waitForKey();
+        if (key == '^') {
+            runSettingsMenu();
+            _isDm = loadIsDm();   // refresh in case DM was toggled
+            continue;
+        }
+        if (key == 'A') break;
+    }
+
+    // ---- Branch on DM ----
     if (!_isDm) return runWaiter();
 
     // ---- S1: Restart last game? ----
@@ -154,52 +179,8 @@ MenuResult LightAir_GameSetupMenu::run() {
 }
 
 /* =========================================================
- *   S0 — DM DETECTION
+ *   HOME / SETTINGS
  * ========================================================= */
-
-void LightAir_GameSetupMenu::loadOrDetectDm() {
-    // Sample initial key state.
-    bool caretPressed = false, bPressed = false;
-    {
-        const InputReport& rep = _input.poll();
-        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
-            const InputReport::KeyEntry& ke = rep.keyEvents[i];
-            if (ke.keypadId != _keypadId) continue;
-            if (ke.key == '^' &&
-                (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD))
-                caretPressed = true;
-            if (ke.key == 'B' &&
-                (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD))
-                bPressed = true;
-        }
-    }
-
-    // Confirm ^ hold → DM mode.
-    if (caretPressed) {
-        delay(InputDefaults::LONG_PRESS_MS);
-        const InputReport& rep2 = _input.poll();
-        for (uint8_t i = 0; i < rep2.keyEventCount; i++) {
-            const InputReport::KeyEntry& ke = rep2.keyEvents[i];
-            if (ke.keypadId != _keypadId) continue;
-            if (ke.key == '^' && ke.state == KeyState::HELD)
-                saveIsDm(true);
-        }
-    }
-
-    // Confirm B hold → calibration mode (runs before normal setup resumes).
-    if (bPressed && _calibRoutine) {
-        delay(InputDefaults::LONG_PRESS_MS);
-        const InputReport& rep2 = _input.poll();
-        for (uint8_t i = 0; i < rep2.keyEventCount; i++) {
-            const InputReport::KeyEntry& ke = rep2.keyEvents[i];
-            if (ke.keypadId != _keypadId) continue;
-            if (ke.key == 'B' && ke.state == KeyState::HELD)
-                _calibRoutine->run();
-        }
-    }
-
-    _isDm = loadIsDm();
-}
 
 void LightAir_GameSetupMenu::saveIsDm(bool val) {
     nvs_handle_t h;
@@ -216,6 +197,85 @@ bool LightAir_GameSetupMenu::loadIsDm() {
     nvs_get_u8(h, MGR_NVS_KEY_DM, &val);
     nvs_close(h);
     return val != 0;
+}
+
+void LightAir_GameSetupMenu::runSettingsMenu() {
+    static const char* const kEntries[] = { "Calibration", "ID / DM" };
+    static constexpr uint8_t kCount = 2;
+    uint8_t sel = 0;
+
+    while (true) {
+        const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
+        _display.clear();
+        _display.setColor(true);
+        _display.print(0, 0, "-- Settings --");
+        for (uint8_t i = 0; i < kCount; i++) {
+            char row[20];
+            snprintf(row, sizeof(row), "%c %s", (i == sel) ? '>' : ' ', kEntries[i]);
+            _display.print(0, fh * (1 + i), row);
+        }
+        _display.print(0, fh * 3, "A:Select  B:Back");
+        _display.flush();
+
+        char key = waitForKey();
+        if (key == 'B') return;
+        if (key == '^' && sel > 0) { sel--; continue; }
+        if (key == 'V' && sel < kCount - 1) { sel++; continue; }
+        if (key == 'A') {
+            if (sel == 0 && _calibRoutine) _calibRoutine->run();
+            if (sel == 1) runIdSettings();
+        }
+    }
+}
+
+void LightAir_GameSetupMenu::runIdSettings() {
+    PlayerConfig cfg;
+    player_config_load(cfg);
+    uint8_t id = (cfg.id < PlayerDefs::MAX_PLAYER_ID) ? cfg.id : 0;
+    bool dm = _isDm;
+    uint8_t cursor = 0;  // 0 = ID row, 1 = DM row
+
+    while (true) {
+        const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
+        char idRow[20], dmRow[20];
+        snprintf(idRow, sizeof(idRow), "%cID: %s",
+                 (cursor == 0) ? '>' : ' ',
+                 PlayerDefs::playerNames[id]);
+        snprintf(dmRow, sizeof(dmRow), "%cDM: %s",
+                 (cursor == 1) ? '>' : ' ',
+                 dm ? "Yes" : "No");
+        _display.clear();
+        _display.setColor(true);
+        _display.print(0, 0,      idRow);
+        _display.print(0, fh,     dmRow);
+        _display.print(0, fh * 2, "</> Chg  ^/V Nav");
+        _display.print(0, fh * 3, "A:Save   B:Cancel");
+        _display.flush();
+
+        char key = waitForKey();
+        if (key == 'B') return;
+        if (key == '^' && cursor > 0) { cursor--; continue; }
+        if (key == 'V' && cursor < 1) { cursor++; continue; }
+        if (key == '<') {
+            if (cursor == 0) id = (id == 0) ? (PlayerDefs::MAX_PLAYER_ID - 1) : (id - 1);
+            if (cursor == 1) dm = !dm;
+        }
+        if (key == '>') {
+            if (cursor == 0) id = (id + 1) % PlayerDefs::MAX_PLAYER_ID;
+            if (cursor == 1) dm = !dm;
+        }
+        if (key == 'A') {
+            const bool idChanged = (id != cfg.id);
+            cfg.id = id;
+            player_config_save(cfg);
+            saveIsDm(dm);
+            if (idChanged) {
+                showMessage2("ID saved.", "Reboot to apply.", "", "");
+                waitForKey();
+            }
+            return;
+        }
+    }
 }
 
 /* =========================================================
