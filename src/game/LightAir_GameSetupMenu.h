@@ -38,7 +38,7 @@ bool game_apply_config(const LightAir_Game& game,
 // LightAir_GameSetupMenu — unified DM/player pre-game menu.
 //
 // Screens:
-//   Home  "Welcome to LightAir / Player <name>"  A:Play  ^:Settings
+//   Home  "Welcome to LightAir / Player <name>"  A:Play  B:Settings
 //   Sx    Settings menu (Calibration, ID/DM)
 //   S1    "Last: <game>  A:Restart  B:New"        [DM only]
 //   S2    Scrollable game list (^/V; A=start, B=setup)

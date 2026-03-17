@@ -147,11 +147,11 @@ MenuResult LightAir_GameSetupMenu::run() {
         _display.setColor(true);
         _display.print(0, 0,      "Welcome to LightAir");
         _display.print(0, fh,     playerLine);
-        _display.print(0, fh * 3, "A:Play  ^:Settings");
+        _display.print(0, fh * 3, "A:Play  B:Settings");
         _display.flush();
 
         char key = waitForKey();
-        if (key == '^') {
+        if (key == 'B') {
             runSettingsMenu();
             _isDm = loadIsDm();   // refresh in case DM was toggled
             continue;
