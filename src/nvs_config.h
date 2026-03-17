@@ -28,6 +28,11 @@
 // Calibrate at minimum acceptable working distance.
 #define CAL_KEY_NEAR_RATIO_MAX  "near_ratio"   // float blob
 #define CAL_KEY_PHASE_OFF       "phase_off"    // LED excitation delay in samples
+// Step 3 — white diffusing surface (contact … 5 m):
+// maximum near and far correlator power seen during the sweep.
+// Used to distinguish reflective targets from diffusing surfaces.
+#define CAL_KEY_MAX_NEAR_WHITE  "max_near_w"   // Max Near White (uint32)
+#define CAL_KEY_MAX_FAR_WHITE   "max_far_w"    // Max Far White  (uint32)
 // Far hit-boxes in (outr, outang) space.
 // [0]=outr_max [1]=outr_min [2]=outang_max [3]=outang_min
 // Key "hb_N_K": N=player(1-based), K=corner 0..3. Sentinel -10 = inactive.
@@ -59,6 +64,9 @@ struct EnlightCalib {
     float       rfact, bfact;
     float       nearRatioMax;
     float       hitBox[CALIB_MAX_PLAYERS][4]; // sentinel -10 = inactive
+    // Step 3 — white diffusing surface calibration
+    uint32_t    maxNearWhite; // Max Near White: peak near-channel power over white-wall sweep
+    uint32_t    maxFarWhite;  // Max Far White:  peak far-channel  power over white-wall sweep
 };
 
 bool enlight_calib_load(EnlightCalib& cal);

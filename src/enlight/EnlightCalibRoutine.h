@@ -4,7 +4,7 @@
 #include "../input/LightAir_InputCtrl.h"
 
 // ---------------------------------------------------------------
-// EnlightCalibRoutine — two-step hardware calibration sequence.
+// EnlightCalibRoutine — three-step hardware calibration sequence.
 //
 // Entered when 'B' is held at power-on (parallel to '^' for DM mode).
 // After completion the device proceeds with normal game setup.
@@ -21,6 +21,18 @@
 //   Collect 50 Enlight runs (100 ms apart, no saturation rejection).
 //   Display average and stdev of all 6 channels (far + near).
 //   Save the median of each channel as the far/near baseline to NVS.
+//   Press TRIG2 to continue.
+//
+// Step 3 — White diffusing surface (contact … ~5 m):
+//   Illuminate a white diffusing wall or target from varying distances
+//   (contact to ~5 m).  Collect 50 runs (100 ms apart, no saturation
+//   rejection).  For each reading compute:
+//     near_pow = |rnear| + |gnear| + |bnear|
+//     far_pow  = |rout|  + |gout|  + |bout|
+//   Track the maximum near_pow and maximum far_pow seen across all 50
+//   readings.  Save them to NVS as "Max Near White" and "Max Far White".
+//   These thresholds allow the classifier to distinguish reflective
+//   (legitimate) targets from diffusing surfaces.
 //   Press TRIG2 to finish.
 // ---------------------------------------------------------------
 class EnlightCalibRoutine {
@@ -36,6 +48,7 @@ private:
     // --- step implementations ---
     void step1();
     void step2();
+    void step3();
 
     // Run one Enlight measurement (REPS repetitions) and block until done.
     // Returns false if saturation rate exceeds SAT_THRESH (run should be

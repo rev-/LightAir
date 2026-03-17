@@ -19,6 +19,7 @@ EnlightCalibRoutine::EnlightCalibRoutine(Enlight&            e,
 void EnlightCalibRoutine::run() {
     step1();
     step2();
+    step3();
 }
 
 /* ============================================================
@@ -173,8 +174,54 @@ void EnlightCalibRoutine::step2() {
              0.0);
     // Re-use l4 for individual stdevs of far channels; show near stdev on l5.
     snprintf(l4, sizeof(l4), "sF:%.0f %.0f %.0f", (double)sdRF, (double)sdGF, (double)sdBF);
-    snprintf(l5, sizeof(l5), "sN:%.0f %.0f TRIG2", (double)sdRN, (double)sdGN);
+    snprintf(l5, sizeof(l5), "sN:%.0f %.0f next", (double)sdRN, (double)sdGN);
     showLines(l0, l1, l2, l3, l4, l5);
+    waitTrig(TRIG_2_ID);
+}
+
+/* ============================================================
+ *   Step 3 — white diffusing surface (contact … ~5 m)
+ * ============================================================ */
+
+void EnlightCalibRoutine::step3() {
+    showLines("Step 3: White",
+              "Enlight white wall",
+              "contact to ~5m.",
+              "TRIG1 to start.");
+    waitTrig(TRIG_1_ID);
+
+    uint32_t maxNear = 0, maxFar = 0;
+    uint32_t n = 0;
+
+    while (n < N_RUNS) {
+        char rem[20];
+        snprintf(rem, sizeof(rem), "Rem: %lu", (unsigned long)(N_RUNS - n));
+        showLines("White wall", rem);
+        delay(DELAY_MS);
+
+        EnlightRawMeasure m;
+        runOne(m);  // no saturation rejection
+
+        const uint32_t nearPow = (uint32_t)(llabs(m.rnear) + llabs(m.gnear) + llabs(m.bnear));
+        const uint32_t farPow  = (uint32_t)(llabs(m.rout)  + llabs(m.gout)  + llabs(m.bout));
+
+        if (nearPow > maxNear) maxNear = nearPow;
+        if (farPow  > maxFar)  maxFar  = farPow;
+        n++;
+    }
+
+    // Persist Max Near White and Max Far White.
+    EnlightCalib cal;
+    enlight_calib_load(cal);
+    cal.maxNearWhite = maxNear;
+    cal.maxFarWhite  = maxFar;
+    enlight_calib_save(cal);
+
+    // Show results.
+    char l0[24], l1[24];
+    snprintf(l0, sizeof(l0), "NearMax: %lu", (unsigned long)maxNear);
+    snprintf(l1, sizeof(l1), "FarMax:  %lu", (unsigned long)maxFar);
+    showLines(l0, l1, nullptr, nullptr, nullptr, "TRIG2: done");
     waitTrig(TRIG_2_ID);
 }
 
