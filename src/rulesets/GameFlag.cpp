@@ -1,0 +1,609 @@
+#include <LightAir.h>
+#include <string.h>
+
+// ================================================================
+// Flag — capture-the-flag team game: O vs X.
+//
+// States
+//   IN_GAME  (0) : active; can shoot; can pick up and score the flag.
+//   OUT_GAME (1) : down; waiting for BASE beacon to respawn.
+//   GAME_END (2) : over; shows final stats.
+//
+// Radio messages (even = request, odd = reply)
+//   MSG_LIT           (0x40) : unicast hit to a target player.
+//   MSG_FLAG_BEACON   (0x42) : broadcast by FLAG totems (received only).
+//   MSG_BASE_BEACON   (0x44) : broadcast by BASE totems (received only).
+//   MSG_FLAG_EVENT    (0x46) : broadcast by a player on flag state change.
+//   MSG_SCORE_COLLECT (0x48) : broadcast per-player scores during GAME_END.
+//
+// Reply sub-types (payload[0] of the 0x41 reply)
+//   REPLY_TAKEN  (1) : target absorbed the hit; lives > 0 after decrement.
+//   REPLY_SHONE  (2) : target eliminated; lives reached 0.
+//   REPLY_DOWN   (3) : target was already OUT_GAME; hit ignored.
+//   REPLY_FRIEND (4) : hit rejected — friendly fire is disabled.
+//
+// Flag event sub-types (payload[0] of MSG_FLAG_EVENT broadcast)
+//   FEVENT_TAKEN   (1) : player picked up flag; payload[1]=flag_team.
+//   FEVENT_DROPPED (2) : carrier was shot, flag dropped; payload[1]=flag_team.
+//   FEVENT_SCORED  (3) : flag captured at base; payload[1]=flag_team.
+//
+//   flag_team is the team that OWNS the flag (0=O, 1=X).
+//   MSG_FLAG_EVENT broadcasts do not expect meaningful replies; the 6
+//   DirectRadioRules for this message type suppress the auto-reply and
+//   update local tracking state as a side-effect.
+//
+// Flag background alert
+//   While hasEnemyFlag is true, uiCtrl->setBackground(kFlagCarryBg)
+//   plays a continuous slow cyan pulse with gentle vibration.
+//   clearBackground() is called on score, drop (shot), or game end.
+//   uiCtrl is cached from the LightAir_UICtrl* passed to onBegin.
+//
+// Flag tracking
+//   hasEnemyFlag       : this player is currently carrying opponent's flag.
+//   enemyFlagCarrierId : 0xFF = available; other = non-zero means taken.
+//   myFlagCarrierId    : 0xFF = own flag at home; other = enemy holding it.
+//   myTeamPoints       : team-aggregate flag captures known locally.
+//
+// Scoring
+//   flagsCaptured (= points) counts personal flag captures.
+//   Winner = team with higher aggregate flagsCaptured; tie-break: fewer shoneTimes.
+//   endPoints (config): if > 0, GAME_END fires once myTeamPoints >= endPoints.
+//
+// Respawn flow
+//   Identical to Teams: respawn timer + own-team BASE beacon with RSSI >= -60 dBm.
+//
+// Config vars
+//   startLives   : lives at start / after respawn (default 3).
+//   respawnSecs  : minimum seconds dead before BASE beacon triggers respawn (default 30).
+//   startEnergy  : energy at start / after respawn (default 50).
+//   rechargeSecs : seconds after trigger release before energy restored (default 10).
+//   gameTime     : total game duration in seconds (default 900).
+//   numBases     : total BASE totems (must be even; step 2; default 2).
+//   friendlyFire : 0 = off (default), 1 = on.
+//   endPoints    : team-capture limit to trigger early GAME_END; 0 = disabled.
+// ================================================================
+
+extern Enlight* enlightPtr;
+
+namespace Flag {
+
+// ---- States ----
+enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
+
+// ---- Message types ----
+enum Msg : uint8_t {
+    MSG_LIT           = 0x40,
+    MSG_FLAG_BEACON   = 0x42,
+    MSG_BASE_BEACON   = 0x44,
+    MSG_FLAG_EVENT    = 0x46,
+    MSG_SCORE_COLLECT = 0x48,
+};
+
+// ---- Reply sub-types ----
+enum ReplySubType : uint8_t {
+    REPLY_TAKEN  = 1,
+    REPLY_SHONE  = 2,
+    REPLY_DOWN   = 3,
+    REPLY_FRIEND = 4,
+};
+
+// ---- Flag event sub-types ----
+enum FlagEventType : uint8_t {
+    FEVENT_TAKEN   = 1,
+    FEVENT_DROPPED = 2,
+    FEVENT_SCORED  = 3,
+};
+
+// ---- Proximity thresholds ----
+static constexpr int8_t NEAR_RSSI_THRESHOLD = -60;  // ~2 m: base proximity (respawn + scoring)
+static constexpr int8_t FLAG_RSSI_THRESHOLD  = -65;  // ~3-4 m: flag pickup zone
+
+// ---- Config variables ----
+static int startLives   = 3;
+static int respawnSecs  = 30;
+static int startEnergy  = 50;
+static int rechargeSecs = 10;
+static int gameTime     = 900;
+static int numBases     = 2;
+static int friendlyFire = 0;
+static int endPoints    = 0;
+
+// ---- Runtime variables ----
+static int lives         = 3;
+static int energy        = 50;
+static int gameTimeLeft  = 900;
+static int points        = 0;   // mirrors flagsCaptured; used for score slot
+static int energySpent   = 0;
+static int shoneTimes    = 0;
+static int flagsCaptured = 0;   // times this player personally scored
+static int myTeamPoints  = 0;   // aggregate team flag captures known locally
+
+static uint8_t  gState;
+static uint32_t lastTickAt;
+static uint32_t respawnAt;
+static bool     canRespawn;
+
+static bool     hasEnemyFlag;
+static uint8_t  enemyFlagCarrierId;  // 0xFF = flag available at its totem
+static uint8_t  myFlagCarrierId;     // 0xFF = our flag at home
+
+static uint8_t  myTeam;      // 0=O, 1=X
+static int      teamBitmask;
+
+// Cached UICtrl pointer for setBackground / clearBackground calls,
+// which are not exposed through the UIOutput queue.
+static LightAir_UICtrl* uiCtrl = nullptr;
+
+// ---- Totem device-ID slots (written by setup menu via TotemVar::id) ----
+static int baseO_ids[4] = {0, 0, 0, 0};
+static int baseX_ids[4] = {0, 0, 0, 0};
+static int flagO_id     = 0;
+static int flagX_id     = 0;
+
+// ---- Config vars ----
+static const ConfigVar configVars[] = {
+    //  name            value            min   max   step
+    { "Lives",        &startLives,      1,    5,    1  },
+    { "Respawn",      &respawnSecs,     5,    120,  5  },
+    { "Energy",       &startEnergy,     10,   100,  10 },
+    { "Recharge",     &rechargeSecs,    0,    20,   5  },
+    { "Time",         &gameTime,        60,   900,  60 },
+    { "Bases",        &numBases,        2,    8,    2  },
+    { "FriendlyFire", &friendlyFire,    0,    1,    1  },
+    { "EndPoints",    &endPoints,       0,    10,   1  },
+};
+
+// ---- Monitor vars ----
+static const MonitorVar monitorVars[] = {
+    // IN_GAME
+    MonitorVar::Int("Lives",  &lives,        1u<<IN_GAME,                  ICON_LIFE,   0, 0),
+    MonitorVar::Int("Energy", &energy,       1u<<IN_GAME,                  ICON_ENERGY, 1, 0),
+    MonitorVar::Int("Time",   &gameTimeLeft, (1u<<IN_GAME)|(1u<<OUT_GAME), ICON_TIME,   0, 1),
+    MonitorVar::Int("Flags",  &flagsCaptured, 1u<<IN_GAME,                 ICON_FLAG,   1, 1),
+    // GAME_END
+    MonitorVar::Int("Time",   &gameTime,     1u<<GAME_END, ICON_TIME,   0, 0),
+    MonitorVar::Int("Flags",  &flagsCaptured, 1u<<GAME_END, ICON_FLAG,  1, 0),
+    MonitorVar::Int("Energy", &energySpent,  1u<<GAME_END, ICON_ENERGY, 0, 1),
+    MonitorVar::Int("Shone",  &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1),
+};
+
+// ---- TotemVars ----
+static const TotemVar totemVars[] = {
+    //  name        id ptr          team  required
+    { "Base O1", &baseO_ids[0],  0,    false },
+    { "Base O2", &baseO_ids[1],  0,    false },
+    { "Base O3", &baseO_ids[2],  0,    false },
+    { "Base O4", &baseO_ids[3],  0,    false },
+    { "Base X1", &baseX_ids[0],  1,    false },
+    { "Base X2", &baseX_ids[1],  1,    false },
+    { "Base X3", &baseX_ids[2],  1,    false },
+    { "Base X4", &baseX_ids[3],  1,    false },
+    { "Flag O",  &flagO_id,      0,    true  },
+    { "Flag X",  &flagX_id,      1,    true  },
+};
+
+// ---- Continuous flag-carry background alert ----
+// Slow cyan breathing (bright → dim, 400 ms each) with a gentle vibration
+// pulse every cycle. Silent to avoid annoyance over extended carry time.
+static const LightAir_UICtrl::UIAction kFlagCarryBg = {
+    /* durations    */ { 400, 400, 0, 0 },
+    /* stepCount    */ 2,
+    /* soundFreqs   */ { 0, 0, 0, 0 },
+    /* vibIntensity */ { 25, 0, 0, 0 },
+    /* rgbColors    */ { {0, 180, 255}, {0, 30, 80}, {0, 0, 0}, {0, 0, 0} },
+    /* lcdText      */ "",
+    /* lcdTotalMs   */ 0,
+    /* priority     */ 1,
+};
+
+// ---- Friendly-fire feedback (UIEvent::Custom1) ----
+static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
+    { 200, 0, 0, 0 }, 1,
+    { 200, 0, 0, 0 }, { 60, 0, 0, 0 },
+    { {255, 100, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0} },
+    "Teammate!", 800, 3,
+};
+
+// ---- Helpers ----
+static uint8_t enemyTeam()            { return myTeam ^ 1; }
+
+static bool isMyTeamBase(uint8_t senderId) {
+    const int* ids   = (myTeam == 0) ? baseO_ids : baseX_ids;
+    int        active = numBases / 2;
+    if (active > 4) active = 4;
+    for (int i = 0; i < active; i++) {
+        if (ids[i] != 0 && (uint8_t)ids[i] == senderId)
+            return true;
+    }
+    return false;
+}
+
+static bool isEnemyFlag(uint8_t senderId) {
+    int opFlagId = (myTeam == 0) ? flagX_id : flagO_id;
+    return opFlagId != 0 && (uint8_t)opFlagId == senderId;
+}
+
+static bool isOpponent(uint8_t targetId) {
+    if (targetId >= PlayerDefs::MAX_PLAYER_ID) return false;
+    bool targetOnX = (teamBitmask >> targetId) & 1;
+    return (myTeam == 0) ? targetOnX : !targetOnX;
+}
+
+// ---- onBegin ----
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui) {
+    lives              = startLives;
+    energy             = startEnergy;
+    gameTimeLeft       = gameTime;
+    points             = 0;
+    flagsCaptured      = 0;
+    myTeamPoints       = 0;
+    energySpent        = 0;
+    shoneTimes         = 0;
+    canRespawn         = false;
+    respawnAt          = 0;
+    hasEnemyFlag       = false;
+    enemyFlagCarrierId = 0xFF;
+    myFlagCarrierId    = 0xFF;
+    lastTickAt         = millis();
+    uiCtrl             = ui;
+
+    PlayerConfig cfg;
+    player_config_load(cfg);
+    myTeam = (cfg.team == 1) ? 1 : 0;
+
+    if (ui) ui->defineCustomAction(LightAir_UICtrl::UIEvent::Custom1, kFriendlyFireAction);
+}
+
+// ---- DirectRadioRule conditions ----
+static bool litAndTakenAndValid(const RadioPacket& pkt) {
+    return lives > 1 && (pkt.team != myTeam || friendlyFire);
+}
+static bool litAndShoneAndValid(const RadioPacket& pkt) {
+    return lives <= 1 && (pkt.team != myTeam || friendlyFire);
+}
+static bool litButFriendly(const RadioPacket& pkt) {
+    return pkt.team == myTeam && !friendlyFire;
+}
+static bool flagEventTaken(const RadioPacket& pkt) {
+    return pkt.payloadLen >= 2 && pkt.payload[0] == FEVENT_TAKEN;
+}
+static bool flagEventDropped(const RadioPacket& pkt) {
+    return pkt.payloadLen >= 2 && pkt.payload[0] == FEVENT_DROPPED;
+}
+static bool flagEventScored(const RadioPacket& pkt) {
+    return pkt.payloadLen >= 2 && pkt.payload[0] == FEVENT_SCORED;
+}
+
+// ---- DirectRadioRule actions ----
+static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
+static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
+
+static void onFlagEventTaken(const RadioPacket& pkt,
+                              LightAir_DisplayCtrl&, GameOutput& out) {
+    uint8_t flagTeam = pkt.payload[1];
+    if (flagTeam == enemyTeam()) {
+        // A player (teammate or opponent player) picked up the enemy flag.
+        // Mark as taken so we don't attempt a duplicate pickup.
+        enemyFlagCarrierId = pkt.senderId;
+    } else {
+        // Enemy picked up our flag.
+        myFlagCarrierId = pkt.senderId;
+        out.ui.trigger(LightAir_UICtrl::UIEvent::FlagTaken);   // "FLAG LOST"
+    }
+}
+
+static void onFlagEventDropped(const RadioPacket& pkt,
+                                LightAir_DisplayCtrl&, GameOutput& out) {
+    uint8_t flagTeam = pkt.payload[1];
+    if (flagTeam == enemyTeam()) {
+        enemyFlagCarrierId = 0xFF;
+    } else {
+        // Enemy dropped our flag — it resets to its totem.
+        myFlagCarrierId = 0xFF;
+        out.ui.trigger(LightAir_UICtrl::UIEvent::FlagReturn);  // "FLAG BACK"
+    }
+}
+
+static void onFlagEventScored(const RadioPacket& pkt,
+                               LightAir_DisplayCtrl&, GameOutput& out) {
+    uint8_t flagTeam = pkt.payload[1];
+    if (flagTeam == enemyTeam()) {
+        // A teammate captured the enemy's flag: our team just scored.
+        enemyFlagCarrierId = 0xFF;
+        myTeamPoints++;
+    } else {
+        // Enemy scored using our flag; flag resets to our totem.
+        myFlagCarrierId = 0xFF;
+        out.ui.trigger(LightAir_UICtrl::UIEvent::FlagReturn);  // "FLAG BACK"
+    }
+}
+
+static const DirectRadioRule directRadioRules[] = {
+    //  state     msgType         condition            replySubType  onReceive
+    // — shot handling —
+    { IN_GAME,  MSG_LIT,        litAndTakenAndValid, REPLY_TAKEN,  onLitTaken         },
+    { IN_GAME,  MSG_LIT,        litAndShoneAndValid, REPLY_SHONE,  onLitShone         },
+    { IN_GAME,  MSG_LIT,        litButFriendly,      REPLY_FRIEND, nullptr            },
+    { OUT_GAME, MSG_LIT,        nullptr,             REPLY_DOWN,   nullptr            },
+    // — flag state synchronisation (IN_GAME) —
+    { IN_GAME,  MSG_FLAG_EVENT, flagEventTaken,      0,            onFlagEventTaken   },
+    { IN_GAME,  MSG_FLAG_EVENT, flagEventDropped,    0,            onFlagEventDropped },
+    { IN_GAME,  MSG_FLAG_EVENT, flagEventScored,     0,            onFlagEventScored  },
+    // — flag state synchronisation (OUT_GAME) —
+    { OUT_GAME, MSG_FLAG_EVENT, flagEventTaken,      0,            onFlagEventTaken   },
+    { OUT_GAME, MSG_FLAG_EVENT, flagEventDropped,    0,            onFlagEventDropped },
+    { OUT_GAME, MSG_FLAG_EVENT, flagEventScored,     0,            onFlagEventScored  },
+};
+
+// ---- ReplyRadioRule handlers ----
+static void onReplyTaken(const RadioPacket&, const RadioPacket&,
+                         LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
+}
+static void onReplyShone(const RadioPacket&, const RadioPacket&,
+                         LightAir_DisplayCtrl&, GameOutput& out) {
+    // Shooting eliminates a target but does NOT award points in Flag.
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
+}
+static void onReplyFriend(const RadioPacket&, const RadioPacket&,
+                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Custom1);
+}
+
+static const ReplyRadioRule replyRadioRules[] = {
+    //  activeInStateMask               eventType                       subType        condition  onReply
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_FRIEND, nullptr, onReplyFriend },
+};
+
+// ---- Winner election ----
+static const WinnerVar winnerVars[] = {
+    { &points,     WinnerDir::MAX },   // points = flagsCaptured
+    { &shoneTimes, WinnerDir::MIN },
+};
+
+// ---- Per-second game-time ticker ----
+static void tickGameTime() {
+    uint32_t now = millis();
+    if (now - lastTickAt >= 1000) {
+        lastTickAt += 1000;
+        if (gameTimeLeft > 0) gameTimeLeft--;
+    }
+}
+
+// ---- Transition conditions ----
+static bool gameTimeExpired(const InputReport&, const RadioReport&) {
+    return gameTimeLeft <= 0;
+}
+static bool shone(const InputReport&, const RadioReport&) {
+    return lives <= 0;
+}
+static bool canRespawnReady(const InputReport&, const RadioReport&) {
+    return canRespawn;
+}
+static bool endPointsReached(const InputReport&, const RadioReport&) {
+    return endPoints > 0 && myTeamPoints >= endPoints;
+}
+
+// ---- Transition actions ----
+static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
+    if (hasEnemyFlag) {
+        uint8_t pl[2] = { FEVENT_DROPPED, enemyTeam() };
+        out.radio.broadcast(MSG_FLAG_EVENT, pl, 2);
+        hasEnemyFlag       = false;
+        enemyFlagCarrierId = 0xFF;
+        out.ui.trigger(LightAir_UICtrl::UIEvent::FlagTaken);  // "FLAG LOST"
+        if (uiCtrl) uiCtrl->clearBackground();
+    }
+    shoneTimes++;
+    respawnAt  = millis() + (uint32_t)respawnSecs * 1000;
+    canRespawn = false;
+    disp.showMessage("Shone!", 2000);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Down);
+}
+
+static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
+    lives      = startLives;
+    energy     = startEnergy;
+    canRespawn = false;
+    disp.showMessage("Back in game!", 1000);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
+}
+
+static void onGameEnd(LightAir_DisplayCtrl& disp, GameOutput& out) {
+    if (hasEnemyFlag) {
+        hasEnemyFlag = false;
+        if (uiCtrl) uiCtrl->clearBackground();
+    }
+    disp.showMessage("Game over!", 3000);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::EndGame);
+}
+
+// ---- State machine ----
+static const StateRule rules[] = {
+    { IN_GAME,  gameTimeExpired,  GAME_END, onGameEnd  },
+    { IN_GAME,  endPointsReached, GAME_END, onGameEnd  },
+    { IN_GAME,  shone,            OUT_GAME, onShone    },
+    { OUT_GAME, gameTimeExpired,  GAME_END, onGameEnd  },
+    { OUT_GAME, endPointsReached, GAME_END, onGameEnd  },
+    { OUT_GAME, canRespawnReady,  IN_GAME,  onRespawn  },
+};
+
+// ---- Per-state behaviors ----
+static void doInGame(const InputReport& inp, const RadioReport& radio,
+                     LightAir_DisplayCtrl& disp, GameOutput& out) {
+    tickGameTime();
+
+    // ---- Shooting / energy ----
+    static bool     triggerWasActive = false;
+    static uint32_t releaseAt        = 0;
+
+    constexpr uint8_t REPS = 4;
+    bool triggerActive = false;
+
+    for (uint8_t i = 0; i < inp.buttonCount; i++) {
+        if (inp.buttons[i].id != InputDefaults::TRIG_1_ID) continue;
+        ButtonState s = inp.buttons[i].state;
+        if (s == ButtonState::PRESSED || s == ButtonState::HELD) {
+            triggerActive = true;
+            if (energy > 0) {
+                energy--;
+                energySpent++;
+                enlightPtr->run(REPS);
+                out.ui.triggerEnlight(REPS * EnlightDefaults::MS_PER_REP);
+            }
+        }
+    }
+
+    if (triggerWasActive && !triggerActive)
+        releaseAt = millis();
+    triggerWasActive = triggerActive;
+
+    if (!triggerActive && energy < startEnergy) {
+        if (rechargeSecs == 0)
+            energy = startEnergy;
+        else if ((millis() - releaseAt) / 1000 >= (uint32_t)rechargeSecs)
+            energy = startEnergy;
+    }
+
+    EnlightResult r = enlightPtr->poll();
+    if (r.status == EnlightStatus::PLAYER_HIT) {
+        if (isOpponent(r.id) || friendlyFire)
+            out.radio.sendTo(r.id, MSG_LIT);
+    }
+
+    // ---- Flag pickup ----
+    // Attempt only when we are not already carrying and the enemy flag is free.
+    if (!hasEnemyFlag) {
+        for (uint8_t e = 0; e < radio.count; e++) {
+            const RadioEvent& ev = radio.events[e];
+            if (ev.type           != RadioEventType::MessageReceived) continue;
+            if (ev.packet.msgType != MSG_FLAG_BEACON)                 continue;
+            if (!isEnemyFlag(ev.packet.senderId))                     continue;
+            if (ev.rssi           <  FLAG_RSSI_THRESHOLD)             continue;
+            if (enemyFlagCarrierId != 0xFF)                           continue;
+
+            hasEnemyFlag       = true;
+            enemyFlagCarrierId = 0x01;   // mark taken locally; other players update via broadcast
+            uint8_t pl[2] = { FEVENT_TAKEN, enemyTeam() };
+            out.radio.broadcast(MSG_FLAG_EVENT, pl, 2);
+            out.ui.trigger(LightAir_UICtrl::UIEvent::FlagGain);   // "FLAG +"
+            if (uiCtrl) uiCtrl->setBackground(kFlagCarryBg);
+            break;
+        }
+    }
+
+    // ---- Flag score ----
+    // Score when carrying and we reach a friendly BASE.
+    if (hasEnemyFlag) {
+        for (uint8_t e = 0; e < radio.count; e++) {
+            const RadioEvent& ev = radio.events[e];
+            if (ev.type           != RadioEventType::MessageReceived) continue;
+            if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
+            if (!isMyTeamBase(ev.packet.senderId))                    continue;
+            if (ev.rssi           <  NEAR_RSSI_THRESHOLD)             continue;
+
+            flagsCaptured++;
+            points             = flagsCaptured;
+            myTeamPoints++;
+            hasEnemyFlag       = false;
+            enemyFlagCarrierId = 0xFF;
+            uint8_t pl[2] = { FEVENT_SCORED, enemyTeam() };
+            out.radio.broadcast(MSG_FLAG_EVENT, pl, 2);
+            out.ui.trigger(LightAir_UICtrl::UIEvent::FlagGain);   // "FLAG +"
+            if (uiCtrl) uiCtrl->clearBackground();
+            disp.showMessage("FLAG SCORED!", 2000);
+            break;
+        }
+    }
+}
+
+static void doOutGame(const InputReport&, const RadioReport& radio,
+                      LightAir_DisplayCtrl&, GameOutput&) {
+    tickGameTime();
+
+    // Minimum respawn timer: ignore beacons until the wait has elapsed.
+    if (millis() < respawnAt) return;
+
+    // Scan for a qualifying BASE beacon: own team, RSSI >= proximity threshold.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type           != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
+        if (!isMyTeamBase(ev.packet.senderId))                    continue;
+        if (ev.rssi           <  NEAR_RSSI_THRESHOLD)             continue;
+        canRespawn = true;
+        break;
+    }
+}
+
+static const StateBehavior behaviors[] = {
+    { IN_GAME,  doInGame  },
+    { OUT_GAME, doOutGame },
+    { GAME_END, nullptr   },
+};
+
+// ---- Team-aggregate winner announcement ----
+static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
+    int32_t teamPts[2]   = {0, 0};
+    int32_t teamShone[2] = {0, 0};
+
+    for (uint8_t r = 0; r < t.rosterCount; r++) {
+        if (!(t.accumMask & (1u << r))) continue;
+        uint8_t pid  = t.roster[r];
+        uint8_t team = (pid < PlayerDefs::MAX_PLAYER_ID) ? t.teamMap[pid] : 0;
+        if (team > 1) team = 0;
+
+        int32_t pts = 0, shn = 0;
+        memcpy(&pts, t.slots[r],     4);  // winnerVars[0] = flagsCaptured (MAX)
+        memcpy(&shn, t.slots[r] + 4, 4);  // winnerVars[1] = shoneTimes   (MIN)
+        teamPts[team]   += pts;
+        teamShone[team] += shn;
+    }
+
+    uint8_t winner = 0xFF;
+    if      (teamPts[1]   > teamPts[0])   winner = 1;
+    else if (teamPts[0]   > teamPts[1])   winner = 0;
+    else if (teamShone[1] < teamShone[0]) winner = 1;
+    else if (teamShone[0] < teamShone[1]) winner = 0;
+
+    if (winner == 0xFF)
+        disp.showMessage("Your team tied!", 0);
+    else if (winner == myTeam)
+        disp.showMessage("Your team won!", 0);
+    else
+        disp.showMessage("Your team lost!", 0);
+
+    if (winner == 0xFF)
+        disp.showMessage("TIE!", 0);
+    else if (winner == 0)
+        disp.showMessage("TEAM O WINS!", 0);
+    else
+        disp.showMessage("TEAM X WINS!", 0);
+}
+
+} // namespace Flag
+
+// ================================================================
+// Public game descriptor — registered in AllGames.cpp
+// ================================================================
+const LightAir_Game game_flag = {
+    /* typeId                */ 0x00000003,
+    /* name                  */ "Flag",
+    /* configVars            */ Flag::configVars,          /* configCount            */ 8,
+    /* monitorVars           */ Flag::monitorVars,         /* monitorCount           */ 8,
+    /* directRadioRules      */ Flag::directRadioRules,    /* directRadioRuleCount   */ 10,
+    /* replyRadioRules       */ Flag::replyRadioRules,     /* replyRadioRuleCount    */ 3,
+    /* rules                 */ Flag::rules,               /* ruleCount              */ 6,
+    /* behaviors             */ Flag::behaviors,           /* behaviorCount          */ 3,
+    /* currentState          */ &Flag::gState,             /* initialState           */ Flag::IN_GAME,
+    /* onBegin               */ Flag::onBegin,
+    /* winnerVars            */ Flag::winnerVars,          /* winnerVarCount         */ 2,
+    /* scoringState          */ Flag::GAME_END,
+    /* scoreMsgType          */ Flag::MSG_SCORE_COLLECT,
+    /* onScoreAnnounce       */ Flag::onScoreAnnounce,
+    /* totemVars             */ Flag::totemVars,           /* totemVarCount          */ 10,
+    /* hasTeams              */ true,
+    /* teamBitmask           */ &Flag::teamBitmask,
+};

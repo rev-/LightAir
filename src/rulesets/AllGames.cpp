@@ -10,8 +10,10 @@
 
 extern const LightAir_Game game_ffa;
 extern const LightAir_Game game_teams;
+extern const LightAir_Game game_flag;
 
 void registerAllGames(LightAir_GameManager& mgr) {
     mgr.registerGame(game_ffa);
     mgr.registerGame(game_teams);
+    mgr.registerGame(game_flag);
 }

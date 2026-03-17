@@ -10,9 +10,11 @@
 //   GAME_END (2) : game over; display: time/points/energySpent/shoneTimes.
 //
 // Radio messages (even = request, odd = reply)
-//   MSG_LIT          (0x30) : unicast hit to a target player.
-//   MSG_BASE_BEACON  (0x32) : broadcast by BASE totems periodically (received only).
-//   MSG_SCORE_COLLECT (0x34): broadcast per-player scores during GAME_END.
+//   MSG_LIT           (0x30) : unicast hit to a target player.
+//   MSG_BASE_BEACON   (0x32) : broadcast by BASE totems periodically (received only).
+//   MSG_SCORE_COLLECT (0x34) : broadcast per-player scores during GAME_END.
+//   MSG_POINT_REPORT  (0x36) : broadcast by a player on each point scored, so teammates
+//                              can increment their local myTeamPoints counter.
 //
 // Reply sub-types (payload[0] of the 0x31 reply)
 //   REPLY_TAKEN  (1) : target absorbed the hit; lives > 0 after decrement.
@@ -44,6 +46,7 @@
 //   gameTime     : total game duration in seconds (default 900).
 //   numBases     : total BASE totems (must be even; step 2; default 2).
 //   friendlyFire : 0 = off (default), 1 = on.
+//   endPoints    : team-kill limit to trigger early GAME_END; 0 = disabled (default).
 // ================================================================
 
 extern Enlight* enlightPtr;
@@ -58,6 +61,7 @@ enum Msg : uint8_t {
     MSG_LIT           = 0x30,
     MSG_BASE_BEACON   = 0x32,
     MSG_SCORE_COLLECT = 0x34,
+    MSG_POINT_REPORT  = 0x36,
 };
 
 // ---- Reply sub-types ----
@@ -81,14 +85,16 @@ static int rechargeSecs = 10;
 static int gameTime     = 900;
 static int numBases     = 2;
 static int friendlyFire = 0;
+static int endPoints    = 0;
 
 // ---- Runtime variables ----
-static int lives        = 3;
-static int energy       = 50;
-static int gameTimeLeft = 900;
-static int points       = 0;
-static int energySpent  = 0;
-static int shoneTimes   = 0;
+static int lives         = 3;
+static int energy        = 50;
+static int gameTimeLeft  = 900;
+static int points        = 0;
+static int energySpent   = 0;
+static int shoneTimes    = 0;
+static int myTeamPoints  = 0;  // team-aggregate kills known locally
 
 static uint8_t  gState;
 static uint32_t lastTickAt;
@@ -104,14 +110,15 @@ static int baseX_ids[4] = {0, 0, 0, 0};   // team-X base device IDs
 
 // ---- Config vars (startup menu) ----
 static const ConfigVar configVars[] = {
-    //name           value           min   max   step
-    { "Lives",      &startLives,    1,    5,    1  },
-    { "Respawn",    &respawnSecs,   5,    120,  5  },
-    { "Energy",     &startEnergy,   10,   100,  10 },
-    { "Recharge",   &rechargeSecs,  0,    20,   5  },
-    { "Time",       &gameTime,      60,   900,  60 },
-    { "Bases",      &numBases,      2,    8,    2  },
-    { "FriendlyFire", &friendlyFire, 0,   1,    1  },
+    //name             value            min   max   step
+    { "Lives",        &startLives,     1,    5,    1  },
+    { "Respawn",      &respawnSecs,    5,    120,  5  },
+    { "Energy",       &startEnergy,    10,   100,  10 },
+    { "Recharge",     &rechargeSecs,   0,    20,   5  },
+    { "Time",         &gameTime,       60,   900,  60 },
+    { "Bases",        &numBases,       2,    8,    2  },
+    { "FriendlyFire", &friendlyFire,   0,    1,    1  },
+    { "EndPoints",    &endPoints,      0,    50,   5  },
 };
 
 // ---- Monitor vars ----
@@ -162,6 +169,13 @@ static bool isOpponent(uint8_t targetId) {
     return (myTeam == 0) ? targetOnX : !targetOnX;
 }
 
+// ---- Helper: is senderId on the same team as this player? ----
+static bool isMyTeammate(uint8_t senderId) {
+    if (senderId >= PlayerDefs::MAX_PLAYER_ID) return false;
+    bool senderOnX = (teamBitmask >> senderId) & 1;
+    return (myTeam == 0) ? !senderOnX : senderOnX;
+}
+
 // ---- UIAction for friendly-fire feedback (UIEvent::Custom1) ----
 static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
     /* durations     */ { 200, 0, 0, 0 },
@@ -176,15 +190,16 @@ static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
 
 // ---- onBegin ----
 static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui) {
-    lives        = startLives;
-    energy       = startEnergy;
-    gameTimeLeft = gameTime;
-    points       = 0;
-    energySpent  = 0;
-    shoneTimes   = 0;
-    canRespawn   = false;
-    respawnAt    = 0;
-    lastTickAt   = millis();
+    lives         = startLives;
+    energy        = startEnergy;
+    gameTimeLeft  = gameTime;
+    points        = 0;
+    energySpent   = 0;
+    shoneTimes    = 0;
+    myTeamPoints  = 0;
+    canRespawn    = false;
+    respawnAt     = 0;
+    lastTickAt    = millis();
 
     PlayerConfig cfg;
     player_config_load(cfg);
@@ -208,12 +223,19 @@ static bool litButFriendly(const RadioPacket& pkt) {
 static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
 static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
 
+static void onPointReport(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    if (isMyTeammate(pkt.senderId))
+        myTeamPoints++;
+}
+
 static const DirectRadioRule directRadioRules[] = {
-    //  state     msgType   condition           replySubType  onReceive
-    { IN_GAME,  MSG_LIT,  litAndTakenAndValid, REPLY_TAKEN,  onLitTaken },
-    { IN_GAME,  MSG_LIT,  litAndShoneAndValid, REPLY_SHONE,  onLitShone },
-    { IN_GAME,  MSG_LIT,  litButFriendly,      REPLY_FRIEND, nullptr    },
-    { OUT_GAME, MSG_LIT,  nullptr,             REPLY_DOWN,   nullptr    },
+    //  state     msgType            condition           replySubType  onReceive
+    { IN_GAME,  MSG_LIT,           litAndTakenAndValid, REPLY_TAKEN,  onLitTaken   },
+    { IN_GAME,  MSG_LIT,           litAndShoneAndValid, REPLY_SHONE,  onLitShone   },
+    { IN_GAME,  MSG_LIT,           litButFriendly,      REPLY_FRIEND, nullptr      },
+    { OUT_GAME, MSG_LIT,           nullptr,             REPLY_DOWN,   nullptr      },
+    { IN_GAME,  MSG_POINT_REPORT,  nullptr,             0,            onPointReport },
+    { OUT_GAME, MSG_POINT_REPORT,  nullptr,             0,            onPointReport },
 };
 
 // ---- ReplyRadioRule handlers ----
@@ -224,6 +246,8 @@ static void onReplyTaken(const RadioPacket&, const RadioPacket&,
 static void onReplyShone(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
     points++;
+    myTeamPoints++;
+    out.radio.broadcast(MSG_POINT_REPORT, nullptr, 0);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
 }
 static void onReplyFriend(const RadioPacket&, const RadioPacket&,
@@ -263,6 +287,9 @@ static bool shone(const InputReport&, const RadioReport&) {
 static bool canRespawnReady(const InputReport&, const RadioReport&) {
     return canRespawn;
 }
+static bool endPointsReached(const InputReport&, const RadioReport&) {
+    return endPoints > 0 && myTeamPoints >= endPoints;
+}
 
 // ---- Transition actions ----
 static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
@@ -286,10 +313,12 @@ static void onGameEnd(LightAir_DisplayCtrl& disp, GameOutput& out) {
 
 // ---- State machine ----
 static const StateRule rules[] = {
-    { IN_GAME,  gameTimeExpired, GAME_END, onGameEnd  },
-    { IN_GAME,  shone,           OUT_GAME, onShone    },
-    { OUT_GAME, gameTimeExpired, GAME_END, onGameEnd  },
-    { OUT_GAME, canRespawnReady, IN_GAME,  onRespawn  },
+    { IN_GAME,  gameTimeExpired,  GAME_END, onGameEnd  },
+    { IN_GAME,  endPointsReached, GAME_END, onGameEnd  },
+    { IN_GAME,  shone,            OUT_GAME, onShone    },
+    { OUT_GAME, gameTimeExpired,  GAME_END, onGameEnd  },
+    { OUT_GAME, endPointsReached, GAME_END, onGameEnd  },
+    { OUT_GAME, canRespawnReady,  IN_GAME,  onRespawn  },
 };
 
 // ---- Per-state behaviors ----
@@ -412,11 +441,11 @@ static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
 const LightAir_Game game_teams = {
     /* typeId                */ 0x00000002,
     /* name                  */ "Teams",
-    /* configVars            */ Teams::configVars,         /* configCount            */ 7,
+    /* configVars            */ Teams::configVars,         /* configCount            */ 8,
     /* monitorVars           */ Teams::monitorVars,        /* monitorCount           */ 8,
-    /* directRadioRules      */ Teams::directRadioRules,   /* directRadioRuleCount   */ 4,
+    /* directRadioRules      */ Teams::directRadioRules,   /* directRadioRuleCount   */ 6,
     /* replyRadioRules       */ Teams::replyRadioRules,    /* replyRadioRuleCount    */ 3,
-    /* rules                 */ Teams::rules,              /* ruleCount              */ 4,
+    /* rules                 */ Teams::rules,              /* ruleCount              */ 6,
     /* behaviors             */ Teams::behaviors,          /* behaviorCount          */ 3,
     /* currentState          */ &Teams::gState,            /* initialState           */ Teams::IN_GAME,
     /* onBegin               */ Teams::onBegin,
