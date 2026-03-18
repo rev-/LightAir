@@ -183,12 +183,12 @@ static const TotemVar totemVars[] = {
 };
 
 // ---- Continuous flag-carry background alert ----
-// Slow cyan breathing (bright → dim, 400 ms each) with a gentle vibration
-// pulse every cycle. Silent to avoid annoyance over extended carry time.
+// Slow cyan pulse with interleaved tone: 300 ms at 4500 Hz (500 Hz above LIT's
+// 4000 Hz) followed by 200 ms silence. Gentle vibration on the sound step only.
 static const LightAir_UICtrl::UIAction kFlagCarryBg = {
-    /* durations    */ { 400, 400, 0, 0 },
+    /* durations    */ { 300, 200, 0, 0 },
     /* stepCount    */ 2,
-    /* soundFreqs   */ { 0, 0, 0, 0 },
+    /* soundFreqs   */ { 4500, 0, 0, 0 },
     /* vibIntensity */ { 25, 0, 0, 0 },
     /* rgbColors    */ { {0, 180, 255}, {0, 30, 80}, {0, 0, 0}, {0, 0, 0} },
     /* lcdText      */ "",
