@@ -74,6 +74,8 @@ static int shoneTimes   = 0;
 static uint8_t   gState;
 static uint32_t  respawnAt;   // millis() when respawn fires
 static uint32_t  lastTickAt;  // millis() of last per-second decrement
+static bool      triggerWasActive = false;
+static uint32_t  releaseAt        = 0;
 
 // ---- Config vars (startup menu) ----
 // all vars must be int, 
@@ -147,8 +149,10 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*) {
     gameTimeLeft = gameTime;
     points       = 0;
     energySpent  = 0;
-    shoneTimes   = 0;
-    lastTickAt   = millis();
+    shoneTimes       = 0;
+    lastTickAt       = millis();
+    triggerWasActive = false;
+    releaseAt        = 0;
 }
 
 // ---- Shared per-second ticker (call from every active-state behavior) ----
@@ -209,9 +213,6 @@ static const StateRule rules[] = {
 static void doInGame(const InputReport& inp, const RadioReport&,
                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
-
-    static bool     triggerWasActive = false;
-    static uint32_t releaseAt        = 0;
 
     constexpr uint8_t REPS = 4;
     bool triggerActive = false;

@@ -122,6 +122,8 @@ static uint8_t  gState;
 static uint32_t lastTickAt;
 static uint32_t respawnAt;
 static bool     canRespawn;
+static bool     triggerWasActive = false;
+static uint32_t releaseAt        = 0;
 
 static bool     hasEnemyFlag;
 static uint8_t  enemyFlagCarrierId;  // 0xFF = flag available at its totem
@@ -245,6 +247,8 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui)
     enemyFlagCarrierId = 0xFF;
     myFlagCarrierId    = 0xFF;
     lastTickAt         = millis();
+    triggerWasActive   = false;
+    releaseAt          = 0;
     uiCtrl             = ui;
 
     PlayerConfig cfg;
@@ -436,9 +440,6 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
     tickGameTime();
 
     // ---- Shooting / energy ----
-    static bool     triggerWasActive = false;
-    static uint32_t releaseAt        = 0;
-
     constexpr uint8_t REPS = 4;
     bool triggerActive = false;
 

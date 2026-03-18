@@ -100,6 +100,8 @@ static uint8_t  gState;
 static uint32_t lastTickAt;
 static uint32_t respawnAt;    // millis() before which BASE beacons are ignored
 static bool     canRespawn;   // set true by doOutGame when timer + RSSI condition met
+static bool     triggerWasActive = false;
+static uint32_t releaseAt        = 0;
 static uint8_t  myTeam;       // 0=O, 1=X; loaded from PlayerConfig in onBegin
 static int      teamBitmask;  // bit i=1 → player i on team X; filled from config blob
 
@@ -197,9 +199,11 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui)
     energySpent   = 0;
     shoneTimes    = 0;
     myTeamPoints  = 0;
-    canRespawn    = false;
-    respawnAt     = 0;
-    lastTickAt    = millis();
+    canRespawn       = false;
+    respawnAt        = 0;
+    lastTickAt       = millis();
+    triggerWasActive = false;
+    releaseAt        = 0;
 
     PlayerConfig cfg;
     player_config_load(cfg);
@@ -325,9 +329,6 @@ static const StateRule rules[] = {
 static void doInGame(const InputReport& inp, const RadioReport&,
                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
-
-    static bool     triggerWasActive = false;
-    static uint32_t releaseAt        = 0;
 
     constexpr uint8_t REPS = 4;
     bool triggerActive = false;
