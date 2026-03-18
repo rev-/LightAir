@@ -306,9 +306,9 @@ const LightAir_Game game_outflow = {
     /* winnerVars            */ Outflow::winnerVars,         /* winnerVarCount         */ 2,
     /* scoringState          */ Outflow::GAME_END,
     /* scoreMsgType          */ Outflow::MSG_SCORE_COLLECT,
+    /* onScoreAnnounce       */ nullptr,
     /* totemVars             */ nullptr,
     /* totemVarCount         */ 0,
     /* hasTeams              */ false,
     /* teamBitmask           */ nullptr,
-    /* onScoreAnnounce       */ nullptr,
 };
