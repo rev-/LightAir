@@ -275,6 +275,8 @@ const uint8_t* LightAir_DisplayCtrl::getIconBitmap(IconType icon) {
         case ICON_HOURGLASS: return ICON_HOURGLASS_BITMAP;
         case ICON_SCORE:     return ICON_SCORE_BITMAP;
         case ICON_ROLE:      return ICON_ROLE_BITMAP;
+        case ICON_ENERGY:    return ICON_ENERGY_BITMAP;
+        case ICON_DOWN:      return ICON_DOWN_BITMAP;
         default:             return ICON_LIGHT_BITMAP;
     }
 }

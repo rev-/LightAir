@@ -12,7 +12,10 @@ enum IconType {
     ICON_FLAG,
     ICON_HOURGLASS,
     ICON_SCORE,
-    ICON_ROLE
+    ICON_ROLE,
+    ICON_ENERGY,
+    ICON_DOWN,
+    ICON_TIME = ICON_HOURGLASS   // alias — reuses the hourglass CGRAM slot
 };
 
 // ----------------------------------------------------------------
@@ -82,6 +85,30 @@ static const uint8_t ICON_ROLE_BITMAP[8] PROGMEM = {
     0b01000010,
     0b00111100,
     0b00000000
+};
+
+// Radiation trefoil — energy / projection-light icon.
+static const uint8_t ICON_ENERGY_BITMAP[8] PROGMEM = {
+    0b00111100,
+    0b01011010,
+    0b11100111,
+    0b10011001,
+    0b11011011,
+    0b11100111,
+    0b01111110,
+    0b00111100
+};
+
+// Downward arrow — depletions icon.
+static const uint8_t ICON_DOWN_BITMAP[8] PROGMEM = {
+    0b00011000,
+    0b00011000,
+    0b00011000,
+    0b00011000,
+    0b10011001,
+    0b01011010,
+    0b00111100,
+    0b00011000
 };
 
 #endif
