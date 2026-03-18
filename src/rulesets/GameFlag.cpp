@@ -1,5 +1,6 @@
 #include <LightAir.h>
 #include <string.h>
+#include "TotemProtocol.h"
 
 // ================================================================
 // Flag — capture-the-flag team game: O vs X.
@@ -11,8 +12,9 @@
 //
 // Radio messages (even = request, odd = reply)
 //   MSG_LIT           (0x40) : unicast hit to a target player.
-//   MSG_FLAG_BEACON   (0x42) : broadcast by FLAG totems (received only).
-//   MSG_BASE_BEACON   (0x44) : broadcast by BASE totems (received only).
+//   MSG_TOTEM_BEACON  (0xF0) : broadcast by all totems periodically (received only).
+//                              Flag and base totems are distinguished by sender ID
+//                              against the game's TotemVar assignments.
 //   MSG_FLAG_EVENT    (0x46) : broadcast by a player on flag state change.
 //   MSG_SCORE_COLLECT (0x48) : broadcast per-player scores during GAME_END.
 //
@@ -73,8 +75,6 @@ enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 // ---- Message types ----
 enum Msg : uint8_t {
     MSG_LIT           = 0x40,
-    MSG_FLAG_BEACON   = 0x42,
-    MSG_BASE_BEACON   = 0x44,
     MSG_FLAG_EVENT    = 0x46,
     MSG_SCORE_COLLECT = 0x48,
 };
@@ -480,7 +480,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
         for (uint8_t e = 0; e < radio.count; e++) {
             const RadioEvent& ev = radio.events[e];
             if (ev.type           != RadioEventType::MessageReceived) continue;
-            if (ev.packet.msgType != MSG_FLAG_BEACON)                 continue;
+            if (ev.packet.msgType != MSG_TOTEM_BEACON)                continue;
             if (!isEnemyFlag(ev.packet.senderId))                     continue;
             if (ev.rssi           <  FLAG_RSSI_THRESHOLD)             continue;
             if (enemyFlagCarrierId != 0xFF)                           continue;
@@ -501,7 +501,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
         for (uint8_t e = 0; e < radio.count; e++) {
             const RadioEvent& ev = radio.events[e];
             if (ev.type           != RadioEventType::MessageReceived) continue;
-            if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
+            if (ev.packet.msgType != MSG_TOTEM_BEACON)                continue;
             if (!isMyTeamBase(ev.packet.senderId))                    continue;
             if (ev.rssi           <  NEAR_RSSI_THRESHOLD)             continue;
 
@@ -531,7 +531,7 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type           != RadioEventType::MessageReceived) continue;
-        if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
+        if (ev.packet.msgType != MSG_TOTEM_BEACON)                continue;
         if (!isMyTeamBase(ev.packet.senderId))                    continue;
         if (ev.rssi           <  NEAR_RSSI_THRESHOLD)             continue;
         canRespawn = true;

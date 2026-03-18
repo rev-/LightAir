@@ -1,5 +1,6 @@
 #include <LightAir.h>
 #include <string.h>
+#include "TotemProtocol.h"
 
 // ================================================================
 // Teams — two-team game: O vs X.
@@ -11,7 +12,7 @@
 //
 // Radio messages (even = request, odd = reply)
 //   MSG_LIT           (0x30) : unicast hit to a target player.
-//   MSG_BASE_BEACON   (0x32) : broadcast by BASE totems periodically (received only).
+//   MSG_TOTEM_BEACON  (0xF0) : broadcast by all totems periodically (received only).
 //   MSG_SCORE_COLLECT (0x34) : broadcast per-player scores during GAME_END.
 //   MSG_POINT_REPORT  (0x36) : broadcast by a player on each point scored, so teammates
 //                              can increment their local myTeamPoints counter.
@@ -25,7 +26,7 @@
 //
 // Respawn flow
 //   On being shone: respawnAt = millis() + respawnSecs*1000; canRespawn = false.
-//   doOutGame polls incoming MSG_BASE_BEACON events.  If the beacon comes from
+//   doOutGame polls incoming MSG_TOTEM_BEACON events.  If the beacon comes from
 //   one of this player's team BASE totems AND its RSSI >= NEAR_RSSI_THRESHOLD
 //   AND millis() >= respawnAt, canRespawn is set true.  The state machine then
 //   fires onRespawn on the next cycle.
@@ -59,7 +60,6 @@ enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 // ---- Message types ----
 enum Msg : uint8_t {
     MSG_LIT           = 0x30,
-    MSG_BASE_BEACON   = 0x32,
     MSG_SCORE_COLLECT = 0x34,
     MSG_POINT_REPORT  = 0x36,
 };
@@ -378,7 +378,7 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type       != RadioEventType::MessageReceived) continue;
-        if (ev.packet.msgType != MSG_BASE_BEACON)             continue;
+        if (ev.packet.msgType != MSG_TOTEM_BEACON)            continue;
         if (!isMyTeamBase(ev.packet.senderId))                continue;
         if (ev.rssi < NEAR_RSSI_THRESHOLD)                    continue;
         canRespawn = true;

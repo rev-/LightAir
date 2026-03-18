@@ -145,15 +145,11 @@ namespace TotemDefs {
 // ---------------------------------------------------------------
 namespace GenericTotemRoles {
     constexpr uint8_t NONE  = 0;
-    constexpr uint8_t BASE  = 1;
-    constexpr uint8_t FLAG  = 2;
-    constexpr uint8_t DOM   = 3;
-    constexpr uint8_t NAV   = 4;
-    constexpr uint8_t BONUS = 5;
-    constexpr uint8_t MALUS = 6;
-    constexpr uint8_t COUNT = 7;
+    constexpr uint8_t BONUS = 1;
+    constexpr uint8_t MALUS = 2;
+    constexpr uint8_t COUNT = 3;
     constexpr char    names[COUNT][8] = {
-        "----", "BASE", "FLAG", "DOM", "NAV", "BONUS", "MALUS"
+        "----", "BONUS", "MALUS"
     };
 }
 

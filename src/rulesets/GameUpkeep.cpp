@@ -1,6 +1,7 @@
 #include <LightAir.h>
 #include <string.h>
 #include <stdio.h>
+#include "TotemProtocol.h"
 
 // ================================================================
 // Upkeep — two-team game with Control Points (CPs).
@@ -12,7 +13,7 @@
 //
 // Radio messages (even = request, odd = reply)
 //   MSG_LIT           (0x50) : unicast hit to a target player.
-//   MSG_BASE_BEACON   (0x52) : broadcast by BASE totems periodically (received only).
+//   MSG_TOTEM_BEACON  (0xF0) : broadcast by all totems periodically (received only).
 //   MSG_CP_BEACON     (0x54) : broadcast by CP totems every 2 s.
 //                              payload[0] = cpTeam: 0=O, 1=X, 0xFF=teamless.
 //                              Players reply 0x55 to notify presence:
@@ -72,7 +73,6 @@ enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 // ---- Message types ----
 enum Msg : uint8_t {
     MSG_LIT           = 0x50,
-    MSG_BASE_BEACON   = 0x52,
     MSG_CP_BEACON     = 0x54,
     // 0x55 = presence reply to MSG_CP_BEACON; subType 1=team-O, 2=team-X
     MSG_CP_SCORE      = 0x56,
@@ -466,7 +466,7 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type           != RadioEventType::MessageReceived) continue;
-        if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
+        if (ev.packet.msgType != MSG_TOTEM_BEACON)                continue;
         if (!isMyTeamBase(ev.packet.senderId))                    continue;
         if (ev.rssi            < NEAR_BASE_RSSI)                  continue;
         canRespawn = true;
