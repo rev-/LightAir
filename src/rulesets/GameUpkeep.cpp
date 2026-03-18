@@ -163,10 +163,10 @@ static const TotemVar totemVars[] = {
     { "CP 4",    &cpIds[3],       0,    false },
     { "CP 5",    &cpIds[4],       0,    false },
     { "CP 6",    &cpIds[5],       0,    false },
-    { "Base O1", &baseO_ids[0],   0,    false },
+    { "Base O1", &baseO_ids[0],   0,    true  },
     { "Base O2", &baseO_ids[1],   0,    false },
     { "Base O3", &baseO_ids[2],   0,    false },
-    { "Base X1", &baseX_ids[0],   1,    false },
+    { "Base X1", &baseX_ids[0],   1,    true  },
     { "Base X2", &baseX_ids[1],   1,    false },
     { "Base X3", &baseX_ids[2],   1,    false },
 };
