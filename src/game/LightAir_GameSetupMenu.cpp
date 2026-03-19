@@ -874,41 +874,6 @@ void LightAir_GameSetupMenu::shareConfig() {
     if (len > 0) _radio.broadcast(_msgType, blob, len);
 }
 
-void LightAir_GameSetupMenu::runDiscovery() {
-    _seenCount = 0;
-
-    // Add self immediately.
-    recordSeen(_radio.playerId());
-
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
-    _display.clear();
-    _display.setColor(true);
-    _display.print(0, 0,      "Discovering...");
-    _display.print(0, fh,     "Listening 3s");
-    _display.print(0, fh * 3, "Please wait");
-    _display.flush();
-
-    uint32_t windowEnd     = millis() + GameDefaults::ROSTER_WINDOW_MS;
-    uint32_t nextBroadcast = 0;
-
-    while (millis() < windowEnd) {
-        if (millis() >= nextBroadcast) {
-            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0);
-            nextBroadcast = millis() + GameDefaults::ROSTER_RETRY_MS;
-        }
-
-        const RadioReport& rep = _radio.poll();
-        for (uint8_t i = 0; i < rep.count; i++) {
-            const RadioEvent& ev = rep.events[i];
-            if (ev.type != RadioEventType::MessageReceived) continue;
-            if (ev.packet.msgType != GameDefaults::MSG_ROSTER) continue;
-            recordSeen(ev.packet.senderId);
-        }
-
-        delay(GameDefaults::LOOP_MS);
-    }
-}
-
 void LightAir_GameSetupMenu::recordSeen(uint8_t id) {
     for (uint8_t i = 0; i < _seenCount; i++)
         if (_seenIds[i] == id) return;
