@@ -168,13 +168,13 @@ MenuResult LightAir_GameSetupMenu::run() {
     if (!restart) {
         // ---- S2: Game list ----
         runGameList();
-
-        // S4: Setup menu (returns on A)
-        runSetupMenu();
     }
 
-    // ---- S5: Pre-start ----
-    runPreStart();
+    // ---- S4 + S5: Setup → Pre-start (B in pre-start returns here) ----
+    while (true) {
+        runSetupMenu();
+        if (runPreStart() == MenuResult::Confirmed) break;
+    }
     return MenuResult::Confirmed;
 }
 
@@ -788,32 +788,66 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
  *   S5 — PRE-START SEQUENCE
  * ========================================================= */
 
-void LightAir_GameSetupMenu::runPreStart() {
-    // Phase A: share config?
+MenuResult LightAir_GameSetupMenu::runPreStart() {
     shareConfig();
 
-    // Phase B + C: discovery + summary (repeatable with B).
+    // Reset discovery state; include self from the start.
+    _seenCount = 0;
+    recordSeen(_radio.playerId());
+
+    uint8_t  vScroll = 0, hScroll = 0;
+    uint32_t nextBroadcast = 0;
+
+    renderSummary(vScroll, hScroll);
+
     while (true) {
-        runDiscovery();
-
-        uint8_t vScroll = 0, hScroll = 0;
-        renderSummary(vScroll, hScroll);
-
-        while (true) {
-            char key = waitForKey();
-            if (key == 'A') {
-                commitToRunner();
-                return;
-            }
-            if (key == 'B') {
-                // Redo discovery.
-                break;
-            }
-            if (key == '^' && vScroll > 0) { vScroll--; renderSummary(vScroll, hScroll); }
-            if (key == 'V') { vScroll++; renderSummary(vScroll, hScroll); }
-            if (key == '<' && hScroll > 0) { hScroll--; renderSummary(vScroll, hScroll); }
-            if (key == '>') { hScroll++; renderSummary(vScroll, hScroll); }
+        // Broadcast MSG_ROSTER periodically so other devices discover us.
+        if (millis() >= nextBroadcast) {
+            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0);
+            nextBroadcast = millis() + GameDefaults::ROSTER_RETRY_MS;
         }
+
+        // Collect incoming MSG_ROSTER replies; refresh summary when count grows.
+        const RadioReport& rep = _radio.poll();
+        uint8_t prevCount = _seenCount;
+        for (uint8_t i = 0; i < rep.count; i++) {
+            const RadioEvent& ev = rep.events[i];
+            if (ev.type != RadioEventType::MessageReceived) continue;
+            if (ev.packet.msgType != GameDefaults::MSG_ROSTER) continue;
+            recordSeen(ev.packet.senderId);
+        }
+        if (_seenCount != prevCount)
+            renderSummary(vScroll, hScroll);
+
+        // Non-blocking key poll.
+        const InputReport& inp = _input.poll();
+        for (uint8_t i = 0; i < inp.keyEventCount; i++) {
+            const InputReport::KeyEntry& ke = inp.keyEvents[i];
+            if (ke.keypadId != _keypadId) continue;
+            if (ke.state != KeyState::RELEASED &&
+                ke.state != KeyState::RELEASED_HELD) continue;
+            switch (ke.key) {
+                case 'A':
+                    commitToRunner();
+                    return MenuResult::Confirmed;
+                case 'B':
+                    return MenuResult::Cancelled;
+                case '^':
+                    if (vScroll > 0) { vScroll--; renderSummary(vScroll, hScroll); }
+                    break;
+                case 'V':
+                    vScroll++; renderSummary(vScroll, hScroll);
+                    break;
+                case '<':
+                    if (hScroll > 0) { hScroll--; renderSummary(vScroll, hScroll); }
+                    break;
+                case '>':
+                    hScroll++; renderSummary(vScroll, hScroll);
+                    break;
+            }
+        }
+
+        delay(GameDefaults::LOOP_MS);
     }
 }
 
@@ -964,7 +998,7 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
         _display.print(0, fh * (row + 1), rowBuf);
     }
 
-    _display.print(0, fh * 3, "A:Start  B:Redo");
+    _display.print(0, fh * 3, "A:Start  B:Back");
     _display.flush();
 }
 

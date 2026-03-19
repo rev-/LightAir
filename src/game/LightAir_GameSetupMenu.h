@@ -138,7 +138,7 @@ private:
     void     renderTotemEntry(uint8_t cursor);
 
     // ---- S5 ----
-    void     runPreStart();
+    MenuResult runPreStart();
     void     shareConfig();
     void     runDiscovery();
     void     recordSeen(uint8_t id);
