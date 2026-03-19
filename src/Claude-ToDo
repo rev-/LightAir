@@ -44,7 +44,14 @@
    will cause confusion when debugging and could break if two game sessions
    run with adjacent typeIds.
 
-6. Discovery window is too rigid
+6. Config blob truncation is silent
+   game_apply_config() has no total-length check. A truncated blob
+   (e.g. partial radio delivery) passes the typeId check and is
+   deserialized by fixed offset arithmetic, silently producing garbage
+   configVar / totemVar values. The function returns false only on
+   typeId mismatch or buffer shorter than 2 bytes.
+
+7. Discovery window is too rigid
    ROSTER_WINDOW_MS (3 s) is hardcoded. The DM can't extend it if they
    know a player is still booting. Players also don't re-broadcast during
    the window — they rely on their one MSG_ROSTER timing. A player booting
