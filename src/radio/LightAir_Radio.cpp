@@ -208,43 +208,6 @@ bool LightAir_Radio::broadcastUniversal(uint8_t msgType,
 }
 
 // ----------------------------------------------------------------
-// sendConfig — chunk and send a pre-session config blob
-// ----------------------------------------------------------------
-bool LightAir_Radio::sendConfig(const uint8_t* data, uint16_t totalLen, uint8_t targetId) {
-    if (totalLen == 0) return true;
-
-    uint8_t totalChunks = (uint8_t)((totalLen + RADIO_MAX_PAYLOAD - 1) / RADIO_MAX_PAYLOAD);
-
-    uint8_t mac[6];
-    if (targetId == 0xFF)
-        memcpy(mac, kBroadcastMac, 6);
-    else
-        buildMac(targetId, mac);
-
-    for (uint8_t i = 0; i < totalChunks; i++) {
-        uint16_t offset   = (uint16_t)i * RADIO_MAX_PAYLOAD;
-        uint8_t  chunkLen = ((uint16_t)(totalLen - offset) > RADIO_MAX_PAYLOAD)
-                          ? RADIO_MAX_PAYLOAD
-                          : (uint8_t)(totalLen - offset);
-
-        RadioPacket pkt  = {};
-        pkt.senderId     = _playerId;
-        pkt.role         = i;                      // chunk index (0-based)
-        pkt.team         = totalChunks;            // total chunk count
-        pkt.msgType      = RadioRole::CONFIG;      // 0xFF sentinel in msgType field
-        pkt.sessionToken = RadioToken::UNSET;
-        pkt.typeId       = RadioTypeId::UNIVERSAL; // config accepted by all
-        pkt.timestamp    = millis();
-        pkt.resend       = 0;
-        pkt.payloadLen   = chunkLen;
-        memcpy(pkt.payload, data + offset, chunkLen);
-
-        if (!sendRaw(mac, pkt)) return false;
-    }
-    return true;
-}
-
-// ----------------------------------------------------------------
 // processPacket() — classify one received packet; append to _report
 // ----------------------------------------------------------------
 void LightAir_Radio::processPacket(const RadioPacket& pkt, int8_t rssi) {

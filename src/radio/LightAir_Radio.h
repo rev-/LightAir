@@ -14,15 +14,7 @@
 #define RADIO_DEDUP_WINDOW 16   // flood-relay dedup history depth
 
 // ----------------------------------------------------------------
-// Reserved field sentinels
-//
-// RadioRole::CONFIG (0xFF) marks pre-session configuration packets.
-//   When msgType == CONFIG, the role and team fields are repurposed:
-//     role    = chunk index (0-based)
-//     team    = total chunk count
-//   These packets carry a slice of the game config blob in payload[].
-//   sessionToken is forced to UNSET so devices not yet in a session
-//   can receive them regardless of their own token state.
+// Packet field sentinels
 //
 // RadioToken::UNSET (0x00) is the token value before a session starts.
 //   A device with _sessionToken == UNSET accepts all packets.
@@ -31,13 +23,10 @@
 //
 // RadioTypeId::UNIVERSAL (0x00000000) is the typeId for infrastructure
 //   packets that must be accepted regardless of the active game
-//   (e.g. MSG_TOTEM_BEACON, MSG_ROSTER, CONFIG chunks).
+//   (e.g. MSG_TOTEM_BEACON, MSG_ROSTER).
 //   Game-specific packets carry the game's typeId; receivers with a
 //   different active typeId silently drop them.
 // ----------------------------------------------------------------
-namespace RadioRole {
-    constexpr uint8_t CONFIG = 0xFF;  // msgType sentinel for pre-session config chunks
-}
 namespace RadioToken {
     constexpr uint8_t UNSET = 0x00;  // token not yet assigned; accepts all
 }
@@ -150,13 +139,6 @@ public:
     bool broadcastUniversal(uint8_t msgType,
                             const uint8_t* payload = nullptr, uint8_t payloadLen = 0,
                             uint8_t resend = 1);
-
-    // Send a pre-session config blob, split into CONFIG chunks.
-    // msgType is set to RadioRole::CONFIG (0xFF); role = chunk index;
-    // team = total chunk count; sessionToken forced to UNSET.
-    // targetId 0xFF broadcasts; any other value unicasts to that player.
-    // Returns false on the first failed chunk.
-    bool sendConfig(const uint8_t* data, uint16_t totalLen, uint8_t targetId = 0xFF);
 
     // Send a reply to a received packet.
     //   Sets msgType = original.msgType + 1.
