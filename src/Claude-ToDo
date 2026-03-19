@@ -23,12 +23,10 @@
    compile-time safety. Enlight should be injected into GameRunner::begin()
    or into the game callbacks as a parameter.
 
-3. Message type collisions with no registry
-   Game-specific message types (e.g. MSG_LIT = 0x10) are locally defined
-   per game file. Nothing stops two games from using the same value.
-   typeId filtering prevents cross-game collisions at runtime, but this
-   will cause confusion when debugging and could break if two game sessions
-   run with adjacent typeIds.
+3. [DONE] Message type collisions with no registry
+   Resolved: all MSG_* constants now live in a single RadioMsg namespace
+   in config.h. typeId filtering still isolates game sessions at runtime,
+   but the central registry prevents accidental value overlap across games.
 
 4. Config blob truncation is silent
    game_apply_config() has no total-length check. A truncated blob
@@ -53,3 +51,23 @@
 
 7   Inject Enlight* into GameRunner::begin() instead of global       Low
     pointer; pass to callbacks
+
+8   Totem runners partially implemented                              Medium
+
+    Teams — BaseRunner: onMessage() handles respawn (0xF1 → Respawn
+    UI event). No update(), no onRoster() override. Fine as-is only if
+    the base never needs to broadcast or aggregate round-end data.
+
+    Flag — FlagCompositeRunner: onMessage() covers BASE (respawn) and
+    FLAG (state-change animations). No update(): the flag totem never
+    broadcasts its own state periodically, which may be intentional but
+    means players have no unsolicited flag-position feedback. No
+    onRoster() override: flag totems send no capture summary at round end.
+
+    Upkeep — UpkeepCompositeRunner: most complete. update() handles
+    the full CP beacon / presence-window / scoring cycle. Still no
+    onRoster() override; CP totems send no final-score contribution.
+
+    All runners — onRoster() defaults to base (empty reply + Roster UI
+    event). If totems should report per-device stats at game end
+    (captures, CP ticks, etc.) this needs to be overridden per game.
