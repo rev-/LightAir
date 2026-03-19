@@ -51,11 +51,6 @@
    configVar / totemVar values. The function returns false only on
    typeId mismatch or buffer shorter than 2 bytes.
 
-7. Discovery window is too rigid
-   ROSTER_WINDOW_MS (3 s) is hardcoded. The DM can't extend it if they
-   know a player is still booting. Players also don't re-broadcast during
-   the window — they rely on their one MSG_ROSTER timing. A player booting
-   at second 2.9 is missed.
 
 
 ═══════════════════════════════════════════════════
@@ -77,5 +72,3 @@
 8   Use 0xFF as the sentinel for unassigned TotemVar::id             Medium
     instead of 0
 
-10  Make discovery window re-triggerable (manual "re-scan"           Low
-    key in S5)
