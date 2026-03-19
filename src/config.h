@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "rulesets/RadioMessages.h"
 
 // ---------------------------------------------------------------
 // Hardware identity — stored in NVS to select player vs totem
@@ -102,8 +103,8 @@ namespace DisplayDefaults {
 // Game configuration
 // ---------------------------------------------------------------
 namespace GameDefaults {
-    constexpr uint8_t  MSG_CONFIG        = 0x20; // radio msgType for config broadcast (even)
-    constexpr uint8_t  MSG_ROSTER        = 0x22; // radio msgType for roster presence broadcast (even)
+    constexpr uint8_t  MSG_CONFIG        = RadioMsg::MSG_CONFIG;  // 0xA0
+    constexpr uint8_t  MSG_ROSTER        = RadioMsg::MSG_ROSTER;  // 0xA2
     constexpr uint32_t ROSTER_WINDOW_MS  = 3000; // ms to collect presence broadcasts during discovery
     constexpr uint32_t ROSTER_RETRY_MS        = 1000; // ms between own re-broadcasts during discovery
     constexpr uint32_t PRESTART_BROADCAST_MS  = 2000; // ms between MSG_ROSTER broadcasts on pre-start screen
@@ -116,7 +117,7 @@ namespace GameDefaults {
     constexpr uint32_t SCORE_RETRY_MS           = 2000; // ms between score re-broadcasts during scoringState
     constexpr uint8_t  MAX_PARTICIPANTS         = 28;   // max roster entries (players + totems); mask must be uint32_t
     constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
-    constexpr uint8_t  MSG_END_GAME             = 0xFE; // infrastructure broadcast: game ended, enter scoringState
+    constexpr uint8_t  MSG_END_GAME             = RadioMsg::MSG_END_GAME;  // 0xAE
 }
 // Worst-case fused score payload: 4-byte mask + MAX_PARTICIPANTS slots of MAX_WINNER_VARS × int32_t.
 // Must fit in a single radio packet.  Reduce MAX_PARTICIPANTS or MAX_WINNER_VARS if this fires.

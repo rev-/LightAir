@@ -2,6 +2,7 @@
 #include <string.h>
 #include "GameTypeIds.h"
 #include <stdio.h>
+#include "RadioMessages.h"
 #include "TotemProtocol.h"
 
 // ================================================================
@@ -13,18 +14,18 @@
 //   GAME_END (2) : game over; display: time/score/energySpent/shoneTimes.
 //
 // Radio messages (even = request, odd = reply)
-//   MSG_LIT           (0x50) : unicast hit to a target player.
+//   MSG_LIT           (0x10) : unicast hit to a target player.
 //   MSG_TOTEM_BEACON  (0xF0) : broadcast by all totems periodically (received only).
-//   MSG_CP_BEACON     (0x54) : broadcast by CP totems every 2 s.
+//   MSG_CP_BEACON     (0x52) : broadcast by CP totems every 2 s.
 //                              payload[0] = cpTeam: 0=O, 1=X, 0xFF=teamless.
-//                              Players reply 0x55 to notify presence:
+//                              Players reply 0x53 to notify presence:
 //                              subType = 1 (team-O) or 2 (team-X).
 //                              subType = 0 (empty auto-reply) is ignored by the CP.
-//   MSG_CP_SCORE      (0x56) : broadcast by CP totem when it awards 1 point.
+//   MSG_CP_SCORE      (0x54) : broadcast by CP totem when it awards 1 point.
 //                              payload[0] = team (0=O, 1=X) that receives the point.
-//   MSG_SCORE_COLLECT (0x58) : broadcast per-player scores during GAME_END.
+//   MSG_SCORE_COLLECT (0x12) : broadcast per-player scores during GAME_END.
 //
-// Reply sub-types (payload[0] of the 0x51 reply to MSG_LIT)
+// Reply sub-types (payload[0] of the 0x11 reply to MSG_LIT)
 //   REPLY_TAKEN  (1) : target absorbed the hit; lives > 0 after decrement.
 //   REPLY_SHONE  (2) : target eliminated; lives reached 0.
 //   REPLY_DOWN   (3) : target was already OUT_GAME; hit ignored.
@@ -71,14 +72,11 @@ namespace Upkeep {
 // ---- States ----
 enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 
-// ---- Message types ----
-enum Msg : uint8_t {
-    MSG_LIT           = 0x50,
-    MSG_CP_BEACON     = 0x54,
-    // 0x55 = presence reply to MSG_CP_BEACON; subType 1=team-O, 2=team-X
-    MSG_CP_SCORE      = 0x56,
-    MSG_SCORE_COLLECT = 0x58,
-};
+// ---- Radio message types ----
+using RadioMsg::MSG_LIT;            // 0x10
+using RadioMsg::MSG_CP_BEACON;      // 0x52  (0x53 = presence reply; subType 1=team-O, 2=team-X)
+using RadioMsg::MSG_CP_SCORE;       // 0x54
+using RadioMsg::MSG_SCORE_COLLECT;  // 0x12
 
 // ---- Reply sub-types for MSG_LIT ----
 enum ReplySubType : uint8_t {

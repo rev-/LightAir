@@ -1,5 +1,6 @@
 #include <LightAir.h>
 #include "GameTypeIds.h"
+#include "RadioMessages.h"
 
 // ================================================================
 // Free For All — every player shines every other player.
@@ -53,7 +54,8 @@ namespace FFA {
 enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 
 // ---- Radio message types and reply sub-types ----
-enum Msg         : uint8_t { MSG_LIT = 0x10, MSG_SCORE_COLLECT = 0x12 };
+using RadioMsg::MSG_LIT;           // 0x10
+using RadioMsg::MSG_SCORE_COLLECT; // 0x12
 enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3 };
 
 // ---- Config variables ----

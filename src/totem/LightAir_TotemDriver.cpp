@@ -40,9 +40,9 @@ void LightAir_TotemDriver::loop() {
         // MessageReceived: the packet itself has the sender's typeId.
         uint16_t incomingTypeId = ev.packet.typeId;
 
-        // MSG_ROSTER is universal; it signals end-of-game and resets the runner.
+        // MSG_TOTEM_ROSTER is universal; it signals end-of-game and resets the runner.
         bool isRoster = (ev.type == RadioEventType::MessageReceived &&
-                         ev.packet.msgType == MSG_ROSTER);
+                         ev.packet.msgType == MSG_TOTEM_ROSTER);
 
         if (isRoster) {
             if (_runner) {

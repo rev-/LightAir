@@ -26,4 +26,4 @@ constexpr uint8_t MSG_TOTEM_BEACON = 0xF0;
 // Universal end-of-game roster broadcast (typeId == UNIVERSAL).
 // Sent by the host to every totem at the end of the game.
 // TotemDriver calls runner->onRoster(), then reset() on receipt.
-constexpr uint8_t MSG_ROSTER = 0xF2;
+constexpr uint8_t MSG_TOTEM_ROSTER = 0xF2;

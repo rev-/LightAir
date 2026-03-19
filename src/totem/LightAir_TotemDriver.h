@@ -18,7 +18,7 @@
 //      registry, activates it, and forwards the packet.
 //   4. Forwards every subsequent game-type-matching packet to
 //      runner->onMessage().  Calls runner->update() every tick.
-//   5. On MSG_ROSTER (universal): calls runner->onRoster(), then
+//   5. On MSG_TOTEM_ROSTER (universal): calls runner->onRoster(), then
 //      runner->reset() and returns to IDLE (typeId = UNIVERSAL).
 //
 // Lifecycle:

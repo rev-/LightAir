@@ -1,6 +1,7 @@
 #include <LightAir.h>
 #include <string.h>
 #include "GameTypeIds.h"
+#include "RadioMessages.h"
 #include "TotemProtocol.h"
 
 // ================================================================
@@ -12,13 +13,13 @@
 //   GAME_END (2) : game over; display: time/points/energySpent/shoneTimes.
 //
 // Radio messages (even = request, odd = reply)
-//   MSG_LIT           (0x30) : unicast hit to a target player.
+//   MSG_LIT           (0x10) : unicast hit to a target player.
 //   MSG_TOTEM_BEACON  (0xF0) : broadcast by all totems periodically (received only).
-//   MSG_SCORE_COLLECT (0x34) : broadcast per-player scores during GAME_END.
-//   MSG_POINT_REPORT  (0x36) : broadcast by a player on each point scored, so teammates
+//   MSG_SCORE_COLLECT (0x12) : broadcast per-player scores during GAME_END.
+//   MSG_POINT_REPORT  (0x14) : broadcast by a player on each point scored, so teammates
 //                              can increment their local myTeamPoints counter.
 //
-// Reply sub-types (payload[0] of the 0x31 reply)
+// Reply sub-types (payload[0] of the 0x11 reply)
 //   REPLY_TAKEN  (1) : target absorbed the hit; lives > 0 after decrement.
 //   REPLY_SHONE  (2) : target eliminated; lives reached 0.
 //   REPLY_DOWN   (3) : target was already OUT_GAME; hit ignored.
@@ -58,12 +59,10 @@ namespace Teams {
 // ---- States ----
 enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 
-// ---- Message types ----
-enum Msg : uint8_t {
-    MSG_LIT           = 0x30,
-    MSG_SCORE_COLLECT = 0x34,
-    MSG_POINT_REPORT  = 0x36,
-};
+// ---- Radio message types ----
+using RadioMsg::MSG_LIT;            // 0x10
+using RadioMsg::MSG_SCORE_COLLECT;  // 0x12
+using RadioMsg::MSG_POINT_REPORT;   // 0x14
 
 // ---- Reply sub-types ----
 enum ReplySubType : uint8_t {

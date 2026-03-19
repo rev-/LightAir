@@ -1,5 +1,6 @@
 #include <LightAir.h>
 #include "GameTypeIds.h"
+#include "RadioMessages.h"
 
 // ================================================================
 // Outflow — energy-only FFA; no lives.
@@ -10,9 +11,9 @@
 //   GAME_END (2) : game over; display: time/points/energySpent/depletions.
 //
 // Radio messages (even = request, odd = reply)
-//   MSG_LIT          (0x20) : unicast to the player optically detected.
-//   MSG_LIT reply    (0x21) : sent back by the target; payload[0] = reply sub-type.
-//   MSG_SCORE_COLLECT (0x22) : broadcast per-player scores during GAME_END.
+//   MSG_LIT          (0x10) : unicast to the player optically detected.
+//   MSG_LIT reply    (0x11) : sent back by the target; payload[0] = reply sub-type.
+//   MSG_SCORE_COLLECT (0x12) : broadcast per-player scores during GAME_END.
 //
 // Reply sub-types (payload[0] of the 0x21 reply)
 //   REPLY_TAKEN (1) : target absorbed the hit; energy > 0 after decrement.
@@ -56,11 +57,9 @@ namespace Outflow {
 // ---- States ----
 enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 
-// ---- Message types ----
-enum Msg : uint8_t {
-    MSG_LIT           = 0x20,
-    MSG_SCORE_COLLECT = 0x22,
-};
+// ---- Radio message types ----
+using RadioMsg::MSG_LIT;           // 0x10
+using RadioMsg::MSG_SCORE_COLLECT; // 0x12
 
 // ---- Reply sub-types ----
 enum ReplySubType : uint8_t {

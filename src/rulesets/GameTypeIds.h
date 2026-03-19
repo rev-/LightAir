@@ -18,9 +18,11 @@
 
 namespace GameTypeId {
     constexpr uint16_t FREE_FOR_ALL = 0x0001;
-    constexpr uint16_t TEAMS        = 0x0002;
-    constexpr uint16_t FLAG         = 0x0003;
-    constexpr uint16_t OUTFLOW      = 0x0004;
-    constexpr uint16_t UPKEEP       = 0x0005;
-    // Next available: 0x0006
+    // 0x0002–0x0005 retired: Teams/Flag/Outflow/Upkeep pre-RadioMessages registry.
+    // Bumped because the 0xA0/0x10/0x50 message layout changes wire format.
+    constexpr uint16_t TEAMS        = 0x0007;
+    constexpr uint16_t FLAG         = 0x0008;
+    constexpr uint16_t OUTFLOW      = 0x0006;
+    constexpr uint16_t UPKEEP       = 0x0009;
+    // Next available: 0x000A
 }

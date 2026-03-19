@@ -1,6 +1,7 @@
 #include <LightAir.h>
 #include <string.h>
 #include "GameTypeIds.h"
+#include "RadioMessages.h"
 #include "TotemProtocol.h"
 
 // ================================================================
@@ -12,14 +13,14 @@
 //   GAME_END (2) : over; shows final stats.
 //
 // Radio messages (even = request, odd = reply)
-//   MSG_LIT           (0x40) : unicast hit to a target player.
+//   MSG_LIT           (0x10) : unicast hit to a target player.
 //   MSG_TOTEM_BEACON  (0xF0) : broadcast by all totems periodically (received only).
 //                              Flag and base totems are distinguished by sender ID
 //                              against the game's TotemVar assignments.
-//   MSG_FLAG_EVENT    (0x46) : broadcast by a player on flag state change.
-//   MSG_SCORE_COLLECT (0x48) : broadcast per-player scores during GAME_END.
+//   MSG_FLAG_EVENT    (0x50) : broadcast by a player on flag state change.
+//   MSG_SCORE_COLLECT (0x12) : broadcast per-player scores during GAME_END.
 //
-// Reply sub-types (payload[0] of the 0x41 reply)
+// Reply sub-types (payload[0] of the 0x11 reply)
 //   REPLY_TAKEN  (1) : target absorbed the hit; lives > 0 after decrement.
 //   REPLY_SHONE  (2) : target eliminated; lives reached 0.
 //   REPLY_DOWN   (3) : target was already OUT_GAME; hit ignored.
@@ -73,12 +74,10 @@ namespace Flag {
 // ---- States ----
 enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 
-// ---- Message types ----
-enum Msg : uint8_t {
-    MSG_LIT           = 0x40,
-    MSG_FLAG_EVENT    = 0x46,
-    MSG_SCORE_COLLECT = 0x48,
-};
+// ---- Radio message types ----
+using RadioMsg::MSG_LIT;            // 0x10
+using RadioMsg::MSG_FLAG_EVENT;     // 0x50
+using RadioMsg::MSG_SCORE_COLLECT;  // 0x12
 
 // ---- Reply sub-types ----
 enum ReplySubType : uint8_t {

@@ -16,7 +16,7 @@
 //            driver calls reset() then onMessage() with the
 //            activation packet, then update() every tick.
 //
-//   ACTIVE → (MSG_ROSTER received) → IDLE
+//   ACTIVE → (MSG_TOTEM_ROSTER received) → IDLE
 //            driver calls onRoster() (which queues the reply),
 //            then reset() to clear all state.
 //
