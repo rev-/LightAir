@@ -1,8 +1,5 @@
 What's Genuinely Missing
 
-3. Score payload overflow — silent failure
-scoreBroadcastFused() in GameRunner.cpp silently skips the broadcast if the payload exceeds 235 bytes. With 32 roster members × 8 winner vars × 4 bytes each = 1024 bytes. This will fail silently in any large game. No error, no log, no validation. Scores simply won't propagate. This needs a clear runtime assertion or at minimum a constexpr calculation that warns at compile time.
-
 4. Session token distribution
 There's no explicit mechanism to distribute the session token to non-DM players. Players receive config via MSG_CONFIG but the session token isn't part of the config blob. If a player device joins after the broadcast window, or the token is set after config is sent, it will silently drop all game packets due to token mismatch.
 
@@ -36,7 +33,6 @@ Suggestions
 #	Suggestion	Priority
 1	Add uint8_t minPlayers to LightAir_Game; validate in GameSetupMenu before confirming	High
 2	Add void (*onEnd)(LightAir_DisplayCtrl&, GameOutput&) to LightAir_Game	Medium
-3	Add constexpr score payload size check in GameRunner::begin() or in game registration	High
 4	Include sessionToken in the MSG_CONFIG config blob	High
 5	Add typeId uniqueness check in GameManager::registerGame() — return false on collision	Medium
 6	Replace the _totemAssignment[] encoding hack with a struct { bool named; uint8_t value; }	Medium
