@@ -1,38 +1,91 @@
-What's Genuinely Missing
+═══════════════════════════════════════════════════
+ WHAT'S GENUINELY MISSING
+═══════════════════════════════════════════════════
 
 5. typeId uniqueness not enforced
-GameManager::registerGame() doesn't check for duplicate typeId values. Two registered games with the same typeId would cause silent radio filtering conflicts — the wrong TotemRunner might activate.
-Design Flaws
+   GameManager::registerGame() doesn't check for duplicate typeId values.
+   Two registered games with the same typeId would cause silent radio
+   filtering conflicts — the wrong TotemRunner might activate.
+
+
+═══════════════════════════════════════════════════
+ DESIGN FLAWS
+═══════════════════════════════════════════════════
 
 1. Totem assignment encoding is a hack
-_totemAssignment[] in GameSetupMenu encodes two conceptually different things in one byte: values < GenericTotemRoles::COUNT (3) = generic role, values ≥ 3 = totemVar index offset by 3. This is fragile — adding a new generic role breaks all existing totemVar indices silently. It should be a struct: { bool isNamed; uint8_t value; }.
+   _totemAssignment[] in GameSetupMenu encodes two conceptually different
+   things in one byte: values < GenericTotemRoles::COUNT (3) = generic
+   role, values ≥ 3 = totemVar index offset by 3. This is fragile —
+   adding a new generic role breaks all existing totemVar indices silently.
+   Should be a struct: { bool isNamed; uint8_t value; }.
 
 2. Enlight via global pointer
-Games declare extern Enlight* enlightPtr (e.g., GameFreeForAll.cpp line ~47). The pointer is initialized in the sketch, but nothing prevents a game from dereferencing it before initialization, and there's zero compile-time safety. Enlight should be injected into GameRunner::begin() or into the game callbacks as a parameter.
+   Games declare extern Enlight* enlightPtr (e.g. GameFreeForAll.cpp ~47).
+   The pointer is initialized in the sketch, but nothing prevents a game
+   from dereferencing it before initialization, and there's zero
+   compile-time safety. Enlight should be injected into GameRunner::begin()
+   or into the game callbacks as a parameter.
 
 3. Player ID space vs team map mismatch
-_teamMap in GameRunner is size 16 (PlayerDefs::MAX_PLAYER_ID). RadioPacket.senderId is a uint8_t (0–255). Players with IDs ≥16 are silently placed on team 0. This isn't enforced at the radio layer, and PlayerDefs::playerNames only has meaningful entries for IDs 0–9 anyway ("Unknown" for 10–15). The implicit maximum of ~9 real players is never stated or checked.
+   _teamMap in GameRunner is size 16 (PlayerDefs::MAX_PLAYER_ID).
+   RadioPacket.senderId is a uint8_t (0–255). Players with IDs ≥ 16 are
+   silently placed on team 0. This isn't enforced at the radio layer, and
+   PlayerDefs::playerNames only has meaningful entries for IDs 0–9 anyway
+   ("Unknown" for 10–15). The implicit maximum of ~9 real players is never
+   stated or checked.
 
 4. Player ID 0 ("00-None") is ambiguous
-ID 0 is used as "None"/unassigned in TotemVar::id (default = 0), but is technically a valid RadioPacket.senderId. If a device accidentally transmits with ID 0, it could corrupt score slots. Should be an explicit sentinel (0xFF or similar) for "unassigned totem."
+   ID 0 is used as "None"/unassigned in TotemVar::id (default = 0), but
+   is technically a valid RadioPacket.senderId. If a device accidentally
+   transmits with ID 0, it could corrupt score slots. Should be an
+   explicit sentinel (0xFF or similar) for "unassigned totem."
 
 5. Message type collisions with no registry
-Game-specific message types (e.g., MSG_LIT = 0x10) are locally defined per game file. There's nothing stopping two games from using the same value. Since typeId filtering should prevent cross-game collisions at runtime, this is mostly a code hygiene issue — but it will cause confusion when debugging and could break if someone runs two game sessions with adjacent typeIds.
+   Game-specific message types (e.g. MSG_LIT = 0x10) are locally defined
+   per game file. Nothing stops two games from using the same value.
+   typeId filtering prevents cross-game collisions at runtime, but this
+   will cause confusion when debugging and could break if two game sessions
+   run with adjacent typeIds.
 
 6. Config blob has no version or length prefix
-game_apply_config() deserializes the blob by fixed offset arithmetic, assuming the blob was produced by the current firmware version. There's no version byte, no total-length field, no checksum. A DM running a different firmware version than players will apply garbage config silently (the function returns false only on typeId mismatch or buffer-too-short, not on schema mismatch).
+   game_apply_config() deserializes by fixed offset arithmetic, assuming
+   the blob was produced by the current firmware version. No version byte,
+   no total-length field, no checksum. A DM on different firmware than
+   players will apply garbage config silently (returns false only on
+   typeId mismatch or buffer-too-short, not schema mismatch).
 
 7. Discovery window is too rigid
-The 3-second ROSTER_WINDOW_MS is hardcoded. The DM can't extend it if they know a player is still booting. There's also no re-broadcast from players during the window — they depend on the timing of their own MSG_ROSTER broadcast. If a player boots at second 2.9, they're missed.
+   ROSTER_WINDOW_MS (3 s) is hardcoded. The DM can't extend it if they
+   know a player is still booting. Players also don't re-broadcast during
+   the window — they rely on their one MSG_ROSTER timing. A player booting
+   at second 2.9 is missed.
 
 
-Suggestions
-#	Suggestion	Priority
-1	Add uint8_t minPlayers to LightAir_Game; validate in GameSetupMenu before confirming	High
-2	Add void (*onEnd)(LightAir_DisplayCtrl&, GameOutput&) to LightAir_Game	Medium
-5	Add typeId uniqueness check in GameManager::registerGame() — return false on collision	Medium
-6	Replace the _totemAssignment[] encoding hack with a struct { bool named; uint8_t value; }	Medium
-7	Inject Enlight* into GameRunner::begin() instead of global pointer; pass to callbacks	Low
-8	Use 0xFF as the sentinel for unassigned TotemVar::id instead of 0	Medium
-9	Add a 1-byte schema version to the config blob header	Low
-10	Make discovery window re-triggerable (manual "re-scan" key in S5)	Low
+═══════════════════════════════════════════════════
+ SUGGESTIONS
+═══════════════════════════════════════════════════
+
+#   Suggestion                                                        Priority
+─────────────────────────────────────────────────────────────────────────────
+1   Add uint8_t minPlayers to LightAir_Game; validate in             High
+    GameSetupMenu before confirming
+
+2   Add void (*onEnd)(LightAir_DisplayCtrl&, GameOutput&)            Medium
+    to LightAir_Game
+
+5   Add typeId uniqueness check in GameManager::registerGame()       Medium
+    — return false on collision
+
+6   Replace _totemAssignment[] encoding hack with a struct           Medium
+    { bool named; uint8_t value; }
+
+7   Inject Enlight* into GameRunner::begin() instead of global       Low
+    pointer; pass to callbacks
+
+8   Use 0xFF as the sentinel for unassigned TotemVar::id             Medium
+    instead of 0
+
+9   Add a 1-byte schema version to the config blob header            Low
+
+10  Make discovery window re-triggerable (manual "re-scan"           Low
+    key in S5)
