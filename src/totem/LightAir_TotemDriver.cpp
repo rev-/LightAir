@@ -24,14 +24,11 @@ void LightAir_TotemDriver::loop() {
     const RadioReport& report = _radio.poll();
     LightAir_TotemOutput out;
 
-    // ---- 1. Periodic beacon broadcast (game-typed, only while active) ----
-    // Before a runner is activated the totem has no game context, so it stays
-    // silent. Once activated the beacon is stamped with the game typeId and
-    // reaches only devices in the same game session.
+    // ---- 1. Periodic beacon broadcast ----
     uint32_t now = millis();
-    if (_runner && (now - _lastBeacon) >= GameDefaults::TOTEM_BEACON_INTERVAL_MS) {
+    if ((now - _lastBeacon) >= GameDefaults::TOTEM_BEACON_INTERVAL_MS) {
         _lastBeacon = now;
-        _radio.broadcast(MSG_TOTEM_BEACON);
+        _radio.broadcastUniversal(MSG_TOTEM_BEACON);
     }
 
     // ---- 2. Process incoming events ----

@@ -23,7 +23,7 @@
 //
 // RadioTypeId::UNIVERSAL (0x0000) is the typeId for infrastructure
 //   packets that must be accepted regardless of the active game
-//   (e.g. MSG_ROSTER).
+//   (e.g. MSG_TOTEM_BEACON, MSG_ROSTER).
 //   Game-specific packets carry the game's typeId; receivers with a
 //   different active typeId silently drop them.
 // ----------------------------------------------------------------
@@ -135,7 +135,7 @@ public:
 
     // Broadcast with typeId forced to UNIVERSAL (0) regardless of active _typeId.
     // Use for infrastructure messages that must be received by all devices
-    // (e.g. MSG_ROSTER) even after a game typeId is set.
+    // (e.g. MSG_TOTEM_BEACON, MSG_ROSTER) even after a game typeId is set.
     bool broadcastUniversal(uint8_t msgType,
                             const uint8_t* payload = nullptr, uint8_t payloadLen = 0,
                             uint8_t resend = 1);
