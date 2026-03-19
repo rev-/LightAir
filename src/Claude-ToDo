@@ -23,24 +23,19 @@
    compile-time safety. Enlight should be injected into GameRunner::begin()
    or into the game callbacks as a parameter.
 
-3. [DONE] MAX_PLAYER_ID raised to 17 (IDs 1–16 = 16 usable players,
-   ID 0 reserved). playerNames and playerShort extended accordingly.
-   Out-of-range guards already present in all game files.
-
-5. Message type collisions with no registry
+3. Message type collisions with no registry
    Game-specific message types (e.g. MSG_LIT = 0x10) are locally defined
    per game file. Nothing stops two games from using the same value.
    typeId filtering prevents cross-game collisions at runtime, but this
    will cause confusion when debugging and could break if two game sessions
    run with adjacent typeIds.
 
-6. Config blob truncation is silent
+4. Config blob truncation is silent
    game_apply_config() has no total-length check. A truncated blob
    (e.g. partial radio delivery) passes the typeId check and is
    deserialized by fixed offset arithmetic, silently producing garbage
    configVar / totemVar values. The function returns false only on
    typeId mismatch or buffer shorter than 2 bytes.
-
 
 
 ═══════════════════════════════════════════════════
@@ -58,5 +53,3 @@
 
 7   Inject Enlight* into GameRunner::begin() instead of global       Low
     pointer; pass to callbacks
-
-
