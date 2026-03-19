@@ -53,6 +53,10 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     *game.currentState = game.initialState;
     activateStateDisplay(game.initialState);
 
+    // Stamp the game's typeId on the radio layer so all outgoing packets
+    // carry it and incoming packets from other games are filtered out.
+    radio.setTypeId(game.typeId);
+
     // User-provided setup (radio init, opening messages, etc.)
     if (game.onBegin) game.onBegin(display, radio, ui);
 }

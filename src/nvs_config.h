@@ -2,6 +2,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include <stdint.h>
+#include "config.h"
 
 #define CALIB_NVS_NAMESPACE     "calibration"
 
@@ -10,6 +11,7 @@
 // Identification keys
 #define CAL_KEY_ID              "id"
 #define CAL_KEY_TEAM            "team"
+#define CAL_KEY_HARDWARE        "hw"    // DeviceHardware enum stored as uint8
 
 // Calibration for Enlight: near/far channel baselines and white balance factors
 #define CAL_KEY_RCAL            "rcal"         // far  channel baselines
@@ -48,13 +50,16 @@
 // Default for both fields when the NVS key is absent: 0xFF (unset).
 // ---------------------------------------------------------------
 struct PlayerConfig {
-    uint8_t id;    // logical player ID (= mycolor); maps to LightAir_Radio playerId
-    uint8_t team;  // team assignment; game-defined meaning
+    uint8_t        id;        // logical player ID (= mycolor); maps to LightAir_Radio playerId
+    uint8_t        team;      // team assignment; game-defined meaning
+    DeviceHardware hardware;  // PLAYER or TOTEM; default = PLAYER when key absent
 };
 
 bool player_config_load(PlayerConfig& cfg);
 bool player_config_save(const PlayerConfig& cfg);
-bool player_config_save_team(uint8_t team);    // update only team without touching id
+bool player_config_save_id(uint8_t id);               // update only id
+bool player_config_save_team(uint8_t team);           // update only team
+bool player_config_save_hardware(DeviceHardware hw);  // update only hardware type
 
 struct EnlightCalib {
     uint32_t    rcal, gcal, bcal;             // far  channel baselines

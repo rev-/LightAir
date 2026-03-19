@@ -311,4 +311,5 @@ const LightAir_Game game_outflow = {
     /* totemVarCount         */ 0,
     /* hasTeams              */ false,
     /* teamBitmask           */ nullptr,
+    /* totemRunner           */ nullptr,
 };

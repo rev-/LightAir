@@ -15,6 +15,7 @@ LightAir_Radio::LightAir_Radio(LightAir_RadioTransport& transport,
                                 const RadioConfig& cfg)
     : _transport(transport),
       _playerId(playerId), _sessionToken(sessionToken),
+      _typeId(RadioTypeId::UNIVERSAL),
       _role(role), _team(team), _config(cfg),
       _dedupIdx(0)
 {
@@ -109,6 +110,7 @@ bool LightAir_Radio::sendTo(uint8_t targetId, uint8_t msgType,
     pkt.team         = _team;
     pkt.msgType      = msgType;
     pkt.sessionToken = _sessionToken;
+    pkt.typeId       = _typeId;
     pkt.timestamp    = millis();
     pkt.resend       = resend;
     pkt.payloadLen   = payloadLen;
@@ -129,6 +131,7 @@ bool LightAir_Radio::broadcast(uint8_t msgType,
     pkt.team         = _team;
     pkt.msgType      = msgType;
     pkt.sessionToken = _sessionToken;
+    pkt.typeId       = _typeId;
     pkt.timestamp    = millis();
     pkt.resend       = resend;
     pkt.payloadLen   = payloadLen;
@@ -151,6 +154,7 @@ bool LightAir_Radio::reply(const RadioPacket& original,
     pkt.team         = _team;
     pkt.msgType      = original.msgType + 1;  // odd = reply
     pkt.sessionToken = _sessionToken;
+    pkt.typeId       = _typeId;
     pkt.timestamp    = original.timestamp;    // echoed for sender-side matching
     pkt.resend       = 0;                     // replies never flood
     pkt.payloadLen   = payloadLen;
@@ -172,6 +176,7 @@ bool LightAir_Radio::replyTo(uint8_t senderId, uint8_t origMsgType, uint32_t ori
     pkt.team         = _team;
     pkt.msgType      = origMsgType + 1;   // odd = reply
     pkt.sessionToken = _sessionToken;
+    pkt.typeId       = _typeId;
     pkt.timestamp    = origTimestamp;     // echoed for sender-side matching
     pkt.resend       = 0;
     pkt.payloadLen   = payloadLen;
@@ -179,6 +184,27 @@ bool LightAir_Radio::replyTo(uint8_t senderId, uint8_t origMsgType, uint32_t ori
         memcpy(pkt.payload, payload, payloadLen);
 
     return sendRaw(mac, pkt);
+}
+
+bool LightAir_Radio::broadcastUniversal(uint8_t msgType,
+                                        const uint8_t* payload, uint8_t payloadLen,
+                                        uint8_t resend) {
+    RadioPacket pkt = {};
+    pkt.senderId     = _playerId;
+    pkt.role         = _role;
+    pkt.team         = _team;
+    pkt.msgType      = msgType;
+    pkt.sessionToken = _sessionToken;
+    pkt.typeId       = RadioTypeId::UNIVERSAL;  // forced — ignore _typeId
+    pkt.timestamp    = millis();
+    pkt.resend       = resend;
+    pkt.payloadLen   = payloadLen;
+    if (payload && payloadLen)
+        memcpy(pkt.payload, payload, payloadLen);
+
+    if (!sendRaw(kBroadcastMac, pkt)) return false;
+    storePending(pkt);
+    return true;
 }
 
 // ----------------------------------------------------------------
@@ -203,10 +229,11 @@ bool LightAir_Radio::sendConfig(const uint8_t* data, uint16_t totalLen, uint8_t 
 
         RadioPacket pkt  = {};
         pkt.senderId     = _playerId;
-        pkt.role         = i;                  // chunk index (0-based)
-        pkt.team         = totalChunks;        // total chunk count
-        pkt.msgType      = RadioRole::CONFIG;  // 0xFF sentinel in msgType field
+        pkt.role         = i;                      // chunk index (0-based)
+        pkt.team         = totalChunks;            // total chunk count
+        pkt.msgType      = RadioRole::CONFIG;      // 0xFF sentinel in msgType field
         pkt.sessionToken = RadioToken::UNSET;
+        pkt.typeId       = RadioTypeId::UNIVERSAL; // config accepted by all
         pkt.timestamp    = millis();
         pkt.resend       = 0;
         pkt.payloadLen   = chunkLen;
@@ -222,11 +249,19 @@ bool LightAir_Radio::sendConfig(const uint8_t* data, uint16_t totalLen, uint8_t 
 // ----------------------------------------------------------------
 void LightAir_Radio::processPacket(const RadioPacket& pkt, int8_t rssi) {
     // 1. Session token gate
-    bool isConfig = (pkt.sessionToken == RadioToken::UNSET &&
-                     _sessionToken    == RadioToken::UNSET);
-    if (!isConfig && pkt.sessionToken != _sessionToken) return;
+    // If own token is UNSET, accept all (device not yet in session).
+    // Once a token is set, only matching-token packets pass.
+    if (_sessionToken != RadioToken::UNSET &&
+        pkt.sessionToken != _sessionToken) return;
 
-    // 2. Flood relay: re-broadcast if not seen before
+    // 2. Game typeId gate
+    // typeId == 0 (UNIVERSAL) always passes.
+    // Otherwise: if own _typeId is set, only matching typeIds pass.
+    if (pkt.typeId != RadioTypeId::UNIVERSAL &&
+        _typeId    != RadioTypeId::UNIVERSAL &&
+        pkt.typeId != _typeId) return;
+
+    // 3. Flood relay: re-broadcast if not seen before
     if (pkt.resend > 0 && !isDuplicate(pkt.senderId, pkt.timestamp)) {
         recordDedup(pkt.senderId, pkt.timestamp);
         RadioPacket relay = pkt;
@@ -234,12 +269,12 @@ void LightAir_Radio::processPacket(const RadioPacket& pkt, int8_t rssi) {
         sendRaw(kBroadcastMac, relay);
     }
 
-    // 3. Ignore our own packets echoed back via broadcast relay
+    // 4. Ignore our own packets echoed back via broadcast relay
     if (pkt.senderId == _playerId) return;
 
     if (_report.count >= RADIO_MAX_PENDING) return;  // report buffer full
 
-    // 4. Odd msgType = reply: try to match a pending request
+    // 5. Odd msgType = reply: try to match a pending request
     if (pkt.msgType & 1) {
         int idx = findPending(pkt.msgType, pkt.timestamp);
         if (idx < 0) return;  // reply for someone else (relayed) — ignore
@@ -252,7 +287,7 @@ void LightAir_Radio::processPacket(const RadioPacket& pkt, int8_t rssi) {
         return;
     }
 
-    // 5. Even msgType = incoming request from another node
+    // 6. Even msgType = incoming request from another node
     RadioEvent& evt = _report.events[_report.count++];
     evt.type        = RadioEventType::MessageReceived;
     evt.packet      = pkt;

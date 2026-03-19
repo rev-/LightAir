@@ -470,6 +470,8 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
         if (!isMyTeamBase(ev.packet.senderId))                    continue;
         if (ev.rssi            < NEAR_BASE_RSSI)                  continue;
         canRespawn = true;
+        // Notify the BASE totem so it can show a Respawn animation.
+        out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
         break;
     }
 }
@@ -520,6 +522,134 @@ static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
     else                  disp.showMessage("TEAM X WINS!", 0);
 }
 
+// ---- Totem-side runner: handles both BASE and CP (control-point) totem roles ----
+//
+// Role is determined from the first activation message:
+//   0xF1 reply (player near base)        → ROLE_BASE
+//   0x55 reply to MSG_CP_BEACON (0x54)   → ROLE_CP
+//
+// BASE role: shows Respawn animation when a player acknowledges the beacon.
+//
+// CP role:
+//   - Broadcasts MSG_CP_BEACON (0x54) every 2 s with current cpTeam in payload[0].
+//   - Collects 0x55 replies (subType 1=O, 2=X) in a 2 s window.
+//   - After 2 s: if only one team replied, attach to that team; both or none = hold.
+//   - After 10 s unchanged attachment: broadcast MSG_CP_SCORE (payload[0]=team),
+//     restart countdown.
+//   - Shows ControlO / ControlX / ControlContest / Idle background accordingly.
+//
+class UpkeepCompositeRunner : public LightAir_TotemRunner {
+    enum Role : uint8_t { ROLE_UNKNOWN, ROLE_BASE, ROLE_CP };
+
+    static constexpr uint32_t CP_BEACON_INTERVAL_MS = 2000;
+    static constexpr uint32_t CP_SCORE_INTERVAL_MS  = 10000;
+
+    Role    _role;
+    uint8_t _cpTeam;       // CP_TEAM_NONE (0xFF), 0=O, 1=X
+    bool    _presenceO;    // team-O player replied in current window
+    bool    _presenceX;    // team-X player replied in current window
+    uint32_t _windowStart; // millis() when current 2 s window opened
+    uint32_t _attachStart; // millis() when current attachment started
+    uint32_t _lastBeacon;  // millis() of last 0x54 beacon sent
+
+public:
+    UpkeepCompositeRunner()
+        : _role(ROLE_UNKNOWN), _cpTeam(CP_TEAM_NONE),
+          _presenceO(false), _presenceX(false),
+          _windowStart(0), _attachStart(0), _lastBeacon(0) {}
+
+    void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
+        // Lazy role detection on first message.
+        if (_role == ROLE_UNKNOWN) {
+            if (msg.msgType == MSG_TOTEM_BEACON + 1)   _role = ROLE_BASE;
+            else if (msg.msgType == MSG_CP_BEACON + 1) _role = ROLE_CP;
+        }
+
+        if (_role == ROLE_BASE) {
+            if (msg.msgType != MSG_TOTEM_BEACON + 1) return;
+            uint8_t r = (msg.team == 0) ? 255 :   0;
+            uint8_t g = (msg.team == 0) ?  80 :  80;
+            uint8_t b = (msg.team == 0) ?   0 : 255;
+            out.ui.trigger(TotemUIEvent::Respawn, r, g, b);
+            return;
+        }
+
+        if (_role == ROLE_CP && msg.msgType == MSG_CP_BEACON + 1) {
+            // 0x55 reply: subType 1=O, 2=X; subType 0 = auto-empty, ignore.
+            if (msg.payloadLen == 0) return;
+            uint8_t sub = msg.payload[0];
+            if (sub == 1) _presenceO = true;
+            if (sub == 2) _presenceX = true;
+        }
+    }
+
+    void update(LightAir_TotemOutput& out) override {
+        if (_role != ROLE_CP) return;
+
+        uint32_t now = millis();
+
+        // ---- Broadcast CP beacon every 2 s ----
+        bool windowExpired = (now - _windowStart) >= CP_BEACON_INTERVAL_MS;
+        if (windowExpired) {
+            // Evaluate the window that just closed.
+            if (_presenceO || _presenceX) {
+                uint8_t newTeam = _cpTeam;
+                if (_presenceO && !_presenceX) newTeam = 0;
+                if (_presenceX && !_presenceO) newTeam = 1;
+                // Both teams present: contested — hold current attachment.
+
+                if (newTeam != _cpTeam) {
+                    // Team switch: reset scoring countdown.
+                    _cpTeam    = newTeam;
+                    _attachStart = now;
+                    updateCPBackground(out);
+                } else if (_cpTeam != CP_TEAM_NONE) {
+                    // Same team: check if 10 s elapsed for a point.
+                    if ((now - _attachStart) >= CP_SCORE_INTERVAL_MS) {
+                        uint8_t payload[1] = { _cpTeam };
+                        out.radio.broadcast(MSG_CP_SCORE, payload, 1);
+                        out.ui.trigger(TotemUIEvent::Bonus);
+                        _attachStart = now;  // restart countdown
+                    }
+                }
+
+                if (_presenceO && _presenceX) {
+                    // Contested — show alternate colours.
+                    out.ui.trigger(TotemUIEvent::ControlContest);
+                }
+            } else if (_cpTeam == CP_TEAM_NONE) {
+                // No presence and no attachment.
+                out.ui.trigger(TotemUIEvent::Idle);
+            }
+
+            // Reset window and broadcast new beacon.
+            _presenceO   = false;
+            _presenceX   = false;
+            _windowStart = now;
+            uint8_t pl[1] = { _cpTeam };
+            out.radio.broadcast(MSG_CP_BEACON, pl, 1);
+        }
+    }
+
+    void reset() override {
+        _role        = ROLE_UNKNOWN;
+        _cpTeam      = CP_TEAM_NONE;
+        _presenceO   = false;
+        _presenceX   = false;
+        _windowStart = 0;
+        _attachStart = 0;
+        _lastBeacon  = 0;
+    }
+
+private:
+    void updateCPBackground(LightAir_TotemOutput& out) const {
+        if      (_cpTeam == 0)         out.ui.trigger(TotemUIEvent::ControlO);
+        else if (_cpTeam == 1)         out.ui.trigger(TotemUIEvent::ControlX);
+        else                           out.ui.trigger(TotemUIEvent::Idle);
+    }
+};
+static UpkeepCompositeRunner upkeepCompositeRunner;
+
 } // namespace Upkeep
 
 // ================================================================
@@ -552,4 +682,5 @@ const LightAir_Game game_upkeep = {
     /* totemVarCount         */ sizeof(Upkeep::totemVars) / sizeof(*Upkeep::totemVars),
     /* hasTeams              */ true,
     /* teamBitmask           */ &Upkeep::teamBitmask,
+    /* totemRunner           */ &Upkeep::upkeepCompositeRunner,
 };

@@ -2,7 +2,7 @@
 #include "LightAir_Game.h"
 #include "LightAir_GameRunner.h"
 #include "LightAir_GameManager.h"
-#include "../ui/display/LightAir_Display.h"
+#include "../ui/player/display/LightAir_Display.h"
 #include "../input/LightAir_InputCtrl.h"
 #include "../radio/LightAir_Radio.h"
 #include "../config.h"

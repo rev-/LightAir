@@ -287,4 +287,5 @@ const LightAir_Game game_ffa = {
     /* hasTeams              */ false,
     /* teamBitmask           */ nullptr,
     /* onScoreAnnounce       */ nullptr, // use default individual ranking
+    /* totemRunner           */ nullptr, // FFA has no totem-side behaviour
 };

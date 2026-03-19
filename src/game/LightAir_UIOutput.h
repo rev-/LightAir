@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "../ui/LightAir_UICtrl.h"
+#include "../ui/player/LightAir_UICtrl.h"
 
 // ----------------------------------------------------------------
 // UIOutput — outgoing UI event queue for the game loop.

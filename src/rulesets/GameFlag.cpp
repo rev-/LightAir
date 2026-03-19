@@ -521,7 +521,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
 }
 
 static void doOutGame(const InputReport&, const RadioReport& radio,
-                      LightAir_DisplayCtrl&, GameOutput&) {
+                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
 
     // Minimum respawn timer: ignore beacons until the wait has elapsed.
@@ -535,6 +535,8 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
         if (!isMyTeamBase(ev.packet.senderId))                    continue;
         if (ev.rssi           <  NEAR_RSSI_THRESHOLD)             continue;
         canRespawn = true;
+        // Notify the BASE totem so it can show a Respawn animation.
+        out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
         break;
     }
 }
@@ -584,6 +586,85 @@ static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
         disp.showMessage("TEAM X WINS!", 0);
 }
 
+// ---- Totem-side runner: handles both FLAG and BASE totem roles ----
+//
+// Role is determined from the first activation message:
+//   0xF1 reply (player near base)       → ROLE_BASE
+//   MSG_FLAG_EVENT (0x46) broadcast     → ROLE_FLAG
+//
+// FLAG role reacts to MSG_FLAG_EVENT broadcasts that concern this
+// totem's own team's flag (identified by payload[1] == myTeam):
+//   FEVENT_TAKEN   → FlagMissing looping blink (flag carried by enemy)
+//   FEVENT_DROPPED / FEVENT_SCORED → FlagReturn one-shot (flag home)
+//
+class FlagCompositeRunner : public LightAir_TotemRunner {
+    enum Role : uint8_t { ROLE_UNKNOWN, ROLE_BASE, ROLE_FLAG };
+    Role    _role;
+    uint8_t _myTeam;  // this device's team (0=O, 1=X), from NVS
+
+    void ensureTeam() {
+        if (_myTeam == 0xFF) {
+            PlayerConfig cfg;
+            player_config_load(cfg);
+            _myTeam = (cfg.team == 1) ? 1 : 0;
+        }
+    }
+
+    void teamColor(uint8_t& r, uint8_t& g, uint8_t& b) const {
+        r = (_myTeam == 0) ? 255 :   0;
+        g = (_myTeam == 0) ?  80 :  80;
+        b = (_myTeam == 0) ?   0 : 255;
+    }
+
+public:
+    FlagCompositeRunner() : _role(ROLE_UNKNOWN), _myTeam(0xFF) {}
+
+    void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
+        ensureTeam();
+
+        // Lazy role detection on first message.
+        if (_role == ROLE_UNKNOWN) {
+            if      (msg.msgType == MSG_TOTEM_BEACON + 1) _role = ROLE_BASE;
+            else if (msg.msgType == MSG_FLAG_EVENT)        _role = ROLE_FLAG;
+        }
+
+        if (_role == ROLE_BASE) {
+            if (msg.msgType != MSG_TOTEM_BEACON + 1) return;
+            // Show Respawn animation in the player's team colour.
+            uint8_t r = (msg.team == 0) ? 255 :   0;
+            uint8_t g = (msg.team == 0) ?  80 :  80;
+            uint8_t b = (msg.team == 0) ?   0 : 255;
+            out.ui.trigger(TotemUIEvent::Respawn, r, g, b);
+            return;
+        }
+
+        if (_role == ROLE_FLAG && msg.msgType == MSG_FLAG_EVENT) {
+            if (msg.payloadLen < 2) return;
+            uint8_t subtype  = msg.payload[0];
+            uint8_t flagTeam = msg.payload[1];
+            if (flagTeam != _myTeam) return;  // not our flag
+
+            uint8_t r, g, b;
+            teamColor(r, g, b);
+            if (subtype == FEVENT_TAKEN) {
+                // Flag has left home — looping blink in our team colour.
+                out.ui.trigger(TotemUIEvent::FlagMissing, r, g, b);
+            } else if (subtype == FEVENT_DROPPED || subtype == FEVENT_SCORED) {
+                // Flag is back — one-shot fill then return to Idle.
+                out.ui.trigger(TotemUIEvent::FlagReturn, r, g, b);
+            }
+        }
+    }
+
+    void reset() override {
+        _role = ROLE_UNKNOWN;
+        PlayerConfig cfg;
+        player_config_load(cfg);
+        _myTeam = (cfg.team == 1) ? 1 : 0;
+    }
+};
+static FlagCompositeRunner flagCompositeRunner;
+
 } // namespace Flag
 
 // ================================================================
@@ -607,4 +688,5 @@ const LightAir_Game game_flag = {
     /* totemVars             */ Flag::totemVars,           /* totemVarCount          */ 10,
     /* hasTeams              */ true,
     /* teamBitmask           */ &Flag::teamBitmask,
+    /* totemRunner           */ &Flag::flagCompositeRunner,
 };

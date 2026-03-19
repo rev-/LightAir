@@ -25,11 +25,16 @@ static bool nvs_init_once() {
 
 bool player_config_load(PlayerConfig& cfg) {
     if (!nvs_init_once()) return false;
-    cfg = { 0xFF, 0xFF };  // id=unset, team=unset
+    cfg.id       = 0xFF;
+    cfg.team     = 0xFF;
+    cfg.hardware = DeviceHardware::PLAYER;  // safe default: boot as player
     nvs_handle_t h;
     if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return true; // defaults OK
     nvs_get_u8(h, CAL_KEY_ID,   &cfg.id);
     nvs_get_u8(h, CAL_KEY_TEAM, &cfg.team);
+    uint8_t hw = (uint8_t)DeviceHardware::PLAYER;
+    nvs_get_u8(h, CAL_KEY_HARDWARE, &hw);
+    cfg.hardware = (DeviceHardware)hw;
     nvs_close(h);
     return true;
 }
@@ -38,8 +43,18 @@ bool player_config_save(const PlayerConfig& cfg) {
     if (!nvs_init_once()) return false;
     nvs_handle_t h;
     if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
-    nvs_set_u8(h, CAL_KEY_ID,   cfg.id);
-    nvs_set_u8(h, CAL_KEY_TEAM, cfg.team);
+    nvs_set_u8(h, CAL_KEY_ID,       cfg.id);
+    nvs_set_u8(h, CAL_KEY_TEAM,     cfg.team);
+    nvs_set_u8(h, CAL_KEY_HARDWARE, (uint8_t)cfg.hardware);
+    esp_err_t e = nvs_commit(h); nvs_close(h);
+    return e == ESP_OK;
+}
+
+bool player_config_save_id(uint8_t id) {
+    if (!nvs_init_once()) return false;
+    nvs_handle_t h;
+    if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
+    nvs_set_u8(h, CAL_KEY_ID, id);
     esp_err_t e = nvs_commit(h); nvs_close(h);
     return e == ESP_OK;
 }
@@ -49,6 +64,15 @@ bool player_config_save_team(uint8_t team) {
     nvs_handle_t h;
     if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
     nvs_set_u8(h, CAL_KEY_TEAM, team);
+    esp_err_t e = nvs_commit(h); nvs_close(h);
+    return e == ESP_OK;
+}
+
+bool player_config_save_hardware(DeviceHardware hw) {
+    if (!nvs_init_once()) return false;
+    nvs_handle_t h;
+    if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
+    nvs_set_u8(h, CAL_KEY_HARDWARE, (uint8_t)hw);
     esp_err_t e = nvs_commit(h); nvs_close(h);
     return e == ESP_OK;
 }

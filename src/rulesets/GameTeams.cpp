@@ -382,6 +382,9 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
         if (!isMyTeamBase(ev.packet.senderId))                continue;
         if (ev.rssi < NEAR_RSSI_THRESHOLD)                    continue;
         canRespawn = true;
+        // Reply so the BASE totem can show a Respawn animation.
+        // subType 1 = team-O, 2 = team-X.
+        out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
         break;
     }
 }
@@ -434,6 +437,26 @@ static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
         disp.showMessage("TEAM X WINS!", 0);
 }
 
+// ---- Totem-side runner: BASE respawn totem ----
+//
+// Activated when a player sends a 0xF1 reply to the BASE beacon
+// (which carries this game's typeId in its radio header).
+// Shows a Respawn wipe in the player's team colour on the strip.
+//
+class BaseRunner : public LightAir_TotemRunner {
+public:
+    void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
+        if (msg.msgType != MSG_TOTEM_BEACON + 1) return;  // 0xF1 reply only
+        // msg.team: 0=O (orange), 1=X (blue)
+        uint8_t r = (msg.team == 0) ? 255 :   0;
+        uint8_t g = (msg.team == 0) ?  80 :  80;
+        uint8_t b = (msg.team == 0) ?   0 : 255;
+        out.ui.trigger(TotemUIEvent::Respawn, r, g, b);
+    }
+    void reset() override {}
+};
+static BaseRunner baseRunner;
+
 } // namespace Teams
 
 // ================================================================
@@ -457,4 +480,5 @@ const LightAir_Game game_teams = {
     /* totemVars             */ Teams::totemVars,          /* totemVarCount          */ 8,
     /* hasTeams              */ true,
     /* teamBitmask           */ &Teams::teamBitmask,
+    /* totemRunner           */ &Teams::baseRunner,
 };

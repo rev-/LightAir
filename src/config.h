@@ -2,6 +2,15 @@
 #include <stdint.h>
 
 // ---------------------------------------------------------------
+// Hardware identity — stored in NVS to select player vs totem
+// firmware path at boot time.
+// ---------------------------------------------------------------
+enum class DeviceHardware : uint8_t {
+    PLAYER = 0,   // gun / player device (default when key absent)
+    TOTEM  = 1,   // static game object (base, flag, control point)
+};
+
+// ---------------------------------------------------------------
 // Enlight hardware configuration
 //
 // SDO (FSPI MOSI)             -> FAR  LED, sine   waveform, focal-point emitter.
@@ -99,12 +108,13 @@ namespace GameDefaults {
     constexpr uint32_t ROSTER_RETRY_MS   = 1000; // ms between own re-broadcasts during discovery
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
-    constexpr uint8_t  RADIO_OUT_PAYLOAD = 239;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
+    constexpr uint8_t  RADIO_OUT_PAYLOAD = 235;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
     constexpr uint8_t  MAX_GAMES         = 8;    // max games registered in GameManager
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
     constexpr uint8_t  MAX_WINNER_VARS   = 8;    // max entries in a winnerVars[] table
-    constexpr uint32_t SCORE_RETRY_MS    = 2000; // ms between score re-broadcasts during scoringState
-    constexpr uint8_t  MAX_PARTICIPANTS  = 32;   // max roster entries (players + totems); mask must be uint32_t
+    constexpr uint32_t SCORE_RETRY_MS           = 2000; // ms between score re-broadcasts during scoringState
+    constexpr uint8_t  MAX_PARTICIPANTS         = 32;   // max roster entries (players + totems); mask must be uint32_t
+    constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
 }
 
 // ---------------------------------------------------------------

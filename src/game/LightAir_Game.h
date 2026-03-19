@@ -6,7 +6,8 @@
 #include "LightAir_ReplyRadioRule.h"
 #include "LightAir_WinnerVar.h"
 #include "LightAir_TotemVar.h"
-#include "../ui/LightAir_UICtrl.h"
+#include "LightAir_TotemRunner.h"
+#include "../ui/player/LightAir_UICtrl.h"
 #include "../config.h"
 
 // ----------------------------------------------------------------
@@ -221,4 +222,14 @@ struct LightAir_Game {
     uint8_t          totemVarCount;    // number of entries in totemVars[]
     bool             hasTeams;         // true = host assigns O/X teams in setup
     int*             teamBitmask;      // bit i=1 → player i on team X; nullptr if !hasTeams
+
+    // ---- Totem-side behaviour (optional) ----
+    //
+    // totemRunner points to the singleton runner object that implements
+    // this game's logic on totem firmware.  nullptr = this game has no
+    // totem-side behaviour (e.g. pure Free for All).
+    //
+    // The runner is activated by LightAir_TotemDriver when the first
+    // player message arrives carrying this game's typeId.
+    LightAir_TotemRunner* totemRunner;  // nullptr = no totem involvement
 };

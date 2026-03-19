@@ -4,8 +4,8 @@
 #include "LightAir_GameOutput.h"
 #include "../input/LightAir_InputCtrl.h"
 #include "../radio/LightAir_Radio.h"
-#include "../ui/display/LightAir_DisplayCtrl.h"
-#include "../ui/LightAir_UICtrl.h"
+#include "../ui/player/display/LightAir_DisplayCtrl.h"
+#include "../ui/player/LightAir_UICtrl.h"
 
 // ----------------------------------------------------------------
 // LightAir_GameRunner — runtime driver for one LightAir_Game.
