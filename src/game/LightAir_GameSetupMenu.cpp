@@ -804,7 +804,7 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
         // Broadcast MSG_ROSTER periodically so other devices discover us.
         if (millis() >= nextBroadcast) {
             _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0);
-            nextBroadcast = millis() + GameDefaults::ROSTER_RETRY_MS;
+            nextBroadcast = millis() + GameDefaults::PRESTART_BROADCAST_MS;
         }
 
         // Collect incoming MSG_ROSTER replies; refresh summary when count grows.

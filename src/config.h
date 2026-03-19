@@ -105,7 +105,8 @@ namespace GameDefaults {
     constexpr uint8_t  MSG_CONFIG        = 0x20; // radio msgType for config broadcast (even)
     constexpr uint8_t  MSG_ROSTER        = 0x22; // radio msgType for roster presence broadcast (even)
     constexpr uint32_t ROSTER_WINDOW_MS  = 3000; // ms to collect presence broadcasts during discovery
-    constexpr uint32_t ROSTER_RETRY_MS   = 1000; // ms between own re-broadcasts during discovery
+    constexpr uint32_t ROSTER_RETRY_MS        = 1000; // ms between own re-broadcasts during discovery
+    constexpr uint32_t PRESTART_BROADCAST_MS  = 2000; // ms between MSG_ROSTER broadcasts on pre-start screen
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
     constexpr uint8_t  RADIO_OUT_PAYLOAD = 235;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
