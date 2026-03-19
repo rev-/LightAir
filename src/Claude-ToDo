@@ -31,12 +31,6 @@
    ("Unknown" for 10–15). The implicit maximum of ~9 real players is never
    stated or checked.
 
-4. Player ID 0 ("00-None") is ambiguous
-   ID 0 is used as "None"/unassigned in TotemVar::id (default = 0), but
-   is technically a valid RadioPacket.senderId. If a device accidentally
-   transmits with ID 0, it could corrupt score slots. Should be an
-   explicit sentinel (0xFF or similar) for "unassigned totem."
-
 5. Message type collisions with no registry
    Game-specific message types (e.g. MSG_LIT = 0x10) are locally defined
    per game file. Nothing stops two games from using the same value.
@@ -69,6 +63,4 @@
 7   Inject Enlight* into GameRunner::begin() instead of global       Low
     pointer; pass to callbacks
 
-8   Use 0xFF as the sentinel for unassigned TotemVar::id             Medium
-    instead of 0
 
