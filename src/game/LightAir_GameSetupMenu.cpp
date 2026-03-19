@@ -869,8 +869,8 @@ void LightAir_GameSetupMenu::shareConfig() {
         genericBuf[s] = (v < GenericTotemRoles::COUNT) ? v : 0;
     }
 
-    uint8_t blob[4 + 32 * 4 + 16 * 4 + 4 + 16 * 4];  // generous upper bound
-    uint16_t len = game_serialize_config(*_game, blob, sizeof(blob), genericBuf);
+    uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
+    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, genericBuf);
     if (len > 0) _radio.broadcast(_msgType, blob, len);
 }
 

@@ -112,12 +112,18 @@ namespace GameDefaults {
     constexpr uint8_t  RADIO_OUT_PAYLOAD = 235;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
     constexpr uint8_t  MAX_GAMES         = 8;    // max games registered in GameManager
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
-    constexpr uint8_t  MAX_WINNER_VARS   = 8;    // max entries in a winnerVars[] table
+    constexpr uint8_t  MAX_WINNER_VARS   = 2;    // max entries in a winnerVars[] table (primary + tie-breaker)
     constexpr uint32_t SCORE_RETRY_MS           = 2000; // ms between score re-broadcasts during scoringState
-    constexpr uint8_t  MAX_PARTICIPANTS         = 32;   // max roster entries (players + totems); mask must be uint32_t
+    constexpr uint8_t  MAX_PARTICIPANTS         = 28;   // max roster entries (players + totems); mask must be uint32_t
     constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
     constexpr uint8_t  MSG_END_GAME             = 0xFE; // infrastructure broadcast: game ended, enter scoringState
 }
+// Worst-case fused score payload: 4-byte mask + MAX_PARTICIPANTS slots of MAX_WINNER_VARS × int32_t.
+// Must fit in a single radio packet.  Reduce MAX_PARTICIPANTS or MAX_WINNER_VARS if this fires.
+static_assert(4u + (uint32_t)GameDefaults::MAX_PARTICIPANTS
+                  * GameDefaults::MAX_WINNER_VARS * 4u
+              <= GameDefaults::RADIO_OUT_PAYLOAD,
+              "Score payload exceeds radio MTU — reduce MAX_PARTICIPANTS or MAX_WINNER_VARS");
 
 // ---------------------------------------------------------------
 // Totem identity tables
