@@ -1,0 +1,46 @@
+What's Genuinely Missing
+
+3. Score payload overflow — silent failure
+scoreBroadcastFused() in GameRunner.cpp silently skips the broadcast if the payload exceeds 235 bytes. With 32 roster members × 8 winner vars × 4 bytes each = 1024 bytes. This will fail silently in any large game. No error, no log, no validation. Scores simply won't propagate. This needs a clear runtime assertion or at minimum a constexpr calculation that warns at compile time.
+
+4. Session token distribution
+There's no explicit mechanism to distribute the session token to non-DM players. Players receive config via MSG_CONFIG but the session token isn't part of the config blob. If a player device joins after the broadcast window, or the token is set after config is sent, it will silently drop all game packets due to token mismatch.
+
+5. typeId uniqueness not enforced
+GameManager::registerGame() doesn't check for duplicate typeId values. Two registered games with the same typeId would cause silent radio filtering conflicts — the wrong TotemRunner might activate.
+Design Flaws
+
+1. Totem assignment encoding is a hack
+_totemAssignment[] in GameSetupMenu encodes two conceptually different things in one byte: values < GenericTotemRoles::COUNT (3) = generic role, values ≥ 3 = totemVar index offset by 3. This is fragile — adding a new generic role breaks all existing totemVar indices silently. It should be a struct: { bool isNamed; uint8_t value; }.
+
+2. Enlight via global pointer
+Games declare extern Enlight* enlightPtr (e.g., GameFreeForAll.cpp line ~47). The pointer is initialized in the sketch, but nothing prevents a game from dereferencing it before initialization, and there's zero compile-time safety. Enlight should be injected into GameRunner::begin() or into the game callbacks as a parameter.
+
+3. Player ID space vs team map mismatch
+_teamMap in GameRunner is size 16 (PlayerDefs::MAX_PLAYER_ID). RadioPacket.senderId is a uint8_t (0–255). Players with IDs ≥16 are silently placed on team 0. This isn't enforced at the radio layer, and PlayerDefs::playerNames only has meaningful entries for IDs 0–9 anyway ("Unknown" for 10–15). The implicit maximum of ~9 real players is never stated or checked.
+
+4. Player ID 0 ("00-None") is ambiguous
+ID 0 is used as "None"/unassigned in TotemVar::id (default = 0), but is technically a valid RadioPacket.senderId. If a device accidentally transmits with ID 0, it could corrupt score slots. Should be an explicit sentinel (0xFF or similar) for "unassigned totem."
+
+5. Message type collisions with no registry
+Game-specific message types (e.g., MSG_LIT = 0x10) are locally defined per game file. There's nothing stopping two games from using the same value. Since typeId filtering should prevent cross-game collisions at runtime, this is mostly a code hygiene issue — but it will cause confusion when debugging and could break if someone runs two game sessions with adjacent typeIds.
+
+6. Config blob has no version or length prefix
+game_apply_config() deserializes the blob by fixed offset arithmetic, assuming the blob was produced by the current firmware version. There's no version byte, no total-length field, no checksum. A DM running a different firmware version than players will apply garbage config silently (the function returns false only on typeId mismatch or buffer-too-short, not on schema mismatch).
+
+7. Discovery window is too rigid
+The 3-second ROSTER_WINDOW_MS is hardcoded. The DM can't extend it if they know a player is still booting. There's also no re-broadcast from players during the window — they depend on the timing of their own MSG_ROSTER broadcast. If a player boots at second 2.9, they're missed.
+
+
+Suggestions
+#	Suggestion	Priority
+1	Add uint8_t minPlayers to LightAir_Game; validate in GameSetupMenu before confirming	High
+2	Add void (*onEnd)(LightAir_DisplayCtrl&, GameOutput&) to LightAir_Game	Medium
+3	Add constexpr score payload size check in GameRunner::begin() or in game registration	High
+4	Include sessionToken in the MSG_CONFIG config blob	High
+5	Add typeId uniqueness check in GameManager::registerGame() — return false on collision	Medium
+6	Replace the _totemAssignment[] encoding hack with a struct { bool named; uint8_t value; }	Medium
+7	Inject Enlight* into GameRunner::begin() instead of global pointer; pass to callbacks	Low
+8	Use 0xFF as the sentinel for unassigned TotemVar::id instead of 0	Medium
+9	Add a 1-byte schema version to the config blob header	Low
+10	Make discovery window re-triggerable (manual "re-scan" key in S5)	Low
