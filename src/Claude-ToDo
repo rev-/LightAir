@@ -2,10 +2,7 @@
  WHAT'S GENUINELY MISSING
 ═══════════════════════════════════════════════════
 
-5. typeId uniqueness not enforced
-   GameManager::registerGame() doesn't check for duplicate typeId values.
-   Two registered games with the same typeId would cause silent radio
-   filtering conflicts — the wrong TotemRunner might activate.
+(none outstanding)
 
 
 ═══════════════════════════════════════════════════
@@ -73,8 +70,9 @@
 2   Add void (*onEnd)(LightAir_DisplayCtrl&, GameOutput&)            Medium
     to LightAir_Game
 
-5   Add typeId uniqueness check in GameManager::registerGame()       Medium
-    — return false on collision
+5   [DONE] typeId uniqueness enforced in registerGame(); central
+    GameTypeIds.h registry added; all game descriptors use named
+    constants; AllGames.cpp asserts on collision at boot.
 
 6   Replace _totemAssignment[] encoding hack with a struct           Medium
     { bool named; uint8_t value; }
