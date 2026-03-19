@@ -46,8 +46,8 @@ struct ScoreTable {
 // inheritance is required.
 //
 // Fields:
-//   typeId         — unique 32-bit game identifier.  Written as
-//                    the first 4 bytes of config blobs so receivers
+//   typeId         — unique 16-bit game identifier.  Written as
+//                    the first 2 bytes of config blobs so receivers
 //                    can verify compatibility before applying.
 //
 //   name           — short display name (≤15 chars) shown in the
@@ -132,7 +132,7 @@ struct ScoreTable {
 //   };
 //
 //   const LightAir_Game game_ffa = {
-//       .typeId         = 0x00000001,
+//       .typeId         = 0x0001,
 //       .name           = "Free for All",
 //       .configVars     = configVars,  .configCount    = 1,
 //       .monitorVars    = monitorVars, .monitorCount   = 2,
@@ -152,7 +152,7 @@ struct ScoreTable {
 //   }
 // ----------------------------------------------------------------
 struct LightAir_Game {
-    uint32_t             typeId;
+    uint16_t             typeId;
     const char*          name;
 
     const ConfigVar*     configVars;

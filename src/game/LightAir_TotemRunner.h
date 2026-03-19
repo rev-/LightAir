@@ -21,9 +21,9 @@
 //            then reset() to clear all state.
 //
 // Role payload convention (activation message, msgType 0xF1):
-//   payload[0..3]  = game typeId (uint32_t LE)  — read by driver
-//   payload[4]     = role byte — meaning is runner-specific
-//   payload[5..]   = optional extra data
+//   payload[0..1]  = game typeId (uint16_t LE)  — read by driver
+//   payload[2]     = role byte — meaning is runner-specific
+//   payload[3..]   = optional extra data
 //
 // Implementing a subclass:
 //

@@ -38,7 +38,7 @@ void LightAir_TotemDriver::loop() {
         // Determine which packet carries the game typeId.
         // ReplyReceived: the reply packet (ev.packet) has the sender's typeId.
         // MessageReceived: the packet itself has the sender's typeId.
-        uint32_t incomingTypeId = ev.packet.typeId;
+        uint16_t incomingTypeId = ev.packet.typeId;
 
         // MSG_ROSTER is universal; it signals end-of-game and resets the runner.
         bool isRoster = (ev.type == RadioEventType::MessageReceived &&
@@ -87,7 +87,7 @@ void LightAir_TotemDriver::loop() {
 }
 
 // ----------------------------------------------------------------
-LightAir_TotemRunner* LightAir_TotemDriver::findRunner(uint32_t typeId) const {
+LightAir_TotemRunner* LightAir_TotemDriver::findRunner(uint16_t typeId) const {
     for (uint8_t i = 0; i < _manager.count(); i++) {
         const LightAir_Game& g = _manager.game(i);
         if (g.typeId == typeId && g.totemRunner != nullptr)

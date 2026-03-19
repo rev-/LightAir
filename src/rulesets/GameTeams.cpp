@@ -463,7 +463,7 @@ static BaseRunner baseRunner;
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_teams = {
-    /* typeId                */ 0x00000002,
+    /* typeId                */ 0x0002,
     /* name                  */ "Teams",
     /* configVars            */ Teams::configVars,         /* configCount            */ 8,
     /* monitorVars           */ Teams::monitorVars,        /* monitorCount           */ 8,

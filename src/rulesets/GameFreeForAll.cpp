@@ -269,7 +269,7 @@ static const StateBehavior behaviors[] = {
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_ffa = {
-    /* typeId                */ 0x00000001,
+    /* typeId                */ 0x0001,
     /* name                  */ "Free for All",
     /* configVars            */ FFA::configVars,         /* configCount            */ 5,
     /* monitorVars           */ FFA::monitorVars,        /* monitorCount           */ 8,

@@ -656,7 +656,7 @@ static UpkeepCompositeRunner upkeepCompositeRunner;
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_upkeep = {
-    /* typeId                */ 0x00000005,
+    /* typeId                */ 0x0005,
     /* name                  */ "Upkeep",
     /* configVars            */ Upkeep::configVars,
     /* configCount           */ sizeof(Upkeep::configVars) / sizeof(*Upkeep::configVars),

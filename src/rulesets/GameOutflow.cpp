@@ -293,7 +293,7 @@ static const StateBehavior behaviors[] = {
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_outflow = {
-    /* typeId                */ 0x00000004,
+    /* typeId                */ 0x0004,
     /* name                  */ "Outflow",
     /* configVars            */ Outflow::configVars,         /* configCount            */ 5,
     /* monitorVars           */ Outflow::monitorVars,        /* monitorCount           */ 8,

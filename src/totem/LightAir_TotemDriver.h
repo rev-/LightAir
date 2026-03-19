@@ -51,7 +51,7 @@ private:
     uint32_t              _lastBeacon;  // millis() of last beacon broadcast
 
     // Find the runner for a given game typeId (nullptr if not found).
-    LightAir_TotemRunner* findRunner(uint32_t typeId) const;
+    LightAir_TotemRunner* findRunner(uint16_t typeId) const;
 
     // Flush all queued radio and UI commands to the hardware.
     void flushOutput(LightAir_TotemOutput& out);

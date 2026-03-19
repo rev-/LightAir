@@ -2,6 +2,7 @@
 #include "../enlight/EnlightCalibRoutine.h"
 #include "../nvs_config.h"
 #include <Arduino.h>
+#include <esp_random.h>
 #include <nvs_flash.h>
 #include <nvs.h>
 #include <stdio.h>
@@ -16,18 +17,20 @@
 
 uint16_t game_serialize_config(const LightAir_Game& game,
                                 uint8_t* buf, uint16_t maxLen,
-                                const uint8_t genericRoles[TotemDefs::MAX_TOTEMS]) {
-    // Minimum: 4 (typeId) + 16*4 (generic roles) must fit.
-    uint16_t minNeeded = 4
+                                const uint8_t genericRoles[TotemDefs::MAX_TOTEMS],
+                                uint8_t sessionToken) {
+    // Minimum: 2 (typeId) + 16*4 (generic roles) + 1 (sessionToken) must fit.
+    uint16_t minNeeded = 2
         + (uint16_t)game.configCount   * 4
         + (uint16_t)game.totemVarCount * 4
         + (game.hasTeams ? 4 : 0)
-        + TotemDefs::MAX_TOTEMS * 4;
+        + TotemDefs::MAX_TOTEMS * 4
+        + 1;
     if (maxLen < minNeeded) return 0;
 
-    uint32_t id = game.typeId;
-    memcpy(buf, &id, 4);
-    uint16_t pos = 4;
+    uint16_t id = game.typeId;
+    memcpy(buf, &id, 2);
+    uint16_t pos = 2;
 
     // configVars
     for (uint8_t v = 0; v < game.configCount; v++) {
@@ -57,18 +60,22 @@ uint16_t game_serialize_config(const LightAir_Game& game,
         pos += 4;
     }
 
+    // Session token (1 byte; 0 = no session isolation)
+    buf[pos++] = sessionToken;
+
     return pos;
 }
 
 bool game_apply_config(const LightAir_Game& game,
                         const uint8_t* buf, uint16_t len,
-                        uint8_t genericRolesOut[TotemDefs::MAX_TOTEMS]) {
-    if (len < 4) return false;
-    uint32_t id;
-    memcpy(&id, buf, 4);
+                        uint8_t genericRolesOut[TotemDefs::MAX_TOTEMS],
+                        uint8_t* sessionTokenOut) {
+    if (len < 2) return false;
+    uint16_t id;
+    memcpy(&id, buf, 2);
     if (id != game.typeId) return false;
 
-    uint16_t pos = 4;
+    uint16_t pos = 2;
 
     // configVars
     for (uint8_t v = 0; v < game.configCount && pos + 4 <= len; v++) {
@@ -109,6 +116,13 @@ bool game_apply_config(const LightAir_Game& game,
             pos += 4;
             genericRolesOut[s] = (uint8_t)val;
         }
+    } else {
+        pos += (uint16_t)TotemDefs::MAX_TOTEMS * 4;
+    }
+
+    // Session token (last byte)
+    if (sessionTokenOut) {
+        *sessionTokenOut = (pos < len) ? buf[pos] : 0;
     }
 
     return true;
@@ -316,10 +330,12 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
             for (uint8_t g = 0; g < _mgr.count(); g++) {
                 const LightAir_Game& candidate = _mgr.game(g);
                 uint8_t genericBuf[TotemDefs::MAX_TOTEMS] = {};
+                uint8_t token = 0;
                 if (game_apply_config(candidate, ev.packet.payload,
-                                      ev.packet.payloadLen, genericBuf)) {
+                                      ev.packet.payloadLen, genericBuf, &token)) {
                     _game    = &candidate;
                     _gameIdx = g;
+                    if (token != 0) _radio.setSessionToken(token);
                     // Apply generic roles to runner immediately so commitToRunner can use them.
                     for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++)
                         _totemAssignment[s] = genericBuf[s];
@@ -869,8 +885,13 @@ void LightAir_GameSetupMenu::shareConfig() {
         genericBuf[s] = (v < GenericTotemRoles::COUNT) ? v : 0;
     }
 
+    // Generate session token (1–255; 0 is UNSET sentinel, skip it).
+    uint8_t token = 0;
+    while (token == 0) token = (uint8_t)esp_random();
+    _radio.setSessionToken(token);
+
     uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
-    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, genericBuf);
+    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, genericBuf, token);
     if (len > 0) _radio.broadcast(_msgType, blob, len);
 }
 

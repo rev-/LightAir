@@ -12,27 +12,32 @@ class EnlightCalibRoutine;
 // ----------------------------------------------------------------
 // Config blob format (used by game_serialize_config / game_apply_config):
 //
-//   [uint32_t typeId]
+//   [uint16_t typeId]
 //   [int32_t configVar0] … [int32_t configVarN]
 //   [int32_t totemVar0.id] … [int32_t totemVarM.id]
 //   [int32_t teamBitmask]              ← only if game.hasTeams
 //   [int32_t genericRole0] … [int32_t genericRole15]   ← always 16 entries
+//   [uint8_t sessionToken]             ← last byte; 0 = no session isolation
 //
 // Receivers call game_apply_config() to update in-place.
 // ----------------------------------------------------------------
 
 // Serialize all config data of a game into a byte buffer.
+// sessionToken is appended as the final byte (0 = no session isolation).
 // Returns bytes written, or 0 if maxLen is insufficient.
 uint16_t game_serialize_config(const LightAir_Game& game,
                                 uint8_t* buf, uint16_t maxLen,
-                                const uint8_t genericRoles[TotemDefs::MAX_TOTEMS] = nullptr);
+                                const uint8_t genericRoles[TotemDefs::MAX_TOTEMS] = nullptr,
+                                uint8_t sessionToken = 0);
 
 // Apply a received config blob.
 // Returns false if typeId doesn't match or blob is too short.
 // Values are clamped to [min, max].  Writes to genericRolesOut if non-null.
+// If sessionTokenOut is non-null, the trailing session token byte is written there.
 bool game_apply_config(const LightAir_Game& game,
                         const uint8_t* buf, uint16_t len,
-                        uint8_t genericRolesOut[TotemDefs::MAX_TOTEMS] = nullptr);
+                        uint8_t genericRolesOut[TotemDefs::MAX_TOTEMS] = nullptr,
+                        uint8_t* sessionTokenOut = nullptr);
 
 // ----------------------------------------------------------------
 // LightAir_GameSetupMenu — unified DM/player pre-game menu.

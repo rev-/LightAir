@@ -9,7 +9,7 @@
 // be identical on every device in a session.  They cannot come from
 // NVS because C++ needs them at compile time.
 // ----------------------------------------------------------------
-#define RADIO_MAX_PAYLOAD  235  // max bytes in payload[] (250 ESP-NOW limit − 15 header)
+#define RADIO_MAX_PAYLOAD  237  // max bytes in payload[] (250 ESP-NOW limit − 13 header)
 #define RADIO_MAX_PENDING  10   // max sent msgs awaiting reply
 #define RADIO_DEDUP_WINDOW 16   // flood-relay dedup history depth
 
@@ -31,7 +31,7 @@ namespace RadioToken {
     constexpr uint8_t UNSET = 0x00;  // token not yet assigned; accepts all
 }
 namespace RadioTypeId {
-    constexpr uint32_t UNIVERSAL = 0x00000000;  // accepted by any device regardless of game
+    constexpr uint16_t UNIVERSAL = 0x0000;  // accepted by any device regardless of game
 }
 
 
@@ -56,14 +56,14 @@ struct __attribute__((packed)) RadioPacket {
     uint8_t  team;
     uint8_t  msgType;        // even = request, odd = reply
     uint8_t  sessionToken;   // packets with non-matching token are silently dropped
-    uint32_t typeId;         // game type; RadioTypeId::UNIVERSAL (0) = accepted always
+    uint16_t typeId;         // game type; RadioTypeId::UNIVERSAL (0) = accepted always
     uint32_t timestamp;      // millis() at send time; echoed unchanged in replies
     uint8_t  resend;         // flood hop count; receiver re-broadcasts with resend-1
     uint8_t  payloadLen;     // number of valid bytes in payload[]
     uint8_t  payload[RADIO_MAX_PAYLOAD];
 };
 // Wire size for a given packet: offsetof(RadioPacket, payload) + payloadLen
-// Header size: 15 bytes (250 ESP-NOW limit − 15 = 235 payload bytes)
+// Header size: 13 bytes (250 ESP-NOW limit − 13 = 237 payload bytes)
 
 // ----------------------------------------------------------------
 // Events returned by poll()
@@ -116,7 +116,7 @@ public:
     // Update active game typeId (call at game start / totem activation / reset).
     // Packets whose typeId != 0 and != _typeId are silently dropped.
     // Set to RadioTypeId::UNIVERSAL (0) to accept all game types (e.g. before game starts).
-    void setTypeId(uint32_t typeId) { _typeId = typeId; }
+    void setTypeId(uint16_t typeId) { _typeId = typeId; }
 
     // Compute own MAC, call transport.begin(), add broadcast peer.
     bool begin();
@@ -159,7 +159,7 @@ public:
     void setSessionToken(uint8_t token) { _sessionToken = token; }
 
     // Active game typeId (read-back, e.g. for the totem driver).
-    uint32_t typeId() const { return _typeId; }
+    uint16_t typeId() const { return _typeId; }
 
     // Poll — call once per loop iteration.
     // Drains all received packets and checks all pending timeouts in one call.
@@ -170,7 +170,7 @@ private:
     LightAir_RadioTransport& _transport;
     uint8_t     _playerId;
     uint8_t     _sessionToken;
-    uint32_t    _typeId;    // active game typeId; 0 = universal (accept all)
+    uint16_t    _typeId;    // active game typeId; 0 = universal (accept all)
     uint8_t     _role;
     uint8_t     _team;
     RadioConfig _config;

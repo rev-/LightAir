@@ -109,7 +109,7 @@ namespace GameDefaults {
     constexpr uint32_t PRESTART_BROADCAST_MS  = 2000; // ms between MSG_ROSTER broadcasts on pre-start screen
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
-    constexpr uint8_t  RADIO_OUT_PAYLOAD = 235;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
+    constexpr uint8_t  RADIO_OUT_PAYLOAD = 237;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
     constexpr uint8_t  MAX_GAMES         = 8;    // max games registered in GameManager
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
     constexpr uint8_t  MAX_WINNER_VARS   = 2;    // max entries in a winnerVars[] table (primary + tie-breaker)

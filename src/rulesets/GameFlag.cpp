@@ -671,7 +671,7 @@ static FlagCompositeRunner flagCompositeRunner;
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_flag = {
-    /* typeId                */ 0x00000003,
+    /* typeId                */ 0x0003,
     /* name                  */ "Flag",
     /* configVars            */ Flag::configVars,          /* configCount            */ 8,
     /* monitorVars           */ Flag::monitorVars,         /* monitorCount           */ 8,
