@@ -23,13 +23,9 @@
    compile-time safety. Enlight should be injected into GameRunner::begin()
    or into the game callbacks as a parameter.
 
-3. Player ID space vs team map mismatch
-   _teamMap in GameRunner is size 16 (PlayerDefs::MAX_PLAYER_ID).
-   RadioPacket.senderId is a uint8_t (0–255). Players with IDs ≥ 16 are
-   silently placed on team 0. This isn't enforced at the radio layer, and
-   PlayerDefs::playerNames only has meaningful entries for IDs 0–9 anyway
-   ("Unknown" for 10–15). The implicit maximum of ~9 real players is never
-   stated or checked.
+3. [DONE] MAX_PLAYER_ID raised to 17 (IDs 1–16 = 16 usable players,
+   ID 0 reserved). playerNames and playerShort extended accordingly.
+   Out-of-range guards already present in all game files.
 
 5. Message type collisions with no registry
    Game-specific message types (e.g. MSG_LIT = 0x10) are locally defined

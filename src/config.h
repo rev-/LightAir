@@ -179,7 +179,7 @@ namespace GenericTotemRoles {
 // into these tables for display and winner announcements.
 // ---------------------------------------------------------------
 namespace PlayerDefs {
-    constexpr uint8_t MAX_PLAYER_ID = 16;
+    constexpr uint8_t MAX_PLAYER_ID = 17;  // IDs 0 (reserved) + 1–16 (players)
 
     // Long readable names (≤11 chars + null).
     constexpr char playerNames[MAX_PLAYER_ID][12] = {
@@ -187,11 +187,13 @@ namespace PlayerDefs {
         "04-Blue",   "05-Orange",  "06-Red",     "07-Lime",
         "08-Magenta","09-Purple",  "10-Unknown", "11-Unknown",
         "12-Unknown","13-Unknown", "14-Unknown", "15-Unknown",
+        "16-Unknown",
     };
 
     // Short 3-capital-letter labels (3 chars + null).
     constexpr char playerShort[MAX_PLAYER_ID][4] = {
         "NON","CLR","GRN","YLW","BLU","ORG","RED","LME",
         "MAG","PUR","UN0","UN1","UN2","UN3","UN4","UN5",
+        "UN6",
     };
 }
