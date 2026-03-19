@@ -1,8 +1,6 @@
 #include <LightAir.h>
 #include <string.h>
 #include "GameTypeIds.h"
-#include "RadioMessages.h"
-#include "TotemProtocol.h"
 
 // ================================================================
 // Flag — capture-the-flag team game: O vs X.
@@ -78,6 +76,7 @@ enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 using RadioMsg::MSG_LIT;            // 0x10
 using RadioMsg::MSG_FLAG_EVENT;     // 0x50
 using RadioMsg::MSG_SCORE_COLLECT;  // 0x12
+using RadioMsg::MSG_TOTEM_BEACON;   // 0xF0
 
 // ---- Reply sub-types ----
 enum ReplySubType : uint8_t {

@@ -1,5 +1,6 @@
 #include "LightAir_TotemDriver.h"
-#include "../rulesets/TotemProtocol.h"
+using RadioMsg::MSG_TOTEM_BEACON;
+using RadioMsg::MSG_TOTEM_ROSTER;
 
 // ----------------------------------------------------------------
 LightAir_TotemDriver::LightAir_TotemDriver(LightAir_Radio&       radio,

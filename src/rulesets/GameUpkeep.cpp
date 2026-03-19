@@ -2,8 +2,6 @@
 #include <string.h>
 #include "GameTypeIds.h"
 #include <stdio.h>
-#include "RadioMessages.h"
-#include "TotemProtocol.h"
 
 // ================================================================
 // Upkeep — two-team game with Control Points (CPs).
@@ -77,6 +75,7 @@ using RadioMsg::MSG_LIT;            // 0x10
 using RadioMsg::MSG_CP_BEACON;      // 0x52  (0x53 = presence reply; subType 1=team-O, 2=team-X)
 using RadioMsg::MSG_CP_SCORE;       // 0x54
 using RadioMsg::MSG_SCORE_COLLECT;  // 0x12
+using RadioMsg::MSG_TOTEM_BEACON;   // 0xF0
 
 // ---- Reply sub-types for MSG_LIT ----
 enum ReplySubType : uint8_t {
