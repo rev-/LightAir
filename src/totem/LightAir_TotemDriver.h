@@ -10,12 +10,13 @@
 //
 // A totem is a passive game object (respawn base, flag, control
 // point) that:
-//   1. Periodically broadcasts MSG_TOTEM_BEACON (0xF0) via
-//      broadcastUniversal() so players can detect it by RSSI.
-//   2. Starts IDLE (typeId = UNIVERSAL): accepts all packets.
-//   3. On the first incoming packet whose typeId != UNIVERSAL,
+//   1. Starts IDLE (typeId = UNIVERSAL): accepts all packets.
+//   2. On the first incoming packet whose typeId != UNIVERSAL,
 //      looks up the matching LightAir_TotemRunner in the game
 //      registry, activates it, and forwards the packet.
+//   3. Once active, periodically broadcasts MSG_TOTEM_BEACON (0xF0)
+//      as a game-typed packet so only players in the same session
+//      receive it (used for RSSI proximity detection).
 //   4. Forwards every subsequent game-type-matching packet to
 //      runner->onMessage().  Calls runner->update() every tick.
 //   5. On MSG_ROSTER (universal): calls runner->onRoster(), then

@@ -1,5 +1,6 @@
 #include <LightAir.h>
 #include <string.h>
+#include "GameTypeIds.h"
 #include <stdio.h>
 #include "TotemProtocol.h"
 
@@ -656,7 +657,7 @@ static UpkeepCompositeRunner upkeepCompositeRunner;
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_upkeep = {
-    /* typeId                */ 0x0005,
+    /* typeId                */ GameTypeId::UPKEEP,
     /* name                  */ "Upkeep",
     /* configVars            */ Upkeep::configVars,
     /* configCount           */ sizeof(Upkeep::configVars) / sizeof(*Upkeep::configVars),

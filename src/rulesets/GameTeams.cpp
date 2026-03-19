@@ -1,5 +1,6 @@
 #include <LightAir.h>
 #include <string.h>
+#include "GameTypeIds.h"
 #include "TotemProtocol.h"
 
 // ================================================================
@@ -463,7 +464,7 @@ static BaseRunner baseRunner;
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_teams = {
-    /* typeId                */ 0x0002,
+    /* typeId                */ GameTypeId::TEAMS,
     /* name                  */ "Teams",
     /* configVars            */ Teams::configVars,         /* configCount            */ 8,
     /* monitorVars           */ Teams::monitorVars,        /* monitorCount           */ 8,

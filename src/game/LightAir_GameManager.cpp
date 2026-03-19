@@ -12,6 +12,9 @@
 
 bool LightAir_GameManager::registerGame(const LightAir_Game& game) {
     if (_count >= GameDefaults::MAX_GAMES) return false;
+    for (uint8_t i = 0; i < _count; i++) {
+        if (_games[i]->typeId == game.typeId) return false;  // duplicate typeId
+    }
     _games[_count++] = &game;
     return true;
 }

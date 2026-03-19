@@ -1,4 +1,5 @@
 #include <LightAir.h>
+#include "GameTypeIds.h"
 
 // ================================================================
 // Free For All — every player shines every other player.
@@ -269,7 +270,7 @@ static const StateBehavior behaviors[] = {
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_ffa = {
-    /* typeId                */ 0x0001,
+    /* typeId                */ GameTypeId::FREE_FOR_ALL,
     /* name                  */ "Free for All",
     /* configVars            */ FFA::configVars,         /* configCount            */ 5,
     /* monitorVars           */ FFA::monitorVars,        /* monitorCount           */ 8,

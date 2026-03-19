@@ -132,7 +132,7 @@ struct ScoreTable {
 //   };
 //
 //   const LightAir_Game game_ffa = {
-//       .typeId         = 0x0001,
+//       .typeId         = GameTypeId::FREE_FOR_ALL,
 //       .name           = "Free for All",
 //       .configVars     = configVars,  .configCount    = 1,
 //       .monitorVars    = monitorVars, .monitorCount   = 2,

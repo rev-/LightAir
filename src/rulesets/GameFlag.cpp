@@ -1,5 +1,6 @@
 #include <LightAir.h>
 #include <string.h>
+#include "GameTypeIds.h"
 #include "TotemProtocol.h"
 
 // ================================================================
@@ -671,7 +672,7 @@ static FlagCompositeRunner flagCompositeRunner;
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_flag = {
-    /* typeId                */ 0x0003,
+    /* typeId                */ GameTypeId::FLAG,
     /* name                  */ "Flag",
     /* configVars            */ Flag::configVars,          /* configCount            */ 8,
     /* monitorVars           */ Flag::monitorVars,         /* monitorCount           */ 8,
