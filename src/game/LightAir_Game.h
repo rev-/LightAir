@@ -232,4 +232,9 @@ struct LightAir_Game {
     // The runner is activated by LightAir_TotemDriver when the first
     // player message arrives carrying this game's typeId.
     LightAir_TotemRunner* totemRunner;  // nullptr = no totem involvement
+
+    // Called by GameRunner immediately before esp_restart() after the player
+    // presses A+B on the end-game screen.  Use for last-moment display updates
+    // or NVS writes.  nullptr = skip.
+    void (*onEnd)(LightAir_DisplayCtrl&) = nullptr;
 };

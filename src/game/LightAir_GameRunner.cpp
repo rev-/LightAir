@@ -1,6 +1,7 @@
 #include "LightAir_GameRunner.h"
 #include <Arduino.h>
 #include <string.h>
+#include <esp_system.h>
 
 /* =========================================================
  *   BEGIN — one-time setup
@@ -48,6 +49,10 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
                 display.bindStringVariable(var.asChars, var.icon, var.col, var.row);
         }
     }
+
+    // Create an empty binding set (no vars) used to freeze the display after scoreAnnounce.
+    _emptyBindingSetId = display.createBindingSet();
+    _endExitReady = false;
 
     // Reset state and activate the initial binding set.
     *game.currentState = game.initialState;
@@ -141,16 +146,31 @@ void LightAir_GameRunner::update() {
                                   ? (1u << _rosterCount) - 1u
                                   : 0xFFFFFFFFu;
 
-    // Step 2a: Score intercept — handle scoreMsgType before DirectRadioRules.
+    // Step 2a: Infrastructure intercepts — handle before DirectRadioRules.
     // Marked events are skipped by the DirectRadioRules loop below.
-    bool scoreHandled[RADIO_MAX_PENDING] = {};
+    bool infraHandled[RADIO_MAX_PENDING] = {};
+
+    // MSG_END_GAME: force scoringState entry on any device that hasn't yet transitioned.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType != GameDefaults::MSG_END_GAME) continue;
+        infraHandled[e] = true;
+        if (scoringEnabled && *_game->currentState != _game->scoringState) {
+            *_game->currentState = _game->scoringState;
+            activateStateDisplay(_game->scoringState);
+            output.ui.trigger(LightAir_UICtrl::UIEvent::EndGame);
+        }
+    }
+
+    // Score messages: accumulate per-player scores while in scoringState.
     if (scoringEnabled && _scoreActive) {
         for (uint8_t e = 0; e < radio.count; e++) {
             const RadioEvent& ev = radio.events[e];
             if (ev.type != RadioEventType::MessageReceived) continue;
             if (ev.packet.msgType != _game->scoreMsgType)  continue;
 
-            scoreHandled[e] = true;
+            infraHandled[e] = true;
 
             // Validate payload size.
             uint8_t expectedLen = 4 + _rosterCount * slotSize;
@@ -178,16 +198,17 @@ void LightAir_GameRunner::update() {
             if (_scoreAccumMask == expectedMask && !_scoreResultShown) {
                 scoreAnnounce();
                 _scoreResultShown = true;
+                postScoreAnnounce();
             }
         }
     }
 
     // Step 2b: DirectRadioRules — handle all incoming MessageReceived events.
-    // Events intercepted by score collection above are skipped.
+    // Events intercepted above (MSG_END_GAME, score messages) are skipped.
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type != RadioEventType::MessageReceived) continue;
-        if (scoreHandled[e]) continue;
+        if (infraHandled[e]) continue;
 
         bool matched = false;
         for (uint8_t i = 0; i < _game->directRadioRuleCount; i++) {
@@ -259,12 +280,15 @@ void LightAir_GameRunner::update() {
                 _scoreAccumMask |= (1u << ownIdx);
             }
 
+            // Flood MSG_END_GAME so devices still in a non-scoring state transition.
+            output.radio.broadcast(GameDefaults::MSG_END_GAME, nullptr, 0, 2);
             scoreBroadcastFused(output);
             _scoreSentAt = millis();
 
             if (_scoreAccumMask == expectedMask) {
                 scoreAnnounce();
                 _scoreResultShown = true;
+                postScoreAnnounce();
             }
         } else if (cur != _game->scoringState) {
             _scoreActive = false;
@@ -290,6 +314,23 @@ void LightAir_GameRunner::update() {
     // ---- Step 3: OUTPUT ----
     _display->update();
     flushOutput(output);
+
+    // A+B chord on end-game screen triggers reboot.
+    if (_endExitReady) {
+        bool aDown = false, bDown = false;
+        for (uint8_t i = 0; i < inputs.keyEventCount; i++) {
+            const InputReport::KeyEntry& ke = inputs.keyEvents[i];
+            if (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD) {
+                if (ke.key == 'A') aDown = true;
+                if (ke.key == 'B') bDown = true;
+            }
+        }
+        if (aDown && bDown) {
+            if (_game->onEnd) _game->onEnd(*_display);
+            _display->update();
+            esp_restart();
+        }
+    }
 
     // Enforce fixed loop duration.
     while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
@@ -425,6 +466,17 @@ void LightAir_GameRunner::scoreAnnounce() const {
     }
 
     _display->showMessage(msg, 0);  // → top row
+}
+
+// Freeze the display after winner announcement and arm the A+B exit.
+// Activating the empty binding set stops live MonitorVar polling;
+// only the static tray messages from scoreAnnounce() remain visible.
+void LightAir_GameRunner::postScoreAnnounce() {
+    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
+    _display->activateBindingSet(_emptyBindingSetId);
+    _display->print(0, fh * 5, "A+B: Restart");
+    _display->flush();
+    _endExitReady = true;
 }
 
 /* =========================================================

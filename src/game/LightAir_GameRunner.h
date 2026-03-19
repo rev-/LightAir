@@ -128,6 +128,8 @@ private:
     // ---- End-game score accumulation ----
     bool     _scoreActive      = false;   // true while in scoringState; prevents re-trigger
     bool     _scoreResultShown = false;   // winner display already triggered
+    bool     _endExitReady     = false;   // true after scoreAnnounce; A+B triggers reboot
+    uint8_t  _emptyBindingSetId = 255;    // binding set with no vars; activated after scoreAnnounce
     uint32_t _scoreAccumMask   = 0;       // bit r set = _scoreSlots[r] is valid
     uint32_t _scoreSentAt      = 0;       // millis() of last broadcast; 0 = not yet sent
     uint8_t  _scoreSlots[GameDefaults::MAX_PARTICIPANTS][GameDefaults::MAX_WINNER_VARS * 4];
@@ -137,6 +139,7 @@ private:
     void flushOutput(const GameOutput& out);
 
     // Score collection helpers (all defined in .cpp)
+    void postScoreAnnounce();
     void scoreFillSlot(uint8_t* buf) const;
     bool scoreSlotBeats(const uint8_t* a, const uint8_t* b) const;
     bool scoreSlotsEqual(const uint8_t* a, const uint8_t* b) const;

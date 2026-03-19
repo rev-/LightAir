@@ -116,6 +116,7 @@ namespace GameDefaults {
     constexpr uint32_t SCORE_RETRY_MS           = 2000; // ms between score re-broadcasts during scoringState
     constexpr uint8_t  MAX_PARTICIPANTS         = 32;   // max roster entries (players + totems); mask must be uint32_t
     constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
+    constexpr uint8_t  MSG_END_GAME             = 0xFE; // infrastructure broadcast: game ended, enter scoringState
 }
 
 // ---------------------------------------------------------------
