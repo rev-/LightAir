@@ -339,5 +339,5 @@ Can land without changing player firmware or config blob format.
 3. **CP score fusion details** — the host takes roster response totals as authoritative
    over real-time `MSG_CP_SCORE` tracking. If multiple CP totems exist (e.g. Upkeep with 6),
    each reports independently; the host sums across all CP roster responses.
-   Partial delivery (some CP totems not responding at roster time) leaves gaps —
-   decide whether to use last-known broadcast values as fallback.
+   Non-responding totems (after the existing retry logic exhausts) leave a gap in the
+   final tally — this is accepted behaviour.
