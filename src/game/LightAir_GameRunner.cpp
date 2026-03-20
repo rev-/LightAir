@@ -203,6 +203,45 @@ void LightAir_GameRunner::update() {
         }
     }
 
+    // MSG_TOTEM_BEACON: reply with the totem's assigned role encoded in payload[0].
+    // Encoding: named totem → payload[0] = 0x80 | totemVarIdx (high bit = activation marker);
+    //           generic totem → payload[0] = 0xFF, payload[1] = GenericTotemRoles value.
+    // The high bit distinguishes this activation reply from player respawn replies
+    // (which use payload[0] = team+1, always < 0x80).
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type      != RadioEventType::MessageReceived)     continue;
+        if (ev.packet.msgType != RadioMsg::MSG_TOTEM_BEACON)     continue;
+        infraHandled[e] = true;
+
+        uint8_t id = ev.packet.senderId;
+        if (!TotemDefs::isTotemId(id)) {
+            output.radio.reply(ev.packet);
+            continue;
+        }
+
+        // Check named totem list first.
+        bool replied = false;
+        for (uint8_t t = 0; t < _totemCount; t++) {
+            if (_totems[t].id != id) continue;
+            uint8_t buf[1] = { (uint8_t)(0x80u | _totems[t].roleIdx) };
+            output.radio.replyWithPayload(ev.packet, buf, 1);
+            replied = true;
+            break;
+        }
+        if (replied) continue;
+
+        // Check generic role.
+        uint8_t slot = TotemDefs::totemIndex(id);
+        uint8_t gr   = genericTotemRole(slot);
+        if (gr != GenericTotemRoles::NONE) {
+            uint8_t buf[2] = { 0xFF, gr };
+            output.radio.replyWithPayload(ev.packet, buf, 2);
+        } else {
+            output.radio.reply(ev.packet);  // unconfigured totem — empty reply
+        }
+    }
+
     // Step 2b: DirectRadioRules — handle all incoming MessageReceived events.
     // Events intercepted above (MSG_END_GAME, score messages) are skipped.
     for (uint8_t e = 0; e < radio.count; e++) {
@@ -506,8 +545,8 @@ void LightAir_GameRunner::flushOutput(const GameOutput& out) {
     // Radio replies
     for (uint8_t i = 0; i < out.radio.replyCount; i++) {
         const RadioReplyMsg& r = out.radio.replies[i];
-        if (r.subType)
-            _radio->replyTo(r.senderId, r.origMsgType, r.origTimestamp, &r.subType, 1);
+        if (r.payloadLen)
+            _radio->replyTo(r.senderId, r.origMsgType, r.origTimestamp, r.payload, r.payloadLen);
         else
             _radio->replyTo(r.senderId, r.origMsgType, r.origTimestamp);
     }

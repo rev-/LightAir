@@ -34,7 +34,8 @@ struct RadioReplyMsg {
     uint8_t  senderId;
     uint8_t  origMsgType;
     uint32_t origTimestamp;
-    uint8_t  subType;   // payload[0] of reply; 0 = no payload
+    uint8_t  payload[4];    // reply payload bytes
+    uint8_t  payloadLen;    // 0 = no payload
 };
 
 struct RadioOutput {
@@ -83,6 +84,24 @@ struct RadioOutput {
         r.senderId         = original.senderId;
         r.origMsgType      = original.msgType;
         r.origTimestamp    = original.timestamp;
-        r.subType          = subType;
+        if (subType) {
+            r.payload[0] = subType;
+            r.payloadLen = 1;
+        } else {
+            r.payloadLen = 0;
+        }
+    }
+
+    // Queue a reply with an explicit multi-byte payload (up to 4 bytes).
+    void replyWithPayload(const RadioPacket& original,
+                          const uint8_t* pl, uint8_t len) {
+        if (replyCount >= GameDefaults::RADIO_REPLY_MAX) return;
+        if (len > 4) len = 4;
+        RadioReplyMsg& r   = replies[replyCount++];
+        r.senderId         = original.senderId;
+        r.origMsgType      = original.msgType;
+        r.origTimestamp    = original.timestamp;
+        r.payloadLen       = len;
+        if (len && pl) memcpy(r.payload, pl, len);
     }
 };

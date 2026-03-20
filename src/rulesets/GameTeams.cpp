@@ -445,7 +445,10 @@ static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
 class BaseRunner : public LightAir_TotemRunner {
 public:
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        if (msg.msgType != MSG_TOTEM_BEACON + 1) return;  // 0xF1 reply only
+        if (msg.msgType != MSG_TOTEM_BEACON + 1) return;
+        // Activation reply from host carries high bit in payload[0]; skip it.
+        if (msg.payloadLen >= 1 && (msg.payload[0] & 0x80)) return;
+        // Player respawn request — show Respawn animation in the player's team colour.
         // msg.team: 0=O (orange), 1=X (blue)
         uint8_t r = (msg.team == 0) ? 255 :   0;
         uint8_t g = (msg.team == 0) ?  80 :  80;
