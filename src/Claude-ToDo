@@ -9,12 +9,46 @@
  DESIGN FLAWS
 ═══════════════════════════════════════════════════
 
-1. Totem assignment encoding is a hack
-   _totemAssignment[] in GameSetupMenu encodes two conceptually different
-   things in one byte: values < GenericTotemRoles::COUNT (3) = generic
-   role, values ≥ 3 = totemVar index offset by 3. This is fragile —
-   adding a new generic role breaks all existing totemVar indices silently.
-   Should be a struct: { bool isNamed; uint8_t value; }.
+1. Totem assignment encoding conflates two unrelated domains in one byte
+
+   _totemAssignment[slot] is a uint8_t that encodes two semantically
+   different things depending on its value:
+
+     • 0..COUNT-1  → a GenericTotemRoles constant (NONE=0, BONUS=1, MALUS=2)
+     • COUNT..255  → a totemVar index, stored as (index + COUNT)
+
+   COUNT is currently 3 (config.h:261), so totemVar[0] is stored as 3,
+   totemVar[1] as 4, and so on.
+
+   THE REAL PROBLEM — this creates a hidden structural dependency between
+   two otherwise independent concepts. If a new generic role is added
+   (e.g. SHIELD, making COUNT=4), every persisted and in-memory encoded
+   value for a totemVar silently shifts by one:
+     • old value 3 meant totemVar[0], now means totemVar[-1] → decoded garbage
+     • old value 4 meant totemVar[1], now means totemVar[0] → wrong slot
+
+   There is no assertion, no version check, and no compiler error. The bug
+   would appear only at runtime as subtly wrong totem assignments.
+
+   The decoding arithmetic (val - GenericTotemRoles::COUNT) is repeated at
+   four independent call sites (GameSetupMenu.cpp lines 725, 969, 1019 and
+   the reverse at 705, 564), all of which silently become wrong together.
+
+   The same encoded bytes are written to a shared config blob that is
+   broadcast over radio and stored to disk. Any saved session config would
+   be silently misread after a COUNT change.
+
+   SUGGESTED FIX — replace the byte with a tagged struct:
+
+     struct TotemAssignment {
+         bool    named;   // false = generic role, true = totemVar index
+         uint8_t value;   // GenericTotemRoles constant  OR  totemVar index
+     };
+
+   The two domains never overlap; no arithmetic needed; adding a generic
+   role has zero effect on totemVar indices. The config blob serialisation
+   would need a matching change (e.g. one byte for role, one for named-idx)
+   but that is an explicit, auditable migration rather than a silent shift.
 
 2. Enlight via global pointer
    Games declare extern Enlight* enlightPtr (e.g. GameFreeForAll.cpp ~47).
