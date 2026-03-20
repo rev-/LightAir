@@ -57,6 +57,27 @@
    compile-time safety. Enlight should be injected into GameRunner::begin()
    or into the game callbacks as a parameter.
 
+9. FLAG_EVENT misused as totem beacon
+
+   The FLAG runner (GameFlag.cpp) currently detects its own role by
+   receiving MSG_FLAG_EVENT — meaning the totem does not know it is a
+   flag totem until the first external state-change event arrives. It
+   has no update() and broadcasts nothing, so players have no way to
+   locate the flag proactively.
+
+   MSG_FLAG_EVENT should be reserved for state transitions only
+   (FEVENT_TAKEN, FEVENT_DROPPED, FEVENT_SCORED). A separate
+   MSG_FLAG_BEACON is needed, mirroring the CP model:
+     • update() broadcasts MSG_FLAG_BEACON periodically
+     • players reply to MSG_FLAG_BEACON to interact (pick up flag)
+     • MSG_FLAG_BEACON + 1 reply triggers ROLE_FLAG detection,
+       replacing the current reliance on receiving an EVENT
+
+   Also requires a new entry in the RadioMsg registry (config.h).
+   The onMessage() role-detection logic in FlagCompositeRunner and
+   its missing update() both become well-defined by this change.
+   This also supersedes the "no update()" note in item #8 for Flag.
+
 4. Config blob truncation is silent
    game_apply_config() has no total-length check. A truncated blob
    (e.g. partial radio delivery) passes the typeId check and is
