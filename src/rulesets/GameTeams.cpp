@@ -45,7 +45,6 @@
 //   startEnergy  : energy at start / after respawn (default 50).
 //   rechargeSecs : secs after trigger release before energy restored (default 10).
 //   gameTime     : total game duration in seconds (default 900).
-//   numBases     : total BASE totems (must be even; step 2; default 2).
 //   friendlyFire : 0 = off (default), 1 = on.
 //   endPoints    : team-kill limit to trigger early GAME_END; 0 = disabled (default).
 // ================================================================
@@ -61,7 +60,7 @@ enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 using RadioMsg::MSG_LIT;            // 0x10
 using RadioMsg::MSG_SCORE_COLLECT;  // 0x12
 using RadioMsg::MSG_POINT_REPORT;   // 0x14
-using RadioMsg::MSG_TOTEM_BEACON;   // 0xF0
+using RadioMsg::MSG_BASE_BEACON;    // 0x56
 
 // ---- Reply sub-types ----
 enum ReplySubType : uint8_t {
@@ -82,7 +81,6 @@ static int respawnSecs  = 30;
 static int startEnergy  = 50;
 static int rechargeSecs = 10;
 static int gameTime     = 900;
-static int numBases     = 2;
 static int friendlyFire = 0;
 static int endPoints    = 0;
 
@@ -104,10 +102,9 @@ static uint32_t releaseAt        = 0;
 static uint8_t  myTeam;       // 0=O, 1=X; loaded from PlayerConfig in onBegin
 static int      teamBitmask;  // bit i=1 → player i on team X; filled from config blob
 
-// ---- Totem device-ID slots (pointed to by TotemVars) ----
-// The setup menu writes the assigned device ID into these via TotemVar::id pointers.
-static int baseO_ids[4] = {0, 0, 0, 0};   // team-O base device IDs
-static int baseX_ids[4] = {0, 0, 0, 0};   // team-X base device IDs
+// ---- Totem device-ID slots (populated in onBegin from runner) ----
+static uint8_t baseO_ids[4] = {};   // team-O base device IDs
+static uint8_t baseX_ids[4] = {};   // team-X base device IDs
 
 // ---- Config vars (startup menu) ----
 static const ConfigVar configVars[] = {
@@ -117,7 +114,6 @@ static const ConfigVar configVars[] = {
     { "Energy",       &startEnergy,    10,   100,  10 },
     { "Recharge",     &rechargeSecs,   0,    20,   5  },
     { "Time",         &gameTime,       60,   900,  60 },
-    { "Bases",        &numBases,       2,    8,    2  },
     { "FriendlyFire", &friendlyFire,   0,    1,    1  },
     { "EndPoints",    &endPoints,      0,    50,   5  },
 };
@@ -136,30 +132,13 @@ static const MonitorVar monitorVars[] = {
     MonitorVar::Int("Shone",  &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1),
 };
 
-// ---- TotemVars — 4 team-O slots + 4 team-X slots, all optional ----
-static const TotemVar totemVars[] = {
-    //  name        id ptr         team  required
-    { "Base O1", &baseO_ids[0],  0,    false },
-    { "Base O2", &baseO_ids[1],  0,    false },
-    { "Base O3", &baseO_ids[2],  0,    false },
-    { "Base O4", &baseO_ids[3],  0,    false },
-    { "Base X1", &baseX_ids[0],  1,    false },
-    { "Base X2", &baseX_ids[1],  1,    false },
-    { "Base X3", &baseX_ids[2],  1,    false },
-    { "Base X4", &baseX_ids[3],  1,    false },
+// ---- Totem requirements ----
+static const LightAir_TotemRequirement totemRequirements[] = {
+    { TotemRoleId::BASE_O, 0, 4, nullptr },
+    { TotemRoleId::BASE_X, 0, 4, nullptr },
+    { TotemRoleId::BONUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+    { TotemRoleId::MALUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
 };
-
-// ---- Helper: is senderId one of this player's active team base totems? ----
-static bool isMyTeamBase(uint8_t senderId) {
-    const int* ids     = (myTeam == 0) ? baseO_ids : baseX_ids;
-    int        active  = numBases / 2;   // half the bases belong to each team
-    if (active > 4) active = 4;
-    for (int i = 0; i < active; i++) {
-        if (ids[i] != 0 && (uint8_t)ids[i] == senderId)
-            return true;
-    }
-    return false;
-}
 
 // ---- Helper: is targetId on the opposing team? ----
 static bool isOpponent(uint8_t targetId) {
@@ -190,7 +169,8 @@ static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
 };
 
 // ---- onBegin ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui) {
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
+                    const LightAir_GameRunner& runner) {
     lives         = startLives;
     energy        = startEnergy;
     gameTimeLeft  = gameTime;
@@ -207,6 +187,11 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui)
     PlayerConfig cfg;
     player_config_load(cfg);
     myTeam = (cfg.team == 1) ? 1 : 0;
+
+    for (uint8_t i = 0; i < 4; i++) {
+        baseO_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_O, i);
+        baseX_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_X, i);
+    }
 
     if (ui) ui->defineCustomAction(LightAir_UICtrl::UIEvent::Custom1, kFriendlyFireAction);
 }
@@ -372,14 +357,15 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
     // Minimum respawn timer: ignore beacons until the wait has elapsed.
     if (millis() < respawnAt) return;
 
-    // Scan for a qualifying BASE beacon: must come from this player's team
-    // base and have RSSI above the proximity threshold (~2 m indoors).
+    // Scan for a qualifying BASE beacon: must belong to this player's team
+    // and have RSSI above the proximity threshold (~2 m indoors).
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
-        if (ev.type       != RadioEventType::MessageReceived) continue;
-        if (ev.packet.msgType != MSG_TOTEM_BEACON)            continue;
-        if (!isMyTeamBase(ev.packet.senderId))                continue;
-        if (ev.rssi < NEAR_RSSI_THRESHOLD)                    continue;
+        if (ev.type           != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
+        if (ev.packet.payloadLen < 1)                             continue;
+        if (ev.packet.payload[0] != myTeam)                       continue;
+        if (ev.rssi < NEAR_RSSI_THRESHOLD)                        continue;
         canRespawn = true;
         // Reply so the BASE totem can show a Respawn animation.
         // subType 1 = team-O, 2 = team-X.
@@ -436,26 +422,6 @@ static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
         disp.showMessage("TEAM X WINS!", 0);
 }
 
-// ---- Totem-side runner: BASE respawn totem ----
-//
-// Activated when a player sends a 0xF1 reply to the BASE beacon
-// (which carries this game's typeId in its radio header).
-// Shows a Respawn wipe in the player's team colour on the strip.
-//
-class BaseRunner : public LightAir_TotemRunner {
-public:
-    void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        if (msg.msgType != MSG_TOTEM_BEACON + 1) return;
-        // msg.team: 0=O (orange), 1=X (blue)
-        uint8_t r = (msg.team == 0) ? 255 :   0;
-        uint8_t g = (msg.team == 0) ?  80 :  80;
-        uint8_t b = (msg.team == 0) ?   0 : 255;
-        out.ui.trigger(TotemUIEvent::Respawn, r, g, b);
-    }
-    void reset() override {}
-};
-static BaseRunner baseRunner;
-
 } // namespace Teams
 
 // ================================================================
@@ -464,7 +430,7 @@ static BaseRunner baseRunner;
 const LightAir_Game game_teams = {
     /* typeId                */ GameTypeId::TEAMS,
     /* name                  */ "Teams",
-    /* configVars            */ Teams::configVars,         /* configCount            */ 8,
+    /* configVars            */ Teams::configVars,         /* configCount            */ 7,
     /* monitorVars           */ Teams::monitorVars,        /* monitorCount           */ 8,
     /* directRadioRules      */ Teams::directRadioRules,   /* directRadioRuleCount   */ 6,
     /* replyRadioRules       */ Teams::replyRadioRules,    /* replyRadioRuleCount    */ 3,
@@ -476,8 +442,7 @@ const LightAir_Game game_teams = {
     /* scoringState          */ Teams::GAME_END,
     /* scoreMsgType          */ Teams::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ Teams::onScoreAnnounce,
-    /* totemVars             */ Teams::totemVars,          /* totemVarCount          */ 8,
+    /* totemRequirements     */ Teams::totemRequirements,  /* totemRequirementCount  */ 4,
     /* hasTeams              */ true,
     /* teamBitmask           */ &Teams::teamBitmask,
-    /* totemRunner           */ &Teams::baseRunner,
 };

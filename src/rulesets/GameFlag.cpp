@@ -12,9 +12,10 @@
 //
 // Radio messages (even = request, odd = reply)
 //   MSG_LIT           (0x10) : unicast hit to a target player.
-//   MSG_TOTEM_BEACON  (0xF0) : broadcast by all totems periodically (received only).
-//                              Flag and base totems are distinguished by sender ID
-//                              against the game's TotemVar assignments.
+//   MSG_FLAG_BEACON   (0x58) : broadcast by FLAG totems; payload[0]=state(0=in,1=out),
+//                              payload[1]=flagTeam. Used for flag pickup.
+//   MSG_BASE_BEACON   (0x56) : broadcast by BASE totems; payload[0]=team.
+//                              Used for respawn (OUT_GAME) and flag scoring (IN_GAME).
 //   MSG_FLAG_EVENT    (0x50) : broadcast by a player on flag state change.
 //   MSG_SCORE_COLLECT (0x12) : broadcast per-player scores during GAME_END.
 //
@@ -60,7 +61,6 @@
 //   startEnergy  : energy at start / after respawn (default 50).
 //   rechargeSecs : seconds after trigger release before energy restored (default 10).
 //   gameTime     : total game duration in seconds (default 900).
-//   numBases     : total BASE totems (must be even; step 2; default 2).
 //   friendlyFire : 0 = off (default), 1 = on.
 //   endPoints    : team-capture limit to trigger early GAME_END; 0 = disabled.
 // ================================================================
@@ -76,7 +76,8 @@ enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 using RadioMsg::MSG_LIT;            // 0x10
 using RadioMsg::MSG_FLAG_EVENT;     // 0x50
 using RadioMsg::MSG_SCORE_COLLECT;  // 0x12
-using RadioMsg::MSG_TOTEM_BEACON;   // 0xF0
+using RadioMsg::MSG_BASE_BEACON;    // 0x56
+using RadioMsg::MSG_FLAG_BEACON;    // 0x58
 
 // ---- Reply sub-types ----
 enum ReplySubType : uint8_t {
@@ -103,7 +104,6 @@ static int respawnSecs  = 30;
 static int startEnergy  = 50;
 static int rechargeSecs = 10;
 static int gameTime     = 900;
-static int numBases     = 2;
 static int friendlyFire = 0;
 static int endPoints    = 0;
 
@@ -135,11 +135,9 @@ static int      teamBitmask;
 // which are not exposed through the UIOutput queue.
 static LightAir_UICtrl* uiCtrl = nullptr;
 
-// ---- Totem device-ID slots (written by setup menu via TotemVar::id) ----
-static int baseO_ids[4] = {0, 0, 0, 0};
-static int baseX_ids[4] = {0, 0, 0, 0};
-static int flagO_id     = 0;
-static int flagX_id     = 0;
+// ---- Totem device-ID slots (populated in onBegin from runner) ----
+static uint8_t baseO_ids[4] = {};
+static uint8_t baseX_ids[4] = {};
 
 // ---- Config vars ----
 static const ConfigVar configVars[] = {
@@ -149,7 +147,6 @@ static const ConfigVar configVars[] = {
     { "Energy",       &startEnergy,     10,   100,  10 },
     { "Recharge",     &rechargeSecs,    0,    20,   5  },
     { "Time",         &gameTime,        60,   900,  60 },
-    { "Bases",        &numBases,        2,    8,    2  },
     { "FriendlyFire", &friendlyFire,    0,    1,    1  },
     { "EndPoints",    &endPoints,       0,    10,   1  },
 };
@@ -168,19 +165,14 @@ static const MonitorVar monitorVars[] = {
     MonitorVar::Int("Shone",  &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1),
 };
 
-// ---- TotemVars ----
-static const TotemVar totemVars[] = {
-    //  name        id ptr          team  required
-    { "Base O1", &baseO_ids[0],  0,    false },
-    { "Base O2", &baseO_ids[1],  0,    false },
-    { "Base O3", &baseO_ids[2],  0,    false },
-    { "Base O4", &baseO_ids[3],  0,    false },
-    { "Base X1", &baseX_ids[0],  1,    false },
-    { "Base X2", &baseX_ids[1],  1,    false },
-    { "Base X3", &baseX_ids[2],  1,    false },
-    { "Base X4", &baseX_ids[3],  1,    false },
-    { "Flag O",  &flagO_id,      0,    true  },
-    { "Flag X",  &flagX_id,      1,    true  },
+// ---- Totem requirements ----
+static const LightAir_TotemRequirement totemRequirements[] = {
+    { TotemRoleId::FLAG_O, 1, 1, nullptr },   // exactly 1 required
+    { TotemRoleId::FLAG_X, 1, 1, nullptr },   // exactly 1 required
+    { TotemRoleId::BASE_O, 0, 4, nullptr },
+    { TotemRoleId::BASE_X, 0, 4, nullptr },
+    { TotemRoleId::BONUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+    { TotemRoleId::MALUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
 };
 
 // ---- Continuous flag-carry background alert ----
@@ -208,22 +200,6 @@ static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
 // ---- Helpers ----
 static uint8_t enemyTeam()            { return myTeam ^ 1; }
 
-static bool isMyTeamBase(uint8_t senderId) {
-    const int* ids   = (myTeam == 0) ? baseO_ids : baseX_ids;
-    int        active = numBases / 2;
-    if (active > 4) active = 4;
-    for (int i = 0; i < active; i++) {
-        if (ids[i] != 0 && (uint8_t)ids[i] == senderId)
-            return true;
-    }
-    return false;
-}
-
-static bool isEnemyFlag(uint8_t senderId) {
-    int opFlagId = (myTeam == 0) ? flagX_id : flagO_id;
-    return opFlagId != 0 && (uint8_t)opFlagId == senderId;
-}
-
 static bool isOpponent(uint8_t targetId) {
     if (targetId >= PlayerDefs::MAX_PLAYER_ID) return false;
     bool targetOnX = (teamBitmask >> targetId) & 1;
@@ -231,7 +207,8 @@ static bool isOpponent(uint8_t targetId) {
 }
 
 // ---- onBegin ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui) {
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
+                    const LightAir_GameRunner& runner) {
     lives              = startLives;
     energy             = startEnergy;
     gameTimeLeft       = gameTime;
@@ -253,6 +230,11 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui)
     PlayerConfig cfg;
     player_config_load(cfg);
     myTeam = (cfg.team == 1) ? 1 : 0;
+
+    for (uint8_t i = 0; i < 4; i++) {
+        baseO_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_O, i);
+        baseX_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_X, i);
+    }
 
     if (ui) ui->defineCustomAction(LightAir_UICtrl::UIEvent::Custom1, kFriendlyFireAction);
 }
@@ -475,12 +457,15 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
 
     // ---- Flag pickup ----
     // Attempt only when we are not already carrying and the enemy flag is free.
+    // Flag totem broadcasts MSG_FLAG_BEACON with payload[0]=0 (in) and payload[1]=flagTeam.
     if (!hasEnemyFlag) {
         for (uint8_t e = 0; e < radio.count; e++) {
             const RadioEvent& ev = radio.events[e];
             if (ev.type           != RadioEventType::MessageReceived) continue;
-            if (ev.packet.msgType != MSG_TOTEM_BEACON)                continue;
-            if (!isEnemyFlag(ev.packet.senderId))                     continue;
+            if (ev.packet.msgType != MSG_FLAG_BEACON)                 continue;
+            if (ev.packet.payloadLen < 2)                             continue;
+            if (ev.packet.payload[0] != 0)                           continue;  // 0 = FLAG_IN
+            if (ev.packet.payload[1] != enemyTeam())                 continue;
             if (ev.rssi           <  FLAG_RSSI_THRESHOLD)             continue;
             if (enemyFlagCarrierId != 0xFF)                           continue;
 
@@ -500,8 +485,9 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
         for (uint8_t e = 0; e < radio.count; e++) {
             const RadioEvent& ev = radio.events[e];
             if (ev.type           != RadioEventType::MessageReceived) continue;
-            if (ev.packet.msgType != MSG_TOTEM_BEACON)                continue;
-            if (!isMyTeamBase(ev.packet.senderId))                    continue;
+            if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
+            if (ev.packet.payloadLen < 1)                             continue;
+            if (ev.packet.payload[0] != myTeam)                      continue;
             if (ev.rssi           <  NEAR_RSSI_THRESHOLD)             continue;
 
             flagsCaptured++;
@@ -530,8 +516,9 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type           != RadioEventType::MessageReceived) continue;
-        if (ev.packet.msgType != MSG_TOTEM_BEACON)                continue;
-        if (!isMyTeamBase(ev.packet.senderId))                    continue;
+        if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
+        if (ev.packet.payloadLen < 1)                             continue;
+        if (ev.packet.payload[0] != myTeam)                      continue;
         if (ev.rssi           <  NEAR_RSSI_THRESHOLD)             continue;
         canRespawn = true;
         // Notify the BASE totem so it can show a Respawn animation.
@@ -585,91 +572,6 @@ static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
         disp.showMessage("TEAM X WINS!", 0);
 }
 
-// ---- Totem-side runner: handles both FLAG and BASE totem roles ----
-//
-// Role is determined from the first activation message:
-//   0xF1 reply (player near base)       → ROLE_BASE
-//   MSG_FLAG_EVENT (0x46) broadcast     → ROLE_FLAG
-//
-// FLAG role reacts to MSG_FLAG_EVENT broadcasts that concern this
-// totem's own team's flag (identified by payload[1] == myTeam):
-//   FEVENT_TAKEN   → FlagMissing looping blink (flag carried by enemy)
-//   FEVENT_DROPPED / FEVENT_SCORED → FlagReturn one-shot (flag home)
-//
-class FlagCompositeRunner : public LightAir_TotemRunner {
-    enum Role : uint8_t { ROLE_UNKNOWN, ROLE_BASE, ROLE_FLAG };
-    Role    _role;
-    uint8_t _myTeam;  // this device's team (0=O, 1=X), from NVS
-
-    void ensureTeam() {
-        if (_myTeam == 0xFF) {
-            PlayerConfig cfg;
-            player_config_load(cfg);
-            _myTeam = (cfg.team == 1) ? 1 : 0;
-        }
-    }
-
-    void teamColor(uint8_t& r, uint8_t& g, uint8_t& b) const {
-        r = (_myTeam == 0) ? 255 :   0;
-        g = (_myTeam == 0) ?  80 :  80;
-        b = (_myTeam == 0) ?   0 : 255;
-    }
-
-public:
-    FlagCompositeRunner() : _role(ROLE_UNKNOWN), _myTeam(0xFF) {}
-
-    void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        ensureTeam();
-
-        // Activation: 0xF1 from host carries payload[0] = totemVarIdx.
-        // totemVars[0..7] = BASE slots, totemVars[8..9] = FLAG slots.
-        if (_role == ROLE_UNKNOWN) {
-            if (msg.msgType != MSG_TOTEM_BEACON + 1) return;
-            if (msg.payloadLen < 1) return;
-            if (msg.payload[0] != 0xFF) {
-                uint8_t roleIdx = msg.payload[0];
-                _role = (roleIdx < 8) ? ROLE_BASE : ROLE_FLAG;
-            }
-            return;  // activation message is not a player interaction
-        }
-
-        if (_role == ROLE_BASE) {
-            if (msg.msgType != MSG_TOTEM_BEACON + 1) return;
-            // Show Respawn animation in the player's team colour.
-            uint8_t r = (msg.team == 0) ? 255 :   0;
-            uint8_t g = (msg.team == 0) ?  80 :  80;
-            uint8_t b = (msg.team == 0) ?   0 : 255;
-            out.ui.trigger(TotemUIEvent::Respawn, r, g, b);
-            return;
-        }
-
-        if (_role == ROLE_FLAG && msg.msgType == MSG_FLAG_EVENT) {
-            if (msg.payloadLen < 2) return;
-            uint8_t subtype  = msg.payload[0];
-            uint8_t flagTeam = msg.payload[1];
-            if (flagTeam != _myTeam) return;  // not our flag
-
-            uint8_t r, g, b;
-            teamColor(r, g, b);
-            if (subtype == FEVENT_TAKEN) {
-                // Flag has left home — looping blink in our team colour.
-                out.ui.trigger(TotemUIEvent::FlagMissing, r, g, b);
-            } else if (subtype == FEVENT_DROPPED || subtype == FEVENT_SCORED) {
-                // Flag is back — one-shot fill then return to Idle.
-                out.ui.trigger(TotemUIEvent::FlagReturn, r, g, b);
-            }
-        }
-    }
-
-    void reset() override {
-        _role = ROLE_UNKNOWN;
-        PlayerConfig cfg;
-        player_config_load(cfg);
-        _myTeam = (cfg.team == 1) ? 1 : 0;
-    }
-};
-static FlagCompositeRunner flagCompositeRunner;
-
 } // namespace Flag
 
 // ================================================================
@@ -678,7 +580,7 @@ static FlagCompositeRunner flagCompositeRunner;
 const LightAir_Game game_flag = {
     /* typeId                */ GameTypeId::FLAG,
     /* name                  */ "Flag",
-    /* configVars            */ Flag::configVars,          /* configCount            */ 8,
+    /* configVars            */ Flag::configVars,          /* configCount            */ 7,
     /* monitorVars           */ Flag::monitorVars,         /* monitorCount           */ 8,
     /* directRadioRules      */ Flag::directRadioRules,    /* directRadioRuleCount   */ 10,
     /* replyRadioRules       */ Flag::replyRadioRules,     /* replyRadioRuleCount    */ 3,
@@ -690,8 +592,7 @@ const LightAir_Game game_flag = {
     /* scoringState          */ Flag::GAME_END,
     /* scoreMsgType          */ Flag::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ Flag::onScoreAnnounce,
-    /* totemVars             */ Flag::totemVars,           /* totemVarCount          */ 10,
+    /* totemRequirements     */ Flag::totemRequirements,   /* totemRequirementCount  */ 6,
     /* hasTeams              */ true,
     /* teamBitmask           */ &Flag::teamBitmask,
-    /* totemRunner           */ &Flag::flagCompositeRunner,
 };

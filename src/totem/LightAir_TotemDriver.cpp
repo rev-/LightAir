@@ -4,11 +4,10 @@ using RadioMsg::MSG_TOTEM_BEACON;
 using RadioMsg::MSG_TOTEM_ROSTER;
 
 // ----------------------------------------------------------------
-LightAir_TotemDriver::LightAir_TotemDriver(LightAir_Radio&              radio,
-                                            LightAir_GameManager&         manager,
-                                            LightAir_TotemUICtrl&         ui,
-                                            LightAir_TotemRoleManager*    roleMgr)
-    : _radio(radio), _manager(manager), _ui(ui), _roleMgr(roleMgr),
+LightAir_TotemDriver::LightAir_TotemDriver(LightAir_Radio&            radio,
+                                            LightAir_TotemUICtrl&      ui,
+                                            LightAir_TotemRoleManager& roleMgr)
+    : _radio(radio), _ui(ui), _roleMgr(roleMgr),
       _runner(nullptr), _lastBeacon(0)
 {}
 
@@ -61,28 +60,18 @@ void LightAir_TotemDriver::loop() {
             continue;
         }
 
-        // Activate runner on first game-specific packet.
+        // Activate runner on first 0xF1 activation reply.
+        // payload[0] holds the roleId.
         if (!_runner && incomingTypeId != RadioTypeId::UNIVERSAL) {
-            // New path: role-registry lookup on 0xF1 with a known roleId.
-            // payload[0] holds the roleId; 0xFF is reserved for the legacy path.
-            if (_roleMgr &&
-                ev.packet.msgType == (RadioMsg::MSG_TOTEM_BEACON + 1) &&
-                ev.packet.payloadLen >= 1 &&
-                ev.packet.payload[0] != 0xFF) {
+            if (ev.packet.msgType == (RadioMsg::MSG_TOTEM_BEACON + 1) &&
+                ev.packet.payloadLen >= 1) {
                 uint8_t roleId = ev.packet.payload[0];
-                const TotemRole* role = _roleMgr->findById(roleId);
+                const TotemRole* role = _roleMgr.findById(roleId);
                 if (role && role->runner) {
                     _runner = role->runner;
                     _radio.setTypeId(incomingTypeId);
                     _runner->onActivate(ev.packet.payload, ev.packet.payloadLen, out);
-                    continue;
                 }
-            }
-            // Legacy path: find runner by game typeId, forward the full packet.
-            _runner = findRunner(incomingTypeId);
-            if (_runner) {
-                _radio.setTypeId(incomingTypeId);
-                _runner->onMessage(ev.packet, out);
             }
             continue;
         }
@@ -103,16 +92,6 @@ void LightAir_TotemDriver::loop() {
 
     // ---- 5. Advance strip animation ----
     _ui.update();
-}
-
-// ----------------------------------------------------------------
-LightAir_TotemRunner* LightAir_TotemDriver::findRunner(uint16_t typeId) const {
-    for (uint8_t i = 0; i < _manager.count(); i++) {
-        const LightAir_Game& g = _manager.game(i);
-        if (g.typeId == typeId && g.totemRunner != nullptr)
-            return g.totemRunner;
-    }
-    return nullptr;
 }
 
 // ----------------------------------------------------------------

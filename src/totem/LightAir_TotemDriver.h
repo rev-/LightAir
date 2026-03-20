@@ -1,6 +1,5 @@
 #pragma once
 #include "../radio/LightAir_Radio.h"
-#include "../game/LightAir_GameManager.h"
 #include "../game/LightAir_TotemOutput.h"
 #include "../ui/totem/LightAir_TotemUICtrl.h"
 #include "../config.h"
@@ -14,16 +13,16 @@
 //   1. Periodically broadcasts MSG_TOTEM_BEACON (0xF0) via
 //      broadcastUniversal() so players can detect it by RSSI.
 //   2. Starts IDLE (typeId = UNIVERSAL): accepts all packets.
-//   3. On the first incoming packet whose typeId != UNIVERSAL,
-//      looks up the matching LightAir_TotemRunner in the game
-//      registry, activates it, and forwards the packet.
+//   3. On the first incoming 0xF1 activation reply, looks up the
+//      roleId (payload[0]) in the role registry and activates the
+//      matching runner via onActivate().
 //   4. Forwards every subsequent game-type-matching packet to
 //      runner->onMessage().  Calls runner->update() every tick.
 //   5. On MSG_TOTEM_ROSTER (universal): calls runner->onRoster(), then
 //      runner->reset() and returns to IDLE (typeId = UNIVERSAL).
 //
 // Lifecycle:
-//   LightAir_TotemDriver driver(radio, manager, ui);
+//   LightAir_TotemDriver driver(radio, ui, roleMgr);
 //   driver.begin();
 //   loop() { driver.loop(); }
 //
@@ -32,14 +31,9 @@
 // ----------------------------------------------------------------
 class LightAir_TotemDriver {
 public:
-    // roleMgr is optional.  When provided, activation replies whose
-    // payload[0] matches a registered roleId use the new onActivate()
-    // path.  When nullptr (or roleId not found), falls back to the
-    // legacy typeId-based runner lookup.
-    LightAir_TotemDriver(LightAir_Radio&              radio,
-                         LightAir_GameManager&         manager,
-                         LightAir_TotemUICtrl&         ui,
-                         LightAir_TotemRoleManager*    roleMgr = nullptr);
+    LightAir_TotemDriver(LightAir_Radio&            radio,
+                         LightAir_TotemUICtrl&      ui,
+                         LightAir_TotemRoleManager& roleMgr);
 
     // Calls radio.begin() and triggers the Idle background animation.
     bool begin();
@@ -50,15 +44,11 @@ public:
 
 private:
     LightAir_Radio&            _radio;
-    LightAir_GameManager&      _manager;
     LightAir_TotemUICtrl&      _ui;
-    LightAir_TotemRoleManager* _roleMgr;    // optional; nullptr = legacy path only
+    LightAir_TotemRoleManager& _roleMgr;
 
     LightAir_TotemRunner* _runner;      // nullptr = IDLE
     uint32_t              _lastBeacon;  // millis() of last beacon broadcast
-
-    // Find the runner for a given game typeId (nullptr if not found).
-    LightAir_TotemRunner* findRunner(uint16_t typeId) const;
 
     // Flush all queued radio and UI commands to the hardware.
     void flushOutput(LightAir_TotemOutput& out);

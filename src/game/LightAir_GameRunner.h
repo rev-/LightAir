@@ -75,28 +75,27 @@ public:
 
     // ---- Totem management ----
     // Call clearTotems() + addTotem() before begin() to record totem roles.
-    // roleIdx is an index into game.totemRoles[].
+    // roleId is a TotemRoleId constant.
     void clearTotems();
-    void addTotem(uint8_t id, uint8_t roleIdx);  // ignores duplicates; caps at MAX_PARTICIPANTS
+    void addTotem(uint8_t id, uint8_t roleId);  // ignores duplicates; caps at MAX_PARTICIPANTS
 
     // Read-back accessors (for game logic or post-game queries).
     uint8_t rosterCount()          const { return _rosterCount; }
     uint8_t rosterId(uint8_t i)    const { return _roster[i]; }
     uint8_t totemCount()           const { return _totemCount; }
     uint8_t totemId(uint8_t i)     const { return _totems[i].id; }
-    uint8_t totemRole(uint8_t i)   const { return _totems[i].roleIdx; }
+    uint8_t totemRole(uint8_t i)   const { return _totems[i].roleId; }
+
+    // Returns the device ID of the idx-th totem assigned the given roleId,
+    // or 0 if fewer than idx+1 totems have that role.
+    // Use in onBegin to populate local totem-ID caches.
+    uint8_t totemIdForRole(uint8_t roleId, uint8_t idx = 0) const;
 
     // ---- Team map ----
     // Call setTeam() from LightAir_GameSetupMenu::commitToRunner() before begin().
     // teamOf() returns 0=O or 1=X; 0 if id is out of range.
     void    setTeam(uint8_t id, uint8_t team);
     uint8_t teamOf(uint8_t id)  const;
-
-    // ---- Generic totem roles ----
-    // slot = TotemDefs::totemIndex(id) (0 = totem01 = ID 254).
-    // Call setGenericTotemRole() from commitToRunner() before begin().
-    void    setGenericTotemRole(uint8_t slot, uint8_t role);
-    uint8_t genericTotemRole(uint8_t slot) const;
 
 private:
     const LightAir_Game*  _game    = nullptr;
@@ -114,16 +113,13 @@ private:
     uint8_t _roster[GameDefaults::MAX_PARTICIPANTS];
     uint8_t _rosterCount = 0;
 
-    // ---- Totem entries (id → role index) ----
-    struct TotemEntry { uint8_t id; uint8_t roleIdx; };
+    // ---- Totem entries (id → roleId) ----
+    struct TotemEntry { uint8_t id; uint8_t roleId; };
     TotemEntry _totems[GameDefaults::MAX_PARTICIPANTS];
     uint8_t    _totemCount = 0;
 
     // ---- Team assignments ----
     uint8_t _teamMap[PlayerDefs::MAX_PLAYER_ID]  = {};  // 0=O, 1=X per player ID
-
-    // ---- Generic totem roles (by TotemDefs slot index) ----
-    uint8_t _genericRoles[TotemDefs::MAX_TOTEMS] = {};  // GenericTotemRoles value per slot
 
     // ---- End-game score accumulation ----
     bool     _scoreActive      = false;   // true while in scoringState; prevents re-trigger

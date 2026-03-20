@@ -57,8 +57,6 @@
 //   startEnergy      : energy at start / after respawn (default 50).
 //   rechargeSecs     : secs after trigger release before energy restored (default 10).
 //   gameTime         : total game duration in seconds (default 900).
-//   numControlPoints : number of active CP totems (default 3, max 6).
-//   numBases         : total BASE totems across both teams (default 2, step 2).
 //   friendlyFire     : 0 = off (default), 1 = on.
 //   endPoints        : combined CP-point limit for early GAME_END; 0 = disabled (default 150).
 // ================================================================
@@ -75,7 +73,7 @@ using RadioMsg::MSG_LIT;            // 0x10
 using RadioMsg::MSG_CP_BEACON;      // 0x52  (0x53 = presence reply; subType 1=team-O, 2=team-X)
 using RadioMsg::MSG_CP_SCORE;       // 0x54
 using RadioMsg::MSG_SCORE_COLLECT;  // 0x12
-using RadioMsg::MSG_TOTEM_BEACON;   // 0xF0
+using RadioMsg::MSG_BASE_BEACON;    // 0x56
 
 // ---- Reply sub-types for MSG_LIT ----
 enum ReplySubType : uint8_t {
@@ -98,8 +96,6 @@ static int respawnSecs      = 30;
 static int startEnergy      = 50;
 static int rechargeSecs     = 10;
 static int gameTime         = 900;
-static int numControlPoints = 3;
-static int numBases         = 2;
 static int friendlyFire     = 0;
 static int endPoints        = 150;
 
@@ -131,10 +127,11 @@ static int      teamBitmask;    // bit i=1 → player i on team X
 static bool     triggerWasActive = false;
 static uint32_t releaseAt        = 0;
 
-// ---- Totem device-ID slots ----
-static int cpIds[6]     = {0, 0, 0, 0, 0, 0};
-static int baseO_ids[3] = {0, 0, 0};
-static int baseX_ids[3] = {0, 0, 0};
+// ---- Totem device-ID slots (populated in onBegin from runner) ----
+static uint8_t cpIds[6]     = {};
+static uint8_t baseO_ids[3] = {};
+static uint8_t baseX_ids[3] = {};
+static uint8_t numActiveCPs = 0;
 
 // ---- Config vars ----
 static const ConfigVar configVars[] = {
@@ -144,8 +141,6 @@ static const ConfigVar configVars[] = {
     { "Energy",        &startEnergy,       10,   100,  10  },
     { "Recharge",      &rechargeSecs,       0,    20,   5  },
     { "Time",          &gameTime,          60,   900,  60  },
-    { "CtrlPts",       &numControlPoints,   3,     6,   1  },
-    { "Bases",         &numBases,           2,     6,   2  },
     { "FriendlyFire",  &friendlyFire,       0,     1,   1  },
     { "EndPoints",     &endPoints,          0,   500,  50  },
 };
@@ -165,31 +160,21 @@ static const MonitorVar monitorVars[] = {
     MonitorVar::Int("Shone",  &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1),
 };
 
-// ---- TotemVars — 3 required CPs, 3 optional CPs, 3+3 optional BASEs ----
-static const TotemVar totemVars[] = {
-    //  name       id ptr          team  required
-    { "CP 1",    &cpIds[0],       0,    true  },
-    { "CP 2",    &cpIds[1],       0,    true  },
-    { "CP 3",    &cpIds[2],       0,    true  },
-    { "CP 4",    &cpIds[3],       0,    false },
-    { "CP 5",    &cpIds[4],       0,    false },
-    { "CP 6",    &cpIds[5],       0,    false },
-    { "Base O1", &baseO_ids[0],   0,    true  },
-    { "Base O2", &baseO_ids[1],   0,    false },
-    { "Base O3", &baseO_ids[2],   0,    false },
-    { "Base X1", &baseX_ids[0],   1,    true  },
-    { "Base X2", &baseX_ids[1],   1,    false },
-    { "Base X3", &baseX_ids[2],   1,    false },
+// ---- Totem requirements ----
+static const LightAir_TotemRequirement totemRequirements[] = {
+    { TotemRoleId::CP,     3, 6, nullptr },
+    { TotemRoleId::BASE_O, 1, 3, nullptr },
+    { TotemRoleId::BASE_X, 1, 3, nullptr },
+    { TotemRoleId::BONUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+    { TotemRoleId::MALUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
 };
 
 // ---- Helpers ----
 
 static bool isMyTeamBase(uint8_t senderId) {
-    const int* ids   = (myTeam == 0) ? baseO_ids : baseX_ids;
-    int        count = numBases / 2;
-    if (count > 3) count = 3;
-    for (int i = 0; i < count; i++) {
-        if (ids[i] != 0 && (uint8_t)ids[i] == senderId)
+    const uint8_t* ids = (myTeam == 0) ? baseO_ids : baseX_ids;
+    for (int i = 0; i < 3; i++) {
+        if (ids[i] != 0 && ids[i] == senderId)
             return true;
     }
     return false;
@@ -203,9 +188,8 @@ static bool isOpponent(uint8_t targetId) {
 
 // Returns the index (0–5) of a known CP with the given sender ID, or -1.
 static int8_t cpIndex(uint8_t senderId) {
-    int active = (numControlPoints < 6) ? numControlPoints : 6;
-    for (int i = 0; i < active; i++) {
-        if (cpIds[i] != 0 && (uint8_t)cpIds[i] == senderId)
+    for (int i = 0; i < numActiveCPs; i++) {
+        if (cpIds[i] != 0 && cpIds[i] == senderId)
             return (int8_t)i;
     }
     return -1;
@@ -231,7 +215,8 @@ static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
 };
 
 // ---- onBegin ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui) {
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
+                    const LightAir_GameRunner& runner) {
     lives            = startLives;
     energy           = startEnergy;
     gameTimeLeft     = gameTime;
@@ -252,6 +237,17 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui)
     PlayerConfig cfg;
     player_config_load(cfg);
     myTeam = (cfg.team == 1) ? 1 : 0;
+
+    numActiveCPs = 0;
+    for (uint8_t i = 0; i < 6; i++) {
+        uint8_t id = runner.totemIdForRole(TotemRoleId::CP, i);
+        if (id == 0) break;
+        cpIds[numActiveCPs++] = id;
+    }
+    for (uint8_t i = 0; i < 3; i++) {
+        baseO_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_O, i);
+        baseX_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_X, i);
+    }
 
     if (ui) ui->defineCustomAction(LightAir_UICtrl::UIEvent::Custom1, kFriendlyFireAction);
 }
@@ -464,8 +460,9 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type           != RadioEventType::MessageReceived) continue;
-        if (ev.packet.msgType != MSG_TOTEM_BEACON)                continue;
-        if (!isMyTeamBase(ev.packet.senderId))                    continue;
+        if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
+        if (ev.packet.payloadLen < 1)                             continue;
+        if (ev.packet.payload[0] != myTeam)                      continue;
         if (ev.rssi            < NEAR_BASE_RSSI)                  continue;
         canRespawn = true;
         // Notify the BASE totem so it can show a Respawn animation.
@@ -520,140 +517,6 @@ static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
     else                  disp.showMessage("TEAM X WINS!", 0);
 }
 
-// ---- Totem-side runner: handles both BASE and CP (control-point) totem roles ----
-//
-// Role is determined from the first activation message:
-//   0xF1 reply (player near base)        → ROLE_BASE
-//   0x55 reply to MSG_CP_BEACON (0x54)   → ROLE_CP
-//
-// BASE role: shows Respawn animation when a player acknowledges the beacon.
-//
-// CP role:
-//   - Broadcasts MSG_CP_BEACON (0x54) every 2 s with current cpTeam in payload[0].
-//   - Collects 0x55 replies (subType 1=O, 2=X) in a 2 s window.
-//   - After 2 s: if only one team replied, attach to that team; both or none = hold.
-//   - After 10 s unchanged attachment: broadcast MSG_CP_SCORE (payload[0]=team),
-//     restart countdown.
-//   - Shows ControlO / ControlX / ControlContest / Idle background accordingly.
-//
-class UpkeepCompositeRunner : public LightAir_TotemRunner {
-    enum Role : uint8_t { ROLE_UNKNOWN, ROLE_BASE, ROLE_CP };
-
-    static constexpr uint32_t CP_BEACON_INTERVAL_MS = 2000;
-    static constexpr uint32_t CP_SCORE_INTERVAL_MS  = 10000;
-
-    Role    _role;
-    uint8_t _cpTeam;       // CP_TEAM_NONE (0xFF), 0=O, 1=X
-    bool    _presenceO;    // team-O player replied in current window
-    bool    _presenceX;    // team-X player replied in current window
-    uint32_t _windowStart; // millis() when current 2 s window opened
-    uint32_t _attachStart; // millis() when current attachment started
-    uint32_t _lastBeacon;  // millis() of last 0x54 beacon sent
-
-public:
-    UpkeepCompositeRunner()
-        : _role(ROLE_UNKNOWN), _cpTeam(CP_TEAM_NONE),
-          _presenceO(false), _presenceX(false),
-          _windowStart(0), _attachStart(0), _lastBeacon(0) {}
-
-    void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        // Activation: 0xF1 from host carries payload[0] = totemVarIdx.
-        // totemVars[0..5] = CP slots, totemVars[6..11] = BASE slots.
-        if (_role == ROLE_UNKNOWN) {
-            if (msg.msgType != MSG_TOTEM_BEACON + 1) return;
-            if (msg.payloadLen < 1) return;
-            if (msg.payload[0] != 0xFF) {
-                uint8_t roleIdx = msg.payload[0];
-                _role = (roleIdx < 6) ? ROLE_CP : ROLE_BASE;
-            }
-            return;  // activation message is not a player interaction
-        }
-
-        if (_role == ROLE_BASE) {
-            if (msg.msgType != MSG_TOTEM_BEACON + 1) return;
-            uint8_t r = (msg.team == 0) ? 255 :   0;
-            uint8_t g = (msg.team == 0) ?  80 :  80;
-            uint8_t b = (msg.team == 0) ?   0 : 255;
-            out.ui.trigger(TotemUIEvent::Respawn, r, g, b);
-            return;
-        }
-
-        if (_role == ROLE_CP && msg.msgType == MSG_CP_BEACON + 1) {
-            // 0x55 reply: subType 1=O, 2=X; subType 0 = auto-empty, ignore.
-            if (msg.payloadLen == 0) return;
-            uint8_t sub = msg.payload[0];
-            if (sub == 1) _presenceO = true;
-            if (sub == 2) _presenceX = true;
-        }
-    }
-
-    void update(LightAir_TotemOutput& out) override {
-        if (_role != ROLE_CP) return;
-
-        uint32_t now = millis();
-
-        // ---- Broadcast CP beacon every 2 s ----
-        bool windowExpired = (now - _windowStart) >= CP_BEACON_INTERVAL_MS;
-        if (windowExpired) {
-            // Evaluate the window that just closed.
-            if (_presenceO || _presenceX) {
-                uint8_t newTeam = _cpTeam;
-                if (_presenceO && !_presenceX) newTeam = 0;
-                if (_presenceX && !_presenceO) newTeam = 1;
-                // Both teams present: contested — hold current attachment.
-
-                if (newTeam != _cpTeam) {
-                    // Team switch: reset scoring countdown.
-                    _cpTeam    = newTeam;
-                    _attachStart = now;
-                    updateCPBackground(out);
-                } else if (_cpTeam != CP_TEAM_NONE) {
-                    // Same team: check if 10 s elapsed for a point.
-                    if ((now - _attachStart) >= CP_SCORE_INTERVAL_MS) {
-                        uint8_t payload[1] = { _cpTeam };
-                        out.radio.broadcast(MSG_CP_SCORE, payload, 1);
-                        out.ui.trigger(TotemUIEvent::Bonus);
-                        _attachStart = now;  // restart countdown
-                    }
-                }
-
-                if (_presenceO && _presenceX) {
-                    // Contested — show alternate colours.
-                    out.ui.trigger(TotemUIEvent::ControlContest);
-                }
-            } else if (_cpTeam == CP_TEAM_NONE) {
-                // No presence and no attachment.
-                out.ui.trigger(TotemUIEvent::Idle);
-            }
-
-            // Reset window and broadcast new beacon.
-            _presenceO   = false;
-            _presenceX   = false;
-            _windowStart = now;
-            uint8_t pl[1] = { _cpTeam };
-            out.radio.broadcast(MSG_CP_BEACON, pl, 1);
-        }
-    }
-
-    void reset() override {
-        _role        = ROLE_UNKNOWN;
-        _cpTeam      = CP_TEAM_NONE;
-        _presenceO   = false;
-        _presenceX   = false;
-        _windowStart = 0;
-        _attachStart = 0;
-        _lastBeacon  = 0;
-    }
-
-private:
-    void updateCPBackground(LightAir_TotemOutput& out) const {
-        if      (_cpTeam == 0)         out.ui.trigger(TotemUIEvent::ControlO);
-        else if (_cpTeam == 1)         out.ui.trigger(TotemUIEvent::ControlX);
-        else                           out.ui.trigger(TotemUIEvent::Idle);
-    }
-};
-static UpkeepCompositeRunner upkeepCompositeRunner;
-
 } // namespace Upkeep
 
 // ================================================================
@@ -663,7 +526,7 @@ const LightAir_Game game_upkeep = {
     /* typeId                */ GameTypeId::UPKEEP,
     /* name                  */ "Upkeep",
     /* configVars            */ Upkeep::configVars,
-    /* configCount           */ sizeof(Upkeep::configVars) / sizeof(*Upkeep::configVars),
+    /* configCount           */ 7,
     /* monitorVars           */ Upkeep::monitorVars,
     /* monitorCount          */ sizeof(Upkeep::monitorVars) / sizeof(*Upkeep::monitorVars),
     /* directRadioRules      */ Upkeep::directRadioRules,
@@ -682,9 +545,8 @@ const LightAir_Game game_upkeep = {
     /* scoringState          */ Upkeep::GAME_END,
     /* scoreMsgType          */ Upkeep::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ Upkeep::onScoreAnnounce,
-    /* totemVars             */ Upkeep::totemVars,
-    /* totemVarCount         */ sizeof(Upkeep::totemVars) / sizeof(*Upkeep::totemVars),
+    /* totemRequirements     */ Upkeep::totemRequirements,
+    /* totemRequirementCount */ 5,
     /* hasTeams              */ true,
     /* teamBitmask           */ &Upkeep::teamBitmask,
-    /* totemRunner           */ &Upkeep::upkeepCompositeRunner,
 };

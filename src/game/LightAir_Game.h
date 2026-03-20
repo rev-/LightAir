@@ -5,10 +5,14 @@
 #include "LightAir_DirectRadioRule.h"
 #include "LightAir_ReplyRadioRule.h"
 #include "LightAir_WinnerVar.h"
-#include "LightAir_TotemVar.h"
-#include "LightAir_TotemRunner.h"
+#include "LightAir_TotemRequirement.h"
 #include "../ui/player/LightAir_UICtrl.h"
 #include "../config.h"
+
+// Forward declaration: LightAir_GameRunner is defined in LightAir_GameRunner.h,
+// which includes this header.  The forward decl breaks the cycle; the full
+// type is only needed in function pointer signatures and .cpp implementations.
+class LightAir_GameRunner;
 
 // ----------------------------------------------------------------
 // MenuResult — returned by blocking pre-game menu classes.
@@ -178,8 +182,11 @@ struct LightAir_Game {
 
     // Called by GameRunner::begin() after display binding sets are built.
     // ui is the optional UICtrl pointer passed to GameRunner::begin(); may be nullptr.
+    // runner is the GameRunner instance; use runner.totemIdForRole() to populate
+    // local totem-ID caches.
     // nullptr = skip.
-    void (*onBegin)(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*);
+    void (*onBegin)(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
+                    const LightAir_GameRunner&);
 
     // ---- End-game score collection and winner election (optional) ----
     //
@@ -209,29 +216,20 @@ struct LightAir_Game {
 
     // ---- Totem roles and team configuration ----
     //
-    // totemVars[] lists named totem roles (e.g. "Base", "Flag") that the host
-    // assigns to specific totem device IDs in LightAir_GameSetupMenu (S4c).
-    // Any totem slot not covered by totemVars can be given a GenericTotemRole.
+    // totemRequirements[] lists the totem roles this game supports
+    // (e.g. BASE_O, FLAG_X, BONUS) together with min/max counts.
+    // The host assigns specific totem device IDs to each role in
+    // LightAir_GameSetupMenu (S4c).
     //
     // hasTeams enables the Teams submenu (S4b) where the host assigns each
     // player to team O or team X.  teamBitmask points to a file-scope int
     // in the ruleset; bit i=1 means player i is on team X.  Set to nullptr
     // when hasTeams==false.
     //
-    const TotemVar*  totemVars;        // named totem role slots; nullptr = none
-    uint8_t          totemVarCount;    // number of entries in totemVars[]
-    bool             hasTeams;         // true = host assigns O/X teams in setup
-    int*             teamBitmask;      // bit i=1 → player i on team X; nullptr if !hasTeams
-
-    // ---- Totem-side behaviour (optional) ----
-    //
-    // totemRunner points to the singleton runner object that implements
-    // this game's logic on totem firmware.  nullptr = this game has no
-    // totem-side behaviour (e.g. pure Free for All).
-    //
-    // The runner is activated by LightAir_TotemDriver when the first
-    // player message arrives carrying this game's typeId.
-    LightAir_TotemRunner* totemRunner;  // nullptr = no totem involvement
+    const LightAir_TotemRequirement* totemRequirements;   // nullptr = none
+    uint8_t                          totemRequirementCount;
+    bool                             hasTeams;
+    int*                             teamBitmask;   // bit i=1 → player i on team X; nullptr if !hasTeams
 
     // Called by GameRunner immediately before esp_restart() after the player
     // presses A+B on the end-game screen.  Use for last-moment display updates

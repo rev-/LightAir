@@ -145,7 +145,8 @@ static const WinnerVar winnerVars[] = {
 };
 
 // ---- onBegin: reset all runtime state from config ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*) {
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
+                    const LightAir_GameRunner&) {
     lives        = startLives;
     energy       = startEnergy;
     gameTimeLeft = gameTime;
@@ -265,6 +266,12 @@ static const StateBehavior behaviors[] = {
     { GAME_END, nullptr   },   // static display — no per-cycle logic needed
 };
 
+// ---- Totem requirements (BONUS and MALUS are optional) ----
+static const LightAir_TotemRequirement totemRequirements[] = {
+    { TotemRoleId::BONUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+    { TotemRoleId::MALUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+};
+
 } // namespace FFA
 
 // ================================================================
@@ -284,10 +291,8 @@ const LightAir_Game game_ffa = {
     /* winnerVars            */ FFA::winnerVars,         /* winnerVarCount         */ 2,
     /* scoringState          */ FFA::GAME_END,
     /* scoreMsgType          */ FFA::MSG_SCORE_COLLECT,
-    /* totemVars             */ nullptr, // FFA uses no named totem roles
-    /* totemVarCount         */ 0,
+    /* onScoreAnnounce       */ nullptr,
+    /* totemRequirements     */ FFA::totemRequirements,  /* totemRequirementCount  */ 2,
     /* hasTeams              */ false,
     /* teamBitmask           */ nullptr,
-    /* onScoreAnnounce       */ nullptr, // use default individual ranking
-    /* totemRunner           */ nullptr, // FFA has no totem-side behaviour
 };

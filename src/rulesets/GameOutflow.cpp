@@ -160,7 +160,8 @@ static const WinnerVar winnerVars[] = {
 };
 
 // ---- onBegin: reset all runtime state from config ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*) {
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
+                    const LightAir_GameRunner&) {
     energy          = startEnergy;
     gameTimeLeft    = gameTime;
     points          = 100;
@@ -286,6 +287,12 @@ static const StateBehavior behaviors[] = {
     { GAME_END, nullptr   },
 };
 
+// ---- Totem requirements (BONUS and MALUS are optional) ----
+static const LightAir_TotemRequirement totemRequirements[] = {
+    { TotemRoleId::BONUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+    { TotemRoleId::MALUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+};
+
 } // namespace Outflow
 
 // ================================================================
@@ -306,9 +313,7 @@ const LightAir_Game game_outflow = {
     /* scoringState          */ Outflow::GAME_END,
     /* scoreMsgType          */ Outflow::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ nullptr,
-    /* totemVars             */ nullptr,
-    /* totemVarCount         */ 0,
+    /* totemRequirements     */ Outflow::totemRequirements,  /* totemRequirementCount  */ 2,
     /* hasTeams              */ false,
     /* teamBitmask           */ nullptr,
-    /* totemRunner           */ nullptr,
 };

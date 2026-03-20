@@ -17,14 +17,12 @@
 
 uint16_t game_serialize_config(const LightAir_Game& game,
                                 uint8_t* buf, uint16_t maxLen,
-                                const uint8_t genericRoles[TotemDefs::MAX_TOTEMS],
+                                const uint8_t totemAssignment[TotemDefs::MAX_TOTEMS],
                                 uint8_t sessionToken) {
-    // Minimum: 2 (typeId) + 16*4 (generic roles) + 1 (sessionToken) must fit.
     uint16_t minNeeded = 2
-        + (uint16_t)game.configCount   * 4
-        + (uint16_t)game.totemVarCount * 4
+        + (uint16_t)game.configCount * 4
         + (game.hasTeams ? 4 : 0)
-        + TotemDefs::MAX_TOTEMS * 4
+        + TotemDefs::MAX_TOTEMS   // 16 × uint8_t roleId
         + 1;
     if (maxLen < minNeeded) return 0;
 
@@ -39,13 +37,6 @@ uint16_t game_serialize_config(const LightAir_Game& game,
         pos += 4;
     }
 
-    // totemVar IDs
-    for (uint8_t v = 0; v < game.totemVarCount; v++) {
-        int32_t val = game.totemVars ? (int32_t)*game.totemVars[v].id : 0;
-        memcpy(buf + pos, &val, 4);
-        pos += 4;
-    }
-
     // teamBitmask (if hasTeams)
     if (game.hasTeams) {
         int32_t mask = game.teamBitmask ? (int32_t)*game.teamBitmask : 0;
@@ -53,12 +44,9 @@ uint16_t game_serialize_config(const LightAir_Game& game,
         pos += 4;
     }
 
-    // 16 generic totem roles (always present; unknown/null → 0)
-    for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++) {
-        int32_t role = (genericRoles ? (int32_t)genericRoles[s] : 0);
-        memcpy(buf + pos, &role, 4);
-        pos += 4;
-    }
+    // 16 totem slot assignments (roleId per slot; 0 = unassigned)
+    for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++)
+        buf[pos++] = totemAssignment ? totemAssignment[s] : 0;
 
     // Session token (1 byte; 0 = no session isolation)
     buf[pos++] = sessionToken;
@@ -68,7 +56,7 @@ uint16_t game_serialize_config(const LightAir_Game& game,
 
 bool game_apply_config(const LightAir_Game& game,
                         const uint8_t* buf, uint16_t len,
-                        uint8_t genericRolesOut[TotemDefs::MAX_TOTEMS],
+                        uint8_t totemAssignmentOut[TotemDefs::MAX_TOTEMS],
                         uint8_t* sessionTokenOut) {
     if (len < 2) return false;
     uint16_t id;
@@ -88,18 +76,6 @@ bool game_apply_config(const LightAir_Game& game,
         *var.value = (int)val;
     }
 
-    // totemVar IDs
-    if (game.totemVars) {
-        for (uint8_t v = 0; v < game.totemVarCount && pos + 4 <= len; v++) {
-            int32_t val;
-            memcpy(&val, buf + pos, 4);
-            pos += 4;
-            *game.totemVars[v].id = (int)val;
-        }
-    } else {
-        pos += (uint16_t)game.totemVarCount * 4;
-    }
-
     // teamBitmask
     if (game.hasTeams && pos + 4 <= len) {
         int32_t mask;
@@ -108,22 +84,17 @@ bool game_apply_config(const LightAir_Game& game,
         if (game.teamBitmask) *game.teamBitmask = (int)mask;
     }
 
-    // generic roles
-    if (genericRolesOut) {
-        for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS && pos + 4 <= len; s++) {
-            int32_t val;
-            memcpy(&val, buf + pos, 4);
-            pos += 4;
-            genericRolesOut[s] = (uint8_t)val;
-        }
+    // totem slot assignments (roleId per slot)
+    if (totemAssignmentOut) {
+        for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS && pos < len; s++)
+            totemAssignmentOut[s] = buf[pos++];
     } else {
-        pos += (uint16_t)TotemDefs::MAX_TOTEMS * 4;
+        pos += TotemDefs::MAX_TOTEMS;
     }
 
     // Session token (last byte)
-    if (sessionTokenOut) {
+    if (sessionTokenOut)
         *sessionTokenOut = (pos < len) ? buf[pos] : 0;
-    }
 
     return true;
 }
@@ -329,16 +300,12 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
             // Try to match against registered games.
             for (uint8_t g = 0; g < _mgr.count(); g++) {
                 const LightAir_Game& candidate = _mgr.game(g);
-                uint8_t genericBuf[TotemDefs::MAX_TOTEMS] = {};
                 uint8_t token = 0;
                 if (game_apply_config(candidate, ev.packet.payload,
-                                      ev.packet.payloadLen, genericBuf, &token)) {
+                                      ev.packet.payloadLen, _totemAssignment, &token)) {
                     _game    = &candidate;
                     _gameIdx = g;
                     if (token != 0) _radio.setSessionToken(token);
-                    // Apply generic roles to runner immediately so commitToRunner can use them.
-                    for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++)
-                        _totemAssignment[s] = genericBuf[s];
                     // Show "Game ready" prompt.
                     char buf[24];
                     snprintf(buf, sizeof(buf), "%.16s", candidate.name);
@@ -557,16 +524,15 @@ void LightAir_GameSetupMenu::runSetupMenu() {
 }
 
 bool LightAir_GameSetupMenu::validateTotems() const {
-    if (!_game->totemVars) return true;
-    for (uint8_t i = 0; i < _game->totemVarCount; i++) {
-        if (!_game->totemVars[i].required) continue;
-        // Check if this totemVar is assigned to any slot.
-        uint8_t targetVal = GenericTotemRoles::COUNT + i;
-        bool found = false;
+    if (!_game->totemRequirements) return true;
+    for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
+        const LightAir_TotemRequirement& req = _game->totemRequirements[r];
+        if (req.minCount == 0) continue;
+        uint8_t count = 0;
         for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++) {
-            if (_totemAssignment[s] == targetVal) { found = true; break; }
+            if (_totemAssignment[s] == req.roleId) count++;
         }
-        if (!found) return false;
+        if (count < req.minCount) return false;
     }
     return true;
 }
@@ -695,60 +661,58 @@ void LightAir_GameSetupMenu::runTeamsSubmenu() {
 
 void LightAir_GameSetupMenu::initTotemAssignment() {
     memset(_totemAssignment, 0, sizeof(_totemAssignment));
-    if (!_game->totemVars) return;
-
-    for (uint8_t i = 0; i < _game->totemVarCount; i++) {
-        int id = *_game->totemVars[i].id;
-        if (id == 0) continue;
-        if (!TotemDefs::isTotemId((uint8_t)id)) continue;
-        uint8_t slot = TotemDefs::totemIndex((uint8_t)id);
-        _totemAssignment[slot] = GenericTotemRoles::COUNT + i;
-    }
 }
 
-bool LightAir_GameSetupMenu::isRoleAvailable(uint8_t slot, uint8_t val) const {
-    // Generic roles are always available.
-    if (val < GenericTotemRoles::COUNT) return true;
-    // totemVar roles are available only if not assigned to another slot.
-    for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++) {
-        if (s == slot) continue;
-        if (_totemAssignment[s] == val) return false;
-    }
-    return true;
-}
-
-const char* LightAir_GameSetupMenu::totemRoleLabel(uint8_t val) const {
-    static char buf[12];
-    if (val < GenericTotemRoles::COUNT) {
-        return GenericTotemRoles::names[val];
-    }
-    uint8_t tvIdx = val - GenericTotemRoles::COUNT;
-    if (_game->totemVars && tvIdx < _game->totemVarCount) {
-        const TotemVar& tv = _game->totemVars[tvIdx];
-        if (tv.required) {
-            snprintf(buf, sizeof(buf), "%.9s*", tv.name);
-        } else {
-            snprintf(buf, sizeof(buf), "%.10s", tv.name);
+bool LightAir_GameSetupMenu::isRoleAvailable(uint8_t slot, uint8_t roleId) const {
+    if (roleId == TotemRoleId::NONE) return true;
+    if (!_game->totemRequirements) return false;
+    for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
+        const LightAir_TotemRequirement& req = _game->totemRequirements[r];
+        if (req.roleId != roleId) continue;
+        // Count assignments to this role on other slots.
+        uint8_t count = 0;
+        for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++) {
+            if (s != slot && _totemAssignment[s] == roleId) count++;
         }
-        return buf;
+        return count < req.maxCount;
     }
-    return "?";
+    return false;  // roleId not in requirements
+}
+
+const char* LightAir_GameSetupMenu::totemRoleLabel(uint8_t roleId) const {
+    if (roleId == TotemRoleId::NONE) return "----";
+    // Append '*' for required roles (minCount > 0).
+    if (_game->totemRequirements) {
+        for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
+            if (_game->totemRequirements[r].roleId == roleId &&
+                _game->totemRequirements[r].minCount > 0) {
+                static char buf[12];
+                snprintf(buf, sizeof(buf), "%.9s*", totemRoleName(roleId));
+                return buf;
+            }
+        }
+    }
+    return totemRoleName(roleId);
 }
 
 uint8_t LightAir_GameSetupMenu::nextTotemRole(uint8_t slot, int8_t dir) const {
-    // Total options = GenericTotemRoles::COUNT + totemVarCount.
-    uint8_t tvCount = _game->totemVars ? _game->totemVarCount : 0;
-    uint8_t total   = GenericTotemRoles::COUNT + tvCount;
-    uint8_t cur     = _totemAssignment[slot];
+    // Options: index 0 = NONE, index 1..N = totemRequirements[0..N-1].roleId
+    uint8_t reqCount = _game->totemRequirements ? _game->totemRequirementCount : 0;
+    uint8_t total    = 1 + reqCount;
 
-    // Step dir until we find an available option (or exhaust all).
+    // Find current index in the cycle.
+    uint8_t curRole = _totemAssignment[slot];
+    uint8_t curIdx  = 0;
+    for (uint8_t r = 0; r < reqCount; r++) {
+        if (_game->totemRequirements[r].roleId == curRole) { curIdx = r + 1; break; }
+    }
+
     for (uint8_t attempt = 0; attempt < total; attempt++) {
-        if (dir > 0) {
-            cur = (cur + 1 >= total) ? 0 : cur + 1;
-        } else {
-            cur = (cur == 0) ? total - 1 : cur - 1;
-        }
-        if (isRoleAvailable(slot, cur)) return cur;
+        if (dir > 0) curIdx = (curIdx + 1 >= total) ? 0 : curIdx + 1;
+        else         curIdx = (curIdx == 0) ? total - 1 : curIdx - 1;
+        uint8_t candidate = (curIdx == 0) ? TotemRoleId::NONE
+                                          : _game->totemRequirements[curIdx - 1].roleId;
+        if (isRoleAvailable(slot, candidate)) return candidate;
     }
     return _totemAssignment[slot];  // no change possible
 }
@@ -878,20 +842,13 @@ void LightAir_GameSetupMenu::shareConfig() {
     char key = waitForKey();
     if (key != 'A') return;
 
-    // Build genericRoles array from _totemAssignment (only generic values < COUNT).
-    uint8_t genericBuf[TotemDefs::MAX_TOTEMS] = {};
-    for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++) {
-        uint8_t v = _totemAssignment[s];
-        genericBuf[s] = (v < GenericTotemRoles::COUNT) ? v : 0;
-    }
-
     // Generate session token (1–255; 0 is UNSET sentinel, skip it).
     uint8_t token = 0;
     while (token == 0) token = (uint8_t)esp_random();
     _radio.setSessionToken(token);
 
     uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
-    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, genericBuf, token);
+    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, _totemAssignment, token);
     if (len > 0) _radio.broadcast(_msgType, blob, len);
 }
 
@@ -940,7 +897,7 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
     uint8_t    entryCount = 0;
     for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++) {
         uint8_t v = _totemAssignment[s];
-        if (v == GenericTotemRoles::NONE) continue;
+        if (v == TotemRoleId::NONE) continue;
         entries[entryCount++] = { s, v };
     }
 
@@ -964,17 +921,14 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
                         TotemDefs::totemShort[te.slot],
                         seen ? "\x7F" : "X");  // ✓ (0x7F or similar) vs X
 
-        // Team annotation for named totemVars
-        if (te.val >= GenericTotemRoles::COUNT && _game->totemVars) {
-            uint8_t tvIdx = te.val - GenericTotemRoles::COUNT;
-            if (tvIdx < _game->totemVarCount) {
-                const TotemVar& tv = _game->totemVars[tvIdx];
-                if (tv.team != 0xFF) {
-                    off += snprintf(full + off, sizeof(full) - off,
-                                    " %c", tv.team == 0 ? 'O' : 'X');
-                }
-            }
+        // Team annotation based on roleId
+        uint8_t team = 0xFF;
+        switch (te.val) {
+            case TotemRoleId::BASE_O: case TotemRoleId::FLAG_O: team = 0; break;
+            case TotemRoleId::BASE_X: case TotemRoleId::FLAG_X: team = 1; break;
         }
+        if (team != 0xFF)
+            off += snprintf(full + off, sizeof(full) - off, " %c", team == 0 ? 'O' : 'X');
 
         // Horizontal scroll: clip to 18 chars
         constexpr uint8_t ROW_CHARS = 18;
@@ -992,14 +946,8 @@ void LightAir_GameSetupMenu::commitToRunner() {
     _runner.clearRoster();
     _runner.clearTotems();
 
-    // Clear previous team/generic role maps.
-    for (uint8_t i = 0; i < PlayerDefs::MAX_PLAYER_ID; i++) _runner.setTeam(i, _teams[i]);
-    for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++) {
-        uint8_t v = _totemAssignment[s];
-        if (v > 0 && v < GenericTotemRoles::COUNT) {
-            _runner.setGenericTotemRole(s, v);
-        }
-    }
+    for (uint8_t i = 0; i < PlayerDefs::MAX_PLAYER_ID; i++)
+        _runner.setTeam(i, _teams[i]);
 
     // Add players to roster.
     for (uint8_t i = 0; i < _seenCount; i++) {
@@ -1009,26 +957,11 @@ void LightAir_GameSetupMenu::commitToRunner() {
 
     // Add configured totems to roster + totem list.
     for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++) {
-        uint8_t v = _totemAssignment[s];
-        if (v == GenericTotemRoles::NONE) continue;
-
+        uint8_t roleId = _totemAssignment[s];
+        if (roleId == TotemRoleId::NONE) continue;
         uint8_t id = TotemDefs::idFromIndex(s);
-
-        // Named totemVar role
-        if (v >= GenericTotemRoles::COUNT && _game->totemVars) {
-            uint8_t tvIdx = v - GenericTotemRoles::COUNT;
-            if (tvIdx < _game->totemVarCount) {
-                *_game->totemVars[tvIdx].id = (int)id;
-                _runner.addToRoster(id);
-                _runner.addTotem(id, tvIdx);
-                continue;
-            }
-        }
-
-        // Generic role — add to roster only (no named role entry).
-        if (v < GenericTotemRoles::COUNT) {
-            _runner.addToRoster(id);
-        }
+        _runner.addToRoster(id);
+        _runner.addTotem(id, roleId);
     }
 }
 

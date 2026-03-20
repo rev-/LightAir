@@ -32,7 +32,7 @@
 #include "game/LightAir_GameVar.h"
 #include "game/LightAir_StateRule.h"
 #include "game/LightAir_StateBehavior.h"
-#include "game/LightAir_TotemVar.h"
+#include "game/LightAir_TotemRequirement.h"
 #include "game/LightAir_TotemOutput.h"
 #include "game/LightAir_TotemRunner.h"
 #include "game/LightAir_Game.h"

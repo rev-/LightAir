@@ -14,29 +14,29 @@ class EnlightCalibRoutine;
 //
 //   [uint16_t typeId]
 //   [int32_t configVar0] … [int32_t configVarN]
-//   [int32_t totemVar0.id] … [int32_t totemVarM.id]
-//   [int32_t teamBitmask]              ← only if game.hasTeams
-//   [int32_t genericRole0] … [int32_t genericRole15]   ← always 16 entries
-//   [uint8_t sessionToken]             ← last byte; 0 = no session isolation
+//   [int32_t teamBitmask]                    ← only if game.hasTeams
+//   [uint8_t totemSlot0] … [uint8_t totemSlot15]  ← 16 entries (TotemRoleId per slot; 0 = unassigned)
+//   [uint8_t sessionToken]                   ← last byte; 0 = no session isolation
 //
 // Receivers call game_apply_config() to update in-place.
 // ----------------------------------------------------------------
 
 // Serialize all config data of a game into a byte buffer.
+// totemAssignment[slot] = roleId for each of the 16 totem slots (0 = unassigned).
 // sessionToken is appended as the final byte (0 = no session isolation).
 // Returns bytes written, or 0 if maxLen is insufficient.
 uint16_t game_serialize_config(const LightAir_Game& game,
                                 uint8_t* buf, uint16_t maxLen,
-                                const uint8_t genericRoles[TotemDefs::MAX_TOTEMS] = nullptr,
+                                const uint8_t totemAssignment[TotemDefs::MAX_TOTEMS] = nullptr,
                                 uint8_t sessionToken = 0);
 
 // Apply a received config blob.
 // Returns false if typeId doesn't match or blob is too short.
-// Values are clamped to [min, max].  Writes to genericRolesOut if non-null.
+// Values are clamped to [min, max].  Writes roleIds into totemAssignmentOut if non-null.
 // If sessionTokenOut is non-null, the trailing session token byte is written there.
 bool game_apply_config(const LightAir_Game& game,
                         const uint8_t* buf, uint16_t len,
-                        uint8_t genericRolesOut[TotemDefs::MAX_TOTEMS] = nullptr,
+                        uint8_t totemAssignmentOut[TotemDefs::MAX_TOTEMS] = nullptr,
                         uint8_t* sessionTokenOut = nullptr);
 
 // ----------------------------------------------------------------
@@ -98,9 +98,8 @@ private:
     // Team assignments: _teams[id] = 0 (O) or 1 (X)
     uint8_t _teams[PlayerDefs::MAX_PLAYER_ID] = {};
 
-    // Totem slot assignments: _totemAssignment[slot] encodes role as:
-    //   value < GenericTotemRoles::COUNT → generic role
-    //   value >= GenericTotemRoles::COUNT → totemVar index (value - COUNT)
+    // Totem slot assignments: _totemAssignment[slot] = TotemRoleId constant.
+    // 0 = TotemRoleId::NONE (unassigned).
     uint8_t _totemAssignment[TotemDefs::MAX_TOTEMS] = {};
 
     // Discovery state
@@ -138,8 +137,8 @@ private:
     void     runTotemsSubmenu();
     void     initTotemAssignment();
     uint8_t  nextTotemRole(uint8_t slot, int8_t dir) const;
-    const char* totemRoleLabel(uint8_t val) const;   // label including "*" for required
-    bool     isRoleAvailable(uint8_t slot, uint8_t val) const;
+    const char* totemRoleLabel(uint8_t roleId) const;   // label including "*" for required
+    bool     isRoleAvailable(uint8_t slot, uint8_t roleId) const;
     void     renderTotemEntry(uint8_t cursor);
 
     // ---- S5 ----

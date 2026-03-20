@@ -102,15 +102,13 @@ constexpr uint8_t MSG_END_GAME      = 0xAE;
 // ── 0xF0 block: totem protocol ───────────────────────────────────
 // All unactivated totems broadcast MSG_TOTEM_BEACON regardless of role.
 // The GameRunner infrastructure intercept (host device only) replies with
-// 0xF1 carrying the totem's assigned role in payload[0]:
-//   payload[0] = totemVarIdx  →  named totem
-//   payload[0] = 0xFF         →  generic totem; payload[1] = GenericTotemRoles value
+// 0xF1 carrying the totem's assigned roleId (TotemRoleId constant) in payload[0].
 // No reply is sent to unconfigured totems.  Once activated a totem
 // switches to role-specific beacons so 0xF1 is never ambiguous.
 // 0xF0/0xF1 must not be re-used by any per-game message table.
 
 // Even: totem → broadcast beacon (IDLE state only).
-// Odd (0xF1): host activation reply carrying totemVarIdx in payload[0].
+// Odd (0xF1): host activation reply carrying roleId in payload[0].
 constexpr uint8_t MSG_TOTEM_BEACON  = 0xF0;
 
 // Universal end-of-game roster broadcast (typeId == UNIVERSAL).
@@ -272,22 +270,6 @@ namespace TotemDefs {
         "Totem 05","Totem 06","Totem 07","Totem 08",
         "Totem 09","Totem 10","Totem 11","Totem 12",
         "Totem 13","Totem 14","Totem 15","Totem 16",
-    };
-}
-
-// ---------------------------------------------------------------
-// Generic totem roles
-//
-// Used by LightAir_GameSetupMenu to assign freeform roles to
-// totem devices not covered by named TotemVar entries.
-// ---------------------------------------------------------------
-namespace GenericTotemRoles {
-    constexpr uint8_t NONE  = 0;
-    constexpr uint8_t BONUS = 1;
-    constexpr uint8_t MALUS = 2;
-    constexpr uint8_t COUNT = 3;
-    constexpr char    names[COUNT][8] = {
-        "----", "BONUS", "MALUS"
     };
 }
 

@@ -63,7 +63,7 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     radio.setTypeId(game.typeId);
 
     // User-provided setup (radio init, opening messages, etc.)
-    if (game.onBegin) game.onBegin(display, radio, ui);
+    if (game.onBegin) game.onBegin(display, radio, ui, *this);
 }
 
 /* =========================================================
@@ -89,11 +89,22 @@ void LightAir_GameRunner::clearTotems() {
     _totemCount = 0;
 }
 
-void LightAir_GameRunner::addTotem(uint8_t id, uint8_t roleIdx) {
+void LightAir_GameRunner::addTotem(uint8_t id, uint8_t roleId) {
     if (_totemCount >= GameDefaults::MAX_PARTICIPANTS) return;
     for (uint8_t i = 0; i < _totemCount; i++)
         if (_totems[i].id == id) return;  // ignore duplicate
-    _totems[_totemCount++] = { id, roleIdx };
+    _totems[_totemCount++] = { id, roleId };
+}
+
+uint8_t LightAir_GameRunner::totemIdForRole(uint8_t roleId, uint8_t idx) const {
+    uint8_t count = 0;
+    for (uint8_t t = 0; t < _totemCount; t++) {
+        if (_totems[t].roleId == roleId) {
+            if (count == idx) return _totems[t].id;
+            count++;
+        }
+    }
+    return 0;  // not found
 }
 
 /* =========================================================
@@ -107,19 +118,6 @@ void LightAir_GameRunner::setTeam(uint8_t id, uint8_t team) {
 uint8_t LightAir_GameRunner::teamOf(uint8_t id) const {
     if (id < PlayerDefs::MAX_PLAYER_ID) return _teamMap[id];
     return 0;
-}
-
-/* =========================================================
- *   GENERIC TOTEM ROLES
- * ========================================================= */
-
-void LightAir_GameRunner::setGenericTotemRole(uint8_t slot, uint8_t role) {
-    if (slot < TotemDefs::MAX_TOTEMS) _genericRoles[slot] = role;
-}
-
-uint8_t LightAir_GameRunner::genericTotemRole(uint8_t slot) const {
-    if (slot < TotemDefs::MAX_TOTEMS) return _genericRoles[slot];
-    return GenericTotemRoles::NONE;
 }
 
 /* =========================================================
@@ -203,9 +201,8 @@ void LightAir_GameRunner::update() {
         }
     }
 
-    // MSG_TOTEM_BEACON: reply with the totem's assigned role in payload[0].
-    // Named totem  → payload[0] = totemVarIdx.
-    // Generic totem → payload[0] = 0xFF, payload[1] = GenericTotemRoles value.
+    // MSG_TOTEM_BEACON: reply with the totem's assigned roleId in payload[0].
+    // payload[1] = *configSecs for this role if a requirement has one set.
     // No reply is sent to non-totem senders or unconfigured totems.
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
@@ -216,23 +213,24 @@ void LightAir_GameRunner::update() {
         uint8_t id = ev.packet.senderId;
         if (!TotemDefs::isTotemId(id)) continue;
 
-        // Check named totem list first.
-        bool replied = false;
         for (uint8_t t = 0; t < _totemCount; t++) {
             if (_totems[t].id != id) continue;
-            uint8_t buf[1] = { _totems[t].roleIdx };
-            output.radio.replyWithPayload(ev.packet, buf, 1);
-            replied = true;
+            uint8_t roleId = _totems[t].roleId;
+            uint8_t buf[2] = { roleId, 0 };
+            uint8_t bufLen = 1;
+            // Include configSecs if any requirement for this role has one.
+            if (_game->totemRequirements) {
+                for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
+                    const LightAir_TotemRequirement& req = _game->totemRequirements[r];
+                    if (req.roleId == roleId && req.configSecs != nullptr) {
+                        buf[1] = (uint8_t)*req.configSecs;
+                        bufLen = 2;
+                        break;
+                    }
+                }
+            }
+            output.radio.replyWithPayload(ev.packet, buf, bufLen);
             break;
-        }
-        if (replied) continue;
-
-        // Check generic role.
-        uint8_t slot = TotemDefs::totemIndex(id);
-        uint8_t gr   = genericTotemRole(slot);
-        if (gr != GenericTotemRoles::NONE) {
-            uint8_t buf[2] = { 0xFF, gr };
-            output.radio.replyWithPayload(ev.packet, buf, 2);
         }
     }
 
