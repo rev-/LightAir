@@ -23,11 +23,6 @@
    compile-time safety. Enlight should be injected into GameRunner::begin()
    or into the game callbacks as a parameter.
 
-3. [DONE] Message type collisions with no registry
-   Resolved: all MSG_* constants now live in a single RadioMsg namespace
-   in config.h. typeId filtering still isolates game sessions at runtime,
-   but the central registry prevents accidental value overlap across games.
-
 4. Config blob truncation is silent
    game_apply_config() has no total-length check. A truncated blob
    (e.g. partial radio delivery) passes the typeId check and is
@@ -42,9 +37,6 @@
 
 #   Suggestion                                                        Priority
 ─────────────────────────────────────────────────────────────────────────────
-5   [DONE] typeId uniqueness enforced in registerGame(); central
-    GameTypeIds.h registry added; all game descriptors use named
-    constants; AllGames.cpp asserts on collision at boot.
 
 6   Replace _totemAssignment[] encoding hack with a struct           Medium
     { bool named; uint8_t value; }
