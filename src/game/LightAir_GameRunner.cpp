@@ -203,28 +203,24 @@ void LightAir_GameRunner::update() {
         }
     }
 
-    // MSG_TOTEM_BEACON: reply with the totem's assigned role encoded in payload[0].
-    // Encoding: named totem → payload[0] = 0x80 | totemVarIdx (high bit = activation marker);
-    //           generic totem → payload[0] = 0xFF, payload[1] = GenericTotemRoles value.
-    // The high bit distinguishes this activation reply from player respawn replies
-    // (which use payload[0] = team+1, always < 0x80).
+    // MSG_TOTEM_BEACON: reply with the totem's assigned role in payload[0].
+    // Named totem  → payload[0] = totemVarIdx.
+    // Generic totem → payload[0] = 0xFF, payload[1] = GenericTotemRoles value.
+    // No reply is sent to non-totem senders or unconfigured totems.
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
-        if (ev.type      != RadioEventType::MessageReceived)     continue;
-        if (ev.packet.msgType != RadioMsg::MSG_TOTEM_BEACON)     continue;
+        if (ev.type           != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType != RadioMsg::MSG_TOTEM_BEACON)      continue;
         infraHandled[e] = true;
 
         uint8_t id = ev.packet.senderId;
-        if (!TotemDefs::isTotemId(id)) {
-            output.radio.reply(ev.packet);
-            continue;
-        }
+        if (!TotemDefs::isTotemId(id)) continue;
 
         // Check named totem list first.
         bool replied = false;
         for (uint8_t t = 0; t < _totemCount; t++) {
             if (_totems[t].id != id) continue;
-            uint8_t buf[1] = { (uint8_t)(0x80u | _totems[t].roleIdx) };
+            uint8_t buf[1] = { _totems[t].roleIdx };
             output.radio.replyWithPayload(ev.packet, buf, 1);
             replied = true;
             break;
@@ -237,8 +233,6 @@ void LightAir_GameRunner::update() {
         if (gr != GenericTotemRoles::NONE) {
             uint8_t buf[2] = { 0xFF, gr };
             output.radio.replyWithPayload(ev.packet, buf, 2);
-        } else {
-            output.radio.reply(ev.packet);  // unconfigured totem — empty reply
         }
     }
 

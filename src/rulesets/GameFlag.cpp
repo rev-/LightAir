@@ -621,13 +621,13 @@ public:
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
         ensureTeam();
 
-        // Activation: 0xF1 from host carries payload[0] = 0x80 | totemVarIdx.
+        // Activation: 0xF1 from host carries payload[0] = totemVarIdx.
         // totemVars[0..7] = BASE slots, totemVars[8..9] = FLAG slots.
         if (_role == ROLE_UNKNOWN) {
             if (msg.msgType != MSG_TOTEM_BEACON + 1) return;
-            if (msg.payloadLen < 1 || !(msg.payload[0] & 0x80)) return;
+            if (msg.payloadLen < 1) return;
             if (msg.payload[0] != 0xFF) {
-                uint8_t roleIdx = msg.payload[0] & 0x7Fu;
+                uint8_t roleIdx = msg.payload[0];
                 _role = (roleIdx < 8) ? ROLE_BASE : ROLE_FLAG;
             }
             return;  // activation message is not a player interaction
@@ -635,7 +635,6 @@ public:
 
         if (_role == ROLE_BASE) {
             if (msg.msgType != MSG_TOTEM_BEACON + 1) return;
-            if (msg.payloadLen >= 1 && (msg.payload[0] & 0x80)) return;  // ignore re-activation
             // Show Respawn animation in the player's team colour.
             uint8_t r = (msg.team == 0) ? 255 :   0;
             uint8_t g = (msg.team == 0) ?  80 :  80;

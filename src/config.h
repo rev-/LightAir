@@ -75,17 +75,16 @@ constexpr uint8_t MSG_END_GAME      = 0xAE;
 
 // ── 0xF0 block: totem protocol ───────────────────────────────────
 // All unactivated totems broadcast MSG_TOTEM_BEACON regardless of role.
-// The GameRunner infrastructure intercept (on every player/host device)
-// replies with 0xF1 carrying the totem's assigned role in payload[0]:
-//   payload[0] = 0x80 | totemVarIdx  →  named totem (high bit = activation marker)
-//   payload[0] = 0xFF                →  generic totem; payload[1] = GenericTotemRoles value
-// The runner reads payload[0] on first onMessage() to self-identify.
-// Player respawn/interaction replies also use 0xF1 but carry payload[0]
-// = team+1 (always < 0x80), which the high-bit check distinguishes cleanly.
+// The GameRunner infrastructure intercept (host device only) replies with
+// 0xF1 carrying the totem's assigned role in payload[0]:
+//   payload[0] = totemVarIdx  →  named totem
+//   payload[0] = 0xFF         →  generic totem; payload[1] = GenericTotemRoles value
+// No reply is sent to unconfigured totems.  Once activated a totem
+// switches to role-specific beacons so 0xF1 is never ambiguous.
 // 0xF0/0xF1 must not be re-used by any per-game message table.
 
 // Even: totem → broadcast beacon (IDLE state only).
-// Odd (0xF1): host activation reply (payload[0] high bit set) or player interaction.
+// Odd (0xF1): host activation reply carrying totemVarIdx in payload[0].
 constexpr uint8_t MSG_TOTEM_BEACON  = 0xF0;
 
 // Universal end-of-game roster broadcast (typeId == UNIVERSAL).
