@@ -1,12 +1,14 @@
 #include "LightAir_TotemDriver.h"
+#include "LightAir_TotemRole.h"
 using RadioMsg::MSG_TOTEM_BEACON;
 using RadioMsg::MSG_TOTEM_ROSTER;
 
 // ----------------------------------------------------------------
-LightAir_TotemDriver::LightAir_TotemDriver(LightAir_Radio&       radio,
-                                            LightAir_GameManager& manager,
-                                            LightAir_TotemUICtrl& ui)
-    : _radio(radio), _manager(manager), _ui(ui),
+LightAir_TotemDriver::LightAir_TotemDriver(LightAir_Radio&              radio,
+                                            LightAir_GameManager&         manager,
+                                            LightAir_TotemUICtrl&         ui,
+                                            LightAir_TotemRoleManager*    roleMgr)
+    : _radio(radio), _manager(manager), _ui(ui), _roleMgr(roleMgr),
       _runner(nullptr), _lastBeacon(0)
 {}
 
@@ -61,6 +63,22 @@ void LightAir_TotemDriver::loop() {
 
         // Activate runner on first game-specific packet.
         if (!_runner && incomingTypeId != RadioTypeId::UNIVERSAL) {
+            // New path: role-registry lookup on 0xF1 with a known roleId.
+            // payload[0] holds the roleId; 0xFF is reserved for the legacy path.
+            if (_roleMgr &&
+                ev.packet.msgType == (RadioMsg::MSG_TOTEM_BEACON + 1) &&
+                ev.packet.payloadLen >= 1 &&
+                ev.packet.payload[0] != 0xFF) {
+                uint8_t roleId = ev.packet.payload[0];
+                const TotemRole* role = _roleMgr->findById(roleId);
+                if (role && role->runner) {
+                    _runner = role->runner;
+                    _radio.setTypeId(incomingTypeId);
+                    _runner->onActivate(ev.packet.payload, ev.packet.payloadLen, out);
+                    continue;
+                }
+            }
+            // Legacy path: find runner by game typeId, forward the full packet.
             _runner = findRunner(incomingTypeId);
             if (_runner) {
                 _radio.setTypeId(incomingTypeId);

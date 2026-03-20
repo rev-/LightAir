@@ -57,7 +57,33 @@ constexpr uint8_t MSG_CP_BEACON     = 0x52;
 // payload[0] = team (0=O, 1=X) receiving the point.
 constexpr uint8_t MSG_CP_SCORE      = 0x54;
 
-// Next available in 0x50 block: 0x56
+// BASE totem beacon (new role-based architecture).
+// payload[0] = team (0=O, 1=X).
+// Reply (0x57): subType = myTeam+1 (1=teamO, 2=teamX) — player near base, requesting respawn.
+constexpr uint8_t MSG_BASE_BEACON   = 0x56;
+
+// FLAG totem beacon (new role-based architecture).
+// payload[0] = state (0=FLAG_IN, 1=FLAG_OUT); payload[1] = team (0=O, 1=X).
+// Reply (0x59): enemy-team player picking up the flag.
+constexpr uint8_t MSG_FLAG_BEACON   = 0x58;
+
+// Broadcast flood by flag carrier when shot — flag returns to its totem.
+// payload[0] = flagTeam (0=O, 1=X).  No reply expected.
+constexpr uint8_t MSG_FLAG_RETURN   = 0x5A;
+
+// Broadcast flood by flag carrier when scoring — flag returns to its totem.
+// payload[0] = flagTeam (0=O, 1=X).  No reply expected.
+constexpr uint8_t MSG_FLAG_SCORE    = 0x5C;
+
+// BONUS totem beacon (new role-based architecture). payload[0] = 0 when ready.
+// Reply (0x5F): player claims bonus.
+constexpr uint8_t MSG_BONUS_BEACON  = 0x5E;
+
+// MALUS totem beacon (new role-based architecture). payload[0] = 0 when ready.
+// Reply (0x61): player claims malus.
+constexpr uint8_t MSG_MALUS_BEACON  = 0x60;
+
+// Next available in 0x50 block: 0x62
 
 // ── 0xA0 block: infrastructure ──────────────────────────────────
 // Sent with typeId == UNIVERSAL (0x0000); not game-scoped.
@@ -225,8 +251,9 @@ static_assert(4u + (uint32_t)GameDefaults::MAX_PARTICIPANTS
 // Up to MAX_TOTEMS=16 totems are supported (IDs 239–254).
 // ---------------------------------------------------------------
 namespace TotemDefs {
-    constexpr uint8_t MAX_TOTEM_ID = 254;
-    constexpr uint8_t MAX_TOTEMS   = 16;   // IDs 239–254
+    constexpr uint8_t MAX_TOTEM_ID    = 254;
+    constexpr uint8_t MAX_TOTEMS      = 16;   // IDs 239–254
+    constexpr uint8_t MAX_TOTEM_ROLES = 32;   // max entries in LightAir_TotemRoleManager
 
     constexpr uint8_t totemIndex(uint8_t id)   { return MAX_TOTEM_ID - id; }
     constexpr uint8_t idFromIndex(uint8_t idx) { return MAX_TOTEM_ID - idx; }

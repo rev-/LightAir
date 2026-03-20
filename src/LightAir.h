@@ -46,5 +46,9 @@
 #include "ui/totem/LightAir_TotemUIOutput.h"
 #include "ui/totem/LightAir_TotemUICtrl.h"
 
-// Totem driver
+// Totem driver and role registry
 #include "totem/LightAir_TotemDriver.h"
+#include "totem/LightAir_TotemRole.h"
+#include "totem/LightAir_TotemRoleManager.h"
+#include "totem/AllTotems.h"
+#include "totem-rulesets/TotemRoleIds.h"

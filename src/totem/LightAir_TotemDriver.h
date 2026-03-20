@@ -4,6 +4,7 @@
 #include "../game/LightAir_TotemOutput.h"
 #include "../ui/totem/LightAir_TotemUICtrl.h"
 #include "../config.h"
+#include "LightAir_TotemRoleManager.h"
 
 // ----------------------------------------------------------------
 // LightAir_TotemDriver — main loop driver for a totem device.
@@ -31,9 +32,14 @@
 // ----------------------------------------------------------------
 class LightAir_TotemDriver {
 public:
-    LightAir_TotemDriver(LightAir_Radio&       radio,
-                         LightAir_GameManager& manager,
-                         LightAir_TotemUICtrl& ui);
+    // roleMgr is optional.  When provided, activation replies whose
+    // payload[0] matches a registered roleId use the new onActivate()
+    // path.  When nullptr (or roleId not found), falls back to the
+    // legacy typeId-based runner lookup.
+    LightAir_TotemDriver(LightAir_Radio&              radio,
+                         LightAir_GameManager&         manager,
+                         LightAir_TotemUICtrl&         ui,
+                         LightAir_TotemRoleManager*    roleMgr = nullptr);
 
     // Calls radio.begin() and triggers the Idle background animation.
     bool begin();
@@ -43,9 +49,10 @@ public:
     void loop();
 
 private:
-    LightAir_Radio&       _radio;
-    LightAir_GameManager& _manager;
-    LightAir_TotemUICtrl& _ui;
+    LightAir_Radio&            _radio;
+    LightAir_GameManager&      _manager;
+    LightAir_TotemUICtrl&      _ui;
+    LightAir_TotemRoleManager* _roleMgr;    // optional; nullptr = legacy path only
 
     LightAir_TotemRunner* _runner;      // nullptr = IDLE
     uint32_t              _lastBeacon;  // millis() of last beacon broadcast
