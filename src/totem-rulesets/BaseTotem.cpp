@@ -40,11 +40,7 @@ public:
     void onActivate(const uint8_t* /*payload*/, uint8_t /*len*/,
                     LightAir_TotemOutput& out) override {
         _lastBeacon = 0;
-        uint8_t r, g, b;
-        teamColor(r, g, b);
-        // Brief team-colour identity flash; Idle event is used as the
-        // generic "show team colour" background trigger.
-        out.ui.trigger(TotemUIEvent::Idle, r, g, b);
+        out.ui.trigger(TotemUIEvent::Idle);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {

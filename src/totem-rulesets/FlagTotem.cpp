@@ -9,7 +9,7 @@
 //   FLAG_OUT (1) : flag carried by enemy; silent until returned.
 //
 // Lifecycle
-//   onActivate() : enters FLAG_IN; shows team-colour Idle background.
+//   onActivate() : enters FLAG_IN; shows generic Idle background.
 //   update()     : in FLAG_IN, broadcasts MSG_FLAG_BEACON every
 //                  FLAG_BEACON_INTERVAL_MS.
 //   onMessage()  :
@@ -66,9 +66,7 @@ public:
                     LightAir_TotemOutput& out) override {
         _state      = FLAG_STATE_IN;
         _lastBeacon = 0;
-        uint8_t r, g, b;
-        teamColor(r, g, b);
-        out.ui.trigger(TotemUIEvent::Idle, r, g, b);
+        out.ui.trigger(TotemUIEvent::Idle);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
@@ -78,7 +76,9 @@ public:
                 _state = FLAG_STATE_OUT;
                 uint8_t r, g, b;
                 teamColor(r, g, b);
+                // Set looping background first, then play one-shot pickup flash on top.
                 out.ui.trigger(TotemUIEvent::FlagMissing, r, g, b);
+                out.ui.trigger(TotemUIEvent::FlagTaken,   r, g, b);
             }
             return;
         }
