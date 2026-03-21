@@ -42,7 +42,9 @@
 
 // UI — totem (RGB LED + WS2812B strip)
 #include "ui/totem/rgb/LightAir_TotemRGB.h"
+#include "ui/totem/rgb/LightAir_TotemRGB_HW.h"
 #include "ui/totem/strip/LightAir_LEDStrip.h"
+#include "ui/totem/strip/LightAir_LEDStrip_HW.h"
 #include "ui/totem/LightAir_TotemUIOutput.h"
 #include "ui/totem/LightAir_TotemUICtrl.h"
 

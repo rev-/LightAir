@@ -50,7 +50,9 @@ Enlight* enlightPtr = nullptr;
 
 // ---- Hardware objects ----
 static LightAir_RadioESPNow      transport;
-static LightAir_TotemUICtrl      ui;
+static LightAir_TotemRGB_HW      rgb;
+static LightAir_LEDStrip_HW      strip;
+static LightAir_TotemUICtrl      ui(rgb, strip);
 static LightAir_TotemRoleManager roleMgr;
 
 // Radio is constructed after NVS load (needs playerId).
@@ -76,7 +78,9 @@ void setup() {
     driver = new LightAir_TotemDriver(*radio, ui, roleMgr);
 
     // Initialise totem UI hardware.
-    ui.begin(PIN_COMM, PIN_R, PIN_G, PIN_B, PIN_DATA, NUM_LEDS);
+    rgb.begin(PIN_COMM, PIN_R, PIN_G, PIN_B);
+    strip.begin(PIN_DATA, NUM_LEDS);
+    ui.begin();
 
     // Start radio and kick off Idle animation.
     if (!driver->begin()) {

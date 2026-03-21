@@ -1,7 +1,7 @@
-#include "LightAir_LEDStrip.h"
+#include "LightAir_LEDStrip_HW.h"
 #include <string.h>
 
-void LightAir_LEDStrip::begin(int dataPin, uint8_t numLeds) {
+void LightAir_LEDStrip_HW::begin(int dataPin, uint8_t numLeds) {
     _numLeds = (numLeds > MAX_LEDS) ? MAX_LEDS : numLeds;
     // FastLED requires a compile-time pin; we default to the reference hardware
     // pin (13) here.  Override by subclassing or adjusting for your hardware.
@@ -11,14 +11,14 @@ void LightAir_LEDStrip::begin(int dataPin, uint8_t numLeds) {
     FastLED.show();
 }
 
-void LightAir_LEDStrip::play(const StripAnimation& anim) {
+void LightAir_LEDStrip_HW::play(const StripAnimation& anim) {
     _fg        = anim;
     _fgActive  = true;
     _fgStartMs = millis();
     _fgStep    = 0;
 }
 
-void LightAir_LEDStrip::loop(const StripAnimation& anim) {
+void LightAir_LEDStrip_HW::loop(const StripAnimation& anim) {
     _bg        = anim;
     _bgActive  = true;
     _bgCycleMs = millis();
@@ -26,7 +26,7 @@ void LightAir_LEDStrip::loop(const StripAnimation& anim) {
     _bgPhase   = false;
 }
 
-void LightAir_LEDStrip::stopLoop() {
+void LightAir_LEDStrip_HW::stopLoop() {
     _bgActive = false;
     if (!_fgActive) {
         setAll(0, 0, 0);
@@ -35,7 +35,7 @@ void LightAir_LEDStrip::stopLoop() {
 }
 
 // ----------------------------------------------------------------
-void LightAir_LEDStrip::update() {
+void LightAir_LEDStrip_HW::update() {
     uint32_t now = millis();
 
     if (_fgActive) {
@@ -101,11 +101,11 @@ void LightAir_LEDStrip::update() {
 }
 
 // ----------------------------------------------------------------
-void LightAir_LEDStrip::renderAnim(const StripAnimation& a,
-                                    uint32_t elapsed,
-                                    uint8_t& step,
-                                    bool&    phase,
-                                    bool     looping) {
+void LightAir_LEDStrip_HW::renderAnim(const StripAnimation& a,
+                                       uint32_t elapsed,
+                                       uint8_t& step,
+                                       bool&    phase,
+                                       bool     looping) {
     uint16_t period = a.durationMs ? a.durationMs : 1000;
 
     switch (a.effect) {
@@ -166,14 +166,14 @@ void LightAir_LEDStrip::renderAnim(const StripAnimation& a,
     }
 }
 
-void LightAir_LEDStrip::setAll(uint8_t r, uint8_t g, uint8_t b) {
+void LightAir_LEDStrip_HW::setAll(uint8_t r, uint8_t g, uint8_t b) {
     for (uint8_t i = 0; i < _numLeds; i++)
         _leds[i] = CRGB(r, g, b);
 }
 
-void LightAir_LEDStrip::setAlternate(uint8_t r1, uint8_t g1, uint8_t b1,
-                                      uint8_t r2, uint8_t g2, uint8_t b2,
-                                      bool phase) {
+void LightAir_LEDStrip_HW::setAlternate(uint8_t r1, uint8_t g1, uint8_t b1,
+                                          uint8_t r2, uint8_t g2, uint8_t b2,
+                                          bool phase) {
     for (uint8_t i = 0; i < _numLeds; i++) {
         bool even = (i & 1) == 0;
         if (even ^ phase) _leds[i] = CRGB(r1, g1, b1);

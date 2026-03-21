@@ -1,7 +1,7 @@
-#include "LightAir_TotemRGB.h"
+#include "LightAir_TotemRGB_HW.h"
 
-void LightAir_TotemRGB::begin(int pinComm, int pinR, int pinG, int pinB,
-                               bool commonActive) {
+void LightAir_TotemRGB_HW::begin(int pinComm, int pinR, int pinG, int pinB,
+                                  bool commonActive) {
     _pinComm      = pinComm;
     _pinR         = pinR;
     _pinG         = pinG;
@@ -15,7 +15,7 @@ void LightAir_TotemRGB::begin(int pinComm, int pinR, int pinG, int pinB,
     off();
 }
 
-void LightAir_TotemRGB::set(bool r, bool g, bool b) {
+void LightAir_TotemRGB_HW::set(bool r, bool g, bool b) {
     // Drive colour channels first, then enable common.
     digitalWrite(_pinR, r ? HIGH : LOW);
     digitalWrite(_pinG, g ? HIGH : LOW);
@@ -23,7 +23,7 @@ void LightAir_TotemRGB::set(bool r, bool g, bool b) {
     digitalWrite(_pinComm, _commonActive);
 }
 
-void LightAir_TotemRGB::off() {
+void LightAir_TotemRGB_HW::off() {
     // Disable common first to avoid colour flicker on channel change.
     digitalWrite(_pinComm, !_commonActive);
     digitalWrite(_pinR, LOW);

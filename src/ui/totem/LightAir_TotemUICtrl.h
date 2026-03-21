@@ -7,9 +7,8 @@
 // LightAir_TotemUICtrl — drives the totem's RGB LED and LED strip
 // from a TotemUIOutput queue.
 //
-// Hardware owned:
-//   • LightAir_TotemRGB  — simple 4-GPIO RGB LED (colour indicator)
-//   • LightAir_LEDStrip  — WS2812B addressable strip (animations)
+// Dependencies are injected at construction time (matching the
+// pattern used by LightAir_UICtrl on the player side).
 //
 // Each TotemUIEvent maps to:
 //   strip  — a StripAnimation (one-shot or looping)
@@ -21,16 +20,23 @@
 // pre-empts the background for its duration, then the background resumes.
 //
 // Usage:
-//   LightAir_TotemUICtrl ui;
-//   ui.begin(pinComm, pinR, pinG, pinB, dataPin, numLeds);
+//   LightAir_TotemRGB_HW  rgb;
+//   LightAir_LEDStrip_HW  strip;
+//   LightAir_TotemUICtrl  ui(rgb, strip);
+//   // in setup():
+//   rgb.begin(pinComm, pinR, pinG, pinB);
+//   strip.begin(dataPin, numLeds);
+//   ui.begin();
 //   // in each loop iteration after game logic:
 //   ui.apply(out.ui);
 //   ui.update();
 // ----------------------------------------------------------------
 class LightAir_TotemUICtrl {
 public:
-    void begin(int pinComm, int pinR, int pinG, int pinB,
-               int dataPin, uint8_t numLeds);
+    LightAir_TotemUICtrl(LightAir_TotemRGB& rgb, LightAir_LEDStrip& strip);
+
+    // Start the idle background animation.  Call after hardware begin().
+    void begin();
 
     // Process all queued commands for this loop iteration.
     void apply(const TotemUIOutput& output);
@@ -39,8 +45,8 @@ public:
     void update();
 
 private:
-    LightAir_TotemRGB _rgb;
-    LightAir_LEDStrip _strip;
+    LightAir_TotemRGB&  _rgb;
+    LightAir_LEDStrip&  _strip;
 
     // Dispatch helpers
     void dispatchOneShot(const TotemUICmd& cmd);

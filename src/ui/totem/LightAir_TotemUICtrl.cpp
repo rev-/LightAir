@@ -12,11 +12,12 @@ static const StripAnimation kAnimGreenPulse = { 0,255,0, StripEffect::Pulse,   4
 static const StripAnimation kAnimRedPulse   = { 255,0,0, StripEffect::Pulse,   400 };
 
 // ----------------------------------------------------------------
-void LightAir_TotemUICtrl::begin(int pinComm, int pinR, int pinG, int pinB,
-                                  int dataPin, uint8_t numLeds) {
-    _rgb.begin(pinComm, pinR, pinG, pinB);
-    _strip.begin(dataPin, numLeds);
-    // Start in idle background
+LightAir_TotemUICtrl::LightAir_TotemUICtrl(LightAir_TotemRGB& rgb,
+                                            LightAir_LEDStrip& strip)
+    : _rgb(rgb), _strip(strip)
+{}
+
+void LightAir_TotemUICtrl::begin() {
     _strip.loop(kAnimIdlePulse);
     _rgb.off();
 }
