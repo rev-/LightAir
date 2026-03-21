@@ -2,11 +2,14 @@
 #include "../enlight/EnlightCalibRoutine.h"
 #include "../nvs_config.h"
 #include <Arduino.h>
+#include <esp_log.h>
 #include <esp_random.h>
 #include <nvs_flash.h>
 #include <nvs.h>
 #include <stdio.h>
 #include <string.h>
+
+static const char* TAG = "GameConfig";
 
 #define MGR_NVS_NAMESPACE  "lightair"
 #define MGR_NVS_KEY_DM     "is_dm"
@@ -58,7 +61,16 @@ bool game_apply_config(const LightAir_Game& game,
                         const uint8_t* buf, uint16_t len,
                         uint8_t totemAssignmentOut[TotemDefs::MAX_TOTEMS],
                         uint8_t* sessionTokenOut) {
-    if (len < 2) return false;
+    uint16_t minNeeded = 2
+        + (uint16_t)game.configCount * 4
+        + (game.hasTeams ? 4 : 0)
+        + TotemDefs::MAX_TOTEMS
+        + 1;
+    if (len < minNeeded) {
+        ESP_LOGW(TAG, "config blob too short: got %u, need %u", (unsigned)len, (unsigned)minNeeded);
+        return false;
+    }
+
     uint16_t id;
     memcpy(&id, buf, 2);
     if (id != game.typeId) return false;
