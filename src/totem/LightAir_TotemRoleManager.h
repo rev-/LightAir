@@ -8,14 +8,13 @@
 // descriptors.
 //
 // Populated once at startup via registerRole() before any game
-// session begins.  The TotemDriver holds an optional pointer to
-// this registry; on receiving an activation reply (0xF1) with a
-// known roleId it bypasses the old typeId-based lookup path.
+// session begins.  On receiving an activation reply (0xF1) the
+// TotemDriver looks up the runner by roleId in this registry.
 //
 // Usage:
 //   LightAir_TotemRoleManager roleMgr;
 //   registerAllTotems(roleMgr);
-//   LightAir_TotemDriver driver(radio, gameMgr, ui, &roleMgr);
+//   LightAir_TotemDriver driver(radio, ui, roleMgr);
 // ----------------------------------------------------------------
 class LightAir_TotemRoleManager {
 public:

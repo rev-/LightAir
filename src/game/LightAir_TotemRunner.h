@@ -21,22 +21,15 @@
 //            then reset() to clear all state.
 //
 // Activation protocol — MSG_TOTEM_BEACON reply (msgType 0xF1):
-//   The GameRunner infrastructure intercept (on the host device only)
-//   replies to every MSG_TOTEM_BEACON from a configured totem with 0xF1:
+//   The GameRunner infrastructure (on the host device only) replies to
+//   every MSG_TOTEM_BEACON from a configured totem with 0xF1:
 //
-//   New role-registry path (payload[0] = TotemRoleId, not 0xFF):
 //     payload[0] = roleId  (TotemRoleId::BASE_O … MALUS)
 //     payload[1] = optional per-role config (e.g. cooldown seconds)
-//     TotemDriver finds the runner via LightAir_TotemRoleManager and
-//     calls runner->onActivate(payload, len, out).  onMessage() is NOT
-//     called with the activation packet.
 //
-//   Legacy path (payload[0] = totemVarIdx or 0xFF):
-//     payload[0] = totemVarIdx           (named totem)
-//     payload[0] = 0xFF                  (generic totem)
-//     payload[1] = GenericTotemRoles value  (only when payload[0] == 0xFF)
-//     TotemDriver finds the runner via LightAir_GameManager (typeId lookup)
-//     and calls runner->onMessage() — legacy runners handle the 0xF1 there.
+//   TotemDriver looks up the runner via LightAir_TotemRoleManager and
+//   calls runner->onActivate(payload, len, out).  onMessage() is NOT
+//   called with the activation packet.
 //
 //   Unconfigured and non-totem senders receive no reply.
 //

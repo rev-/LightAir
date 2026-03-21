@@ -20,7 +20,7 @@
 //
 // The sketch:
 //   1. Loads NVS config.
-//   2. Registers all games from AllGames.cpp.
+//   2. Registers all totem roles from AllTotems.cpp.
 //   3. Starts LightAir_TotemDriver.
 //   4. Calls driver.loop() on every Arduino loop() tick.
 //
@@ -30,7 +30,7 @@
 // ================================================================
 
 #include <LightAir.h>
-#include "../../src/rulesets/AllGames.h"
+#include "../../src/totem/AllTotems.h"
 
 // Enlight* stub — required by ruleset translation units;
 // never dereferenced on a totem (player-side behavior code is
@@ -49,13 +49,13 @@ static constexpr int PIN_B    =  21;
 Enlight* enlightPtr = nullptr;
 
 // ---- Hardware objects ----
-static LightAir_RadioESPNow  transport;
-static LightAir_GameManager  manager;
-static LightAir_TotemUICtrl  ui;
+static LightAir_RadioESPNow      transport;
+static LightAir_TotemUICtrl      ui;
+static LightAir_TotemRoleManager roleMgr;
 
 // Radio is constructed after NVS load (needs playerId).
-static LightAir_Radio*       radio = nullptr;
-static LightAir_TotemDriver* driver = nullptr;
+static LightAir_Radio*           radio  = nullptr;
+static LightAir_TotemDriver*     driver = nullptr;
 
 // ----------------------------------------------------------------
 void setup() {
@@ -66,14 +66,14 @@ void setup() {
     player_config_load(cfg);
     Serial.printf("Totem id=%u team=%u\n", cfg.id, cfg.team);
 
+    // Register all totem roles before constructing the driver.
+    registerAllTotems(roleMgr);
+
     // Initialise radio with totem ID.
     static RadioConfig radioCfg;
     radio  = new LightAir_Radio(transport, cfg.id,
                                 RadioToken::UNSET, 0, cfg.team, radioCfg);
-    driver = new LightAir_TotemDriver(*radio, manager, ui);
-
-    // Register all games (totemRunner pointers embedded in descriptors).
-    registerAllGames(manager);
+    driver = new LightAir_TotemDriver(*radio, ui, roleMgr);
 
     // Initialise totem UI hardware.
     ui.begin(PIN_COMM, PIN_R, PIN_G, PIN_B, PIN_DATA, NUM_LEDS);
