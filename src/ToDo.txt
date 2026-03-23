@@ -1,7 +1,0 @@
-Round robin to flood radio packet - Keep structures in LightAir_Game instead of single rulesets. Define only a winning rule table in ruleset
-Radio message system : reserve radio packet types, divide between in-game (LIT, RESPAWN) and out-of-game (config, result flood, etc.)
-Send game procedure : makes a packet with the selected game id, token, configuration and sends to all the players
-Init game procedure : register players and totems, give warning if any missing
-LightAir_SoundCtrl : check functionality of continuous sounds (like for flag holding)
-Sensors: how to operate shared SPI line and shared ADC
-Sensors: calibration, limits to put in place
