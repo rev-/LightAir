@@ -25,11 +25,16 @@ static bool nvs_init_once() {
 
 bool player_config_load(PlayerConfig& cfg) {
     if (!nvs_init_once()) return false;
-    cfg = { 0xFF, 0xFF };
+    cfg.id       = 0xFF;
+    cfg.team     = 0xFF;
+    cfg.hardware = DeviceHardware::PLAYER;  // safe default: boot as player
     nvs_handle_t h;
     if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return true; // defaults OK
     nvs_get_u8(h, CAL_KEY_ID,   &cfg.id);
     nvs_get_u8(h, CAL_KEY_TEAM, &cfg.team);
+    uint8_t hw = (uint8_t)DeviceHardware::PLAYER;
+    nvs_get_u8(h, CAL_KEY_HARDWARE, &hw);
+    cfg.hardware = (DeviceHardware)hw;
     nvs_close(h);
     return true;
 }
@@ -38,8 +43,18 @@ bool player_config_save(const PlayerConfig& cfg) {
     if (!nvs_init_once()) return false;
     nvs_handle_t h;
     if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
-    nvs_set_u8(h, CAL_KEY_ID,   cfg.id);
-    nvs_set_u8(h, CAL_KEY_TEAM, cfg.team);
+    nvs_set_u8(h, CAL_KEY_ID,       cfg.id);
+    nvs_set_u8(h, CAL_KEY_TEAM,     cfg.team);
+    nvs_set_u8(h, CAL_KEY_HARDWARE, (uint8_t)cfg.hardware);
+    esp_err_t e = nvs_commit(h); nvs_close(h);
+    return e == ESP_OK;
+}
+
+bool player_config_save_id(uint8_t id) {
+    if (!nvs_init_once()) return false;
+    nvs_handle_t h;
+    if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
+    nvs_set_u8(h, CAL_KEY_ID, id);
     esp_err_t e = nvs_commit(h); nvs_close(h);
     return e == ESP_OK;
 }
@@ -49,6 +64,15 @@ bool player_config_save_team(uint8_t team) {
     nvs_handle_t h;
     if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
     nvs_set_u8(h, CAL_KEY_TEAM, team);
+    esp_err_t e = nvs_commit(h); nvs_close(h);
+    return e == ESP_OK;
+}
+
+bool player_config_save_hardware(DeviceHardware hw) {
+    if (!nvs_init_once()) return false;
+    nvs_handle_t h;
+    if (nvs_open(CALIB_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
+    nvs_set_u8(h, CAL_KEY_HARDWARE, (uint8_t)hw);
     esp_err_t e = nvs_commit(h); nvs_close(h);
     return e == ESP_OK;
 }
@@ -65,9 +89,12 @@ bool enlight_calib_load(EnlightCalib& cal) {
         NVS_GET_U32  (h, CAL_KEY_GCAL_NEAR,      cal.gcalNear,    0);
         NVS_GET_U32  (h, CAL_KEY_BCAL_NEAR,      cal.bcalNear,    0);
         NVS_GET_U32  (h, CAL_KEY_LIMPOW,         cal.limpow,      0);
+        NVS_GET_U32  (h, CAL_KEY_PHASE_OFF,      cal.phaseOff,    0);
         NVS_GET_FLOAT(h, CAL_KEY_RFACT,          cal.rfact,       1.0f);
         NVS_GET_FLOAT(h, CAL_KEY_BFACT,          cal.bfact,       1.0f);
         NVS_GET_FLOAT(h, CAL_KEY_NEAR_RATIO_MAX, cal.nearRatioMax, 1e9f);
+        NVS_GET_U32  (h, CAL_KEY_MAX_NEAR_WHITE, cal.maxNearWhite, 0);
+        NVS_GET_U32  (h, CAL_KEY_MAX_FAR_WHITE,  cal.maxFarWhite,  0);
         char key[16];
         for (int p = 0; p < CALIB_MAX_PLAYERS; p++)
             for (int k = 0; k < 4; k++) {
@@ -80,6 +107,8 @@ bool enlight_calib_load(EnlightCalib& cal) {
         cal.limpow = UINT32_MAX;
         cal.rfact = cal.bfact = 1.0f;
         cal.nearRatioMax = 1e9f;
+        cal.maxNearWhite = 0;
+        cal.maxFarWhite  = 0;
         for (int p = 0; p < CALIB_MAX_PLAYERS; p++)
             for (int k = 0; k < 4; k++) cal.hitBox[p][k] = -10.0f;
         ESP_LOGW(TAG, "Calibration namespace missing -- using sentinels");
@@ -98,9 +127,12 @@ bool enlight_calib_save(const EnlightCalib& cal) {
     nvs_set_u32 (h, CAL_KEY_GCAL_NEAR,      cal.gcalNear);
     nvs_set_u32 (h, CAL_KEY_BCAL_NEAR,      cal.bcalNear);
     nvs_set_u32 (h, CAL_KEY_LIMPOW,         cal.limpow);
+    nvs_set_u32 (h, CAL_KEY_PHASE_OFF,      cal.phaseOff);
     nvs_set_blob(h, CAL_KEY_RFACT,          &cal.rfact,        sizeof(float));
     nvs_set_blob(h, CAL_KEY_BFACT,          &cal.bfact,        sizeof(float));
     nvs_set_blob(h, CAL_KEY_NEAR_RATIO_MAX, &cal.nearRatioMax, sizeof(float));
+    nvs_set_u32 (h, CAL_KEY_MAX_NEAR_WHITE, cal.maxNearWhite);
+    nvs_set_u32 (h, CAL_KEY_MAX_FAR_WHITE,  cal.maxFarWhite);
     char key[16];
     for (int p = 0; p < CALIB_MAX_PLAYERS; p++)
         for (int k = 0; k < 4; k++) {

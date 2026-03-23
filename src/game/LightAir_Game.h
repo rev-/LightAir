@@ -5,6 +5,42 @@
 #include "LightAir_DirectRadioRule.h"
 #include "LightAir_ReplyRadioRule.h"
 #include "LightAir_WinnerVar.h"
+#include "LightAir_TotemRequirement.h"
+#include "../ui/player/LightAir_UICtrl.h"
+#include "../config.h"
+
+// Forward declaration: LightAir_GameRunner is defined in LightAir_GameRunner.h,
+// which includes this header.  The forward decl breaks the cycle; the full
+// type is only needed in function pointer signatures and .cpp implementations.
+class LightAir_GameRunner;
+
+// ----------------------------------------------------------------
+// MenuResult — returned by blocking pre-game menu classes.
+// ----------------------------------------------------------------
+enum class MenuResult : uint8_t { Confirmed, Cancelled };
+
+// ----------------------------------------------------------------
+// ScoreTable — snapshot of collected end-game scores passed to
+// an optional onScoreAnnounce callback.  Allows rulesets to
+// perform custom winner computation (e.g. team aggregation)
+// instead of the default individual-player ranking.
+//
+// roster[0..rosterCount-1]  — player IDs in collection order
+// accumMask                 — bit r = slots[r] is valid
+// slots[r]                  — winnerVarCount × int32_t LE for roster[r]
+// teamMap[id]               — 0=O, 1=X for player id (size MAX_PLAYER_ID)
+// myPlayerId                — this device's logical player ID
+// ----------------------------------------------------------------
+struct ScoreTable {
+    uint8_t          rosterCount;
+    const uint8_t*   roster;
+    uint32_t         accumMask;
+    const uint8_t  (*slots)[GameDefaults::MAX_WINNER_VARS * 4];
+    uint8_t          winnerVarCount;
+    const WinnerVar* winnerVars;
+    const uint8_t*   teamMap;    // size PlayerDefs::MAX_PLAYER_ID
+    uint8_t          myPlayerId;
+};
 
 // ----------------------------------------------------------------
 // LightAir_Game — complete descriptor of a table-driven game.
@@ -14,8 +50,8 @@
 // inheritance is required.
 //
 // Fields:
-//   typeId         — unique 32-bit game identifier.  Written as
-//                    the first 4 bytes of config blobs so receivers
+//   typeId         — unique 16-bit game identifier.  Written as
+//                    the first 2 bytes of config blobs so receivers
 //                    can verify compatibility before applying.
 //
 //   name           — short display name (≤15 chars) shown in the
@@ -100,7 +136,7 @@
 //   };
 //
 //   const LightAir_Game game_ffa = {
-//       .typeId         = 0x00000001,
+//       .typeId         = GameTypeId::FREE_FOR_ALL,
 //       .name           = "Free for All",
 //       .configVars     = configVars,  .configCount    = 1,
 //       .monitorVars    = monitorVars, .monitorCount   = 2,
@@ -120,7 +156,7 @@
 //   }
 // ----------------------------------------------------------------
 struct LightAir_Game {
-    uint32_t             typeId;
+    uint16_t             typeId;
     const char*          name;
 
     const ConfigVar*     configVars;
@@ -145,8 +181,12 @@ struct LightAir_Game {
     uint8_t              initialState;
 
     // Called by GameRunner::begin() after display binding sets are built.
+    // ui is the optional UICtrl pointer passed to GameRunner::begin(); may be nullptr.
+    // runner is the GameRunner instance; use runner.totemIdForRole() to populate
+    // local totem-ID caches.
     // nullptr = skip.
-    void (*onBegin)(LightAir_DisplayCtrl&, LightAir_Radio&);
+    void (*onBegin)(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
+                    const LightAir_GameRunner&);
 
     // ---- End-game score collection and winner election (optional) ----
     //
@@ -167,4 +207,32 @@ struct LightAir_Game {
     uint8_t          winnerVarCount;
     uint8_t          scoringState;    // state that activates collection; 255 = disabled
     uint8_t          scoreMsgType;    // even msgType for the per-player score broadcast
+
+    // Optional custom winner announcement.  If non-null, called instead of the
+    // default individual-player ranking after all scores are collected.
+    // Use for team-aggregate or other non-individual winner logic.
+    // nullptr = use default ranking (scoreSlotBeats / scoreAnnounce).
+    void (*onScoreAnnounce)(const ScoreTable&, LightAir_DisplayCtrl&);
+
+    // ---- Totem roles and team configuration ----
+    //
+    // totemRequirements[] lists the totem roles this game supports
+    // (e.g. BASE_O, FLAG_X, BONUS) together with min/max counts.
+    // The host assigns specific totem device IDs to each role in
+    // LightAir_GameSetupMenu (S4c).
+    //
+    // hasTeams enables the Teams submenu (S4b) where the host assigns each
+    // player to team O or team X.  teamBitmask points to a file-scope int
+    // in the ruleset; bit i=1 means player i is on team X.  Set to nullptr
+    // when hasTeams==false.
+    //
+    const LightAir_TotemRequirement* totemRequirements;   // nullptr = none
+    uint8_t                          totemRequirementCount;
+    bool                             hasTeams;
+    int*                             teamBitmask;   // bit i=1 → player i on team X; nullptr if !hasTeams
+
+    // Called by GameRunner immediately before esp_restart() after the player
+    // presses A+B on the end-game screen.  Use for last-moment display updates
+    // or NVS writes.  nullptr = skip.
+    void (*onEnd)(LightAir_DisplayCtrl&) = nullptr;
 };

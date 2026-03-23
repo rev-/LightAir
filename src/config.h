@@ -1,6 +1,132 @@
 #pragma once
 #include <stdint.h>
 
+// ================================================================
+// RadioMsg — central registry of all game and infrastructure
+// radio message type bytes.
+//
+// Layout
+// ──────
+// 0x10 block  player game messages (shared by every game ruleset)
+// 0x50 block  totem-mediated game messages
+// 0xA0 block  infrastructure (config, roster discovery, end-game)
+// 0xF0 block  totem protocol (beacon, roster)
+//
+// Convention: even = request, odd = reply (same across all blocks).
+// typeId + sessionToken keep game sessions isolated on the wire, so
+// each game reuses the same byte values rather than carving out its
+// own private range.
+//
+// Adding a new message
+// ────────────────────
+// 1. Pick the next even slot in the appropriate block.
+// 2. Add the constant here with a short description.
+// 3. If the message is game-specific, note which ruleset(s) use it.
+// 4. Never reuse a retired value; leave a comment in its place.
+// ================================================================
+namespace RadioMsg {
+
+// ── 0x10 block: player game messages ───────────────────────────
+// Used by every game that has direct player-to-player hits.
+
+// Unicast hit notification sent by shooter to target.
+// Reply (0x11) payload[0] = ReplySubType (TAKEN / SHONE / DOWN / FRIEND).
+constexpr uint8_t MSG_LIT           = 0x10;
+
+// End-game score broadcast, one packet per player.
+constexpr uint8_t MSG_SCORE_COLLECT = 0x12;
+
+// Periodic team-score update so teammates track aggregate points (Teams).
+constexpr uint8_t MSG_POINT_REPORT  = 0x14;
+
+// Next available in 0x10 block: 0x16
+
+// ── 0x50 block: totem-mediated game messages ────────────────────
+// Messages that travel between a player and a totem (not player→player).
+
+// Flag state change broadcast: pickup / capture / drop (Flag game).
+// payload[0] = FlagEventType; no meaningful reply expected.
+constexpr uint8_t MSG_FLAG_EVENT    = 0x50;
+
+// Control-point beacon broadcast by CP totem every 2 s (Upkeep game).
+// payload[0] = cpTeam (0=O, 1=X, 0xFF=teamless).
+// Reply (0x53) subType = 1 (team-O) or 2 (team-X) to declare presence.
+constexpr uint8_t MSG_CP_BEACON     = 0x52;
+
+// Control-point score award broadcast by CP totem (Upkeep game).
+// payload[0] = team (0=O, 1=X) receiving the point.
+constexpr uint8_t MSG_CP_SCORE      = 0x54;
+
+// BASE totem beacon (new role-based architecture).
+// payload[0] = team (0=O, 1=X).
+// Reply (0x57): subType = myTeam+1 (1=teamO, 2=teamX) — player near base, requesting respawn.
+constexpr uint8_t MSG_BASE_BEACON   = 0x56;
+
+// FLAG totem beacon (new role-based architecture).
+// payload[0] = state (0=FLAG_IN, 1=FLAG_OUT); payload[1] = team (0=O, 1=X).
+// Reply (0x59): enemy-team player picking up the flag.
+constexpr uint8_t MSG_FLAG_BEACON   = 0x58;
+
+// Broadcast flood by flag carrier when shot — flag returns to its totem.
+// payload[0] = flagTeam (0=O, 1=X).  No reply expected.
+constexpr uint8_t MSG_FLAG_RETURN   = 0x5A;
+
+// Broadcast flood by flag carrier when scoring — flag returns to its totem.
+// payload[0] = flagTeam (0=O, 1=X).  No reply expected.
+constexpr uint8_t MSG_FLAG_SCORE    = 0x5C;
+
+// BONUS totem beacon (new role-based architecture). payload[0] = 0 when ready.
+// Reply (0x5F): player claims bonus.
+constexpr uint8_t MSG_BONUS_BEACON  = 0x5E;
+
+// MALUS totem beacon (new role-based architecture). payload[0] = 0 when ready.
+// Reply (0x61): player claims malus.
+constexpr uint8_t MSG_MALUS_BEACON  = 0x60;
+
+// Next available in 0x50 block: 0x62
+
+// ── 0xA0 block: infrastructure ──────────────────────────────────
+// Sent with typeId == UNIVERSAL (0x0000); not game-scoped.
+
+// Game configuration broadcast from host to all players.
+constexpr uint8_t MSG_CONFIG        = 0xA0;
+
+// Roster presence broadcast; players announce themselves during discovery.
+constexpr uint8_t MSG_ROSTER        = 0xA2;
+
+// End-of-game signal; forces any device still in-game into scoringState.
+constexpr uint8_t MSG_END_GAME      = 0xAE;
+
+// Next available in 0xA0 block: 0xA4 (before 0xAE) or 0xB0 (after)
+
+// ── 0xF0 block: totem protocol ───────────────────────────────────
+// All unactivated totems broadcast MSG_TOTEM_BEACON regardless of role.
+// The GameRunner infrastructure intercept (host device only) replies with
+// 0xF1 carrying the totem's assigned roleId (TotemRoleId constant) in payload[0].
+// No reply is sent to unconfigured totems.  Once activated a totem
+// switches to role-specific beacons so 0xF1 is never ambiguous.
+// 0xF0/0xF1 must not be re-used by any per-game message table.
+
+// Even: totem → broadcast beacon (IDLE state only).
+// Odd (0xF1): host activation reply carrying roleId in payload[0].
+constexpr uint8_t MSG_TOTEM_BEACON  = 0xF0;
+
+// Universal end-of-game roster broadcast (typeId == UNIVERSAL).
+// Sent by the host to every totem at the end of the game.
+// TotemDriver calls runner->onRoster(), then reset() on receipt.
+constexpr uint8_t MSG_TOTEM_ROSTER  = 0xF2;
+
+} // namespace RadioMsg
+
+// ---------------------------------------------------------------
+// Hardware identity — stored in NVS to select player vs totem
+// firmware path at boot time.
+// ---------------------------------------------------------------
+enum class DeviceHardware : uint8_t {
+    PLAYER = 0,   // gun / player device (default when key absent)
+    TOTEM  = 1,   // static game object (base, flag, control point)
+};
+
 // ---------------------------------------------------------------
 // Enlight hardware configuration
 //
@@ -93,14 +219,58 @@ namespace DisplayDefaults {
 // Game configuration
 // ---------------------------------------------------------------
 namespace GameDefaults {
-    constexpr uint8_t  MSG_CONFIG        = 0x20; // radio msgType for config broadcast (even)
+    constexpr uint8_t  MSG_CONFIG        = RadioMsg::MSG_CONFIG;
+    constexpr uint8_t  MSG_ROSTER        = RadioMsg::MSG_ROSTER;
+    constexpr uint32_t ROSTER_WINDOW_MS  = 3000; // ms to collect presence broadcasts during discovery
+    constexpr uint32_t ROSTER_RETRY_MS        = 1000; // ms between own re-broadcasts during discovery
+    constexpr uint32_t PRESTART_BROADCAST_MS  = 2000; // ms between MSG_ROSTER broadcasts on pre-start screen
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
-    constexpr uint8_t  RADIO_OUT_PAYLOAD = 239;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
+    constexpr uint8_t  RADIO_OUT_PAYLOAD = 237;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
     constexpr uint8_t  MAX_GAMES         = 8;    // max games registered in GameManager
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
-    constexpr uint8_t  MAX_WINNER_VARS   = 8;    // max entries in a winnerVars[] table
-    constexpr uint32_t SCORE_RETRY_MS    = 2000; // ms between score re-broadcasts during scoringState
+    constexpr uint8_t  MAX_WINNER_VARS   = 2;    // max entries in a winnerVars[] table (primary + tie-breaker)
+    constexpr uint32_t SCORE_RETRY_MS           = 2000; // ms between score re-broadcasts during scoringState
+    constexpr uint8_t  MAX_PARTICIPANTS         = 28;   // max roster entries (players + totems); mask must be uint32_t
+    constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
+    constexpr uint8_t  MSG_END_GAME             = RadioMsg::MSG_END_GAME;
+}
+// Worst-case fused score payload: 4-byte mask + MAX_PARTICIPANTS slots of MAX_WINNER_VARS × int32_t.
+// Must fit in a single radio packet.  Reduce MAX_PARTICIPANTS or MAX_WINNER_VARS if this fires.
+static_assert(4u + (uint32_t)GameDefaults::MAX_PARTICIPANTS
+                  * GameDefaults::MAX_WINNER_VARS * 4u
+              <= GameDefaults::RADIO_OUT_PAYLOAD,
+              "Score payload exceeds radio MTU — reduce MAX_PARTICIPANTS or MAX_WINNER_VARS");
+
+// ---------------------------------------------------------------
+// Totem identity tables
+//
+// Totem IDs go downward from 254 (totem01=254, totem02=253, …).
+// Up to MAX_TOTEMS=16 totems are supported (IDs 239–254).
+// ---------------------------------------------------------------
+namespace TotemDefs {
+    constexpr uint8_t MAX_TOTEM_ID    = 254;
+    constexpr uint8_t MAX_TOTEMS      = 16;   // IDs 239–254
+    constexpr uint8_t MAX_TOTEM_ROLES = 32;   // max entries in LightAir_TotemRoleManager
+
+    constexpr uint8_t totemIndex(uint8_t id)   { return MAX_TOTEM_ID - id; }
+    constexpr uint8_t idFromIndex(uint8_t idx) { return MAX_TOTEM_ID - idx; }
+    constexpr bool    isTotemId(uint8_t id) {
+        return id >= (MAX_TOTEM_ID - MAX_TOTEMS + 1) && id <= MAX_TOTEM_ID;
+    }
+
+    // Short numeric labels (3 chars + null) — kept as char array for future naming schemes.
+    constexpr char totemShort[MAX_TOTEMS][4] = {
+        "01","02","03","04","05","06","07","08",
+        "09","10","11","12","13","14","15","16",
+    };
+    // Long readable names (≤11 chars + null).
+    constexpr char totemNames[MAX_TOTEMS][12] = {
+        "Totem 01","Totem 02","Totem 03","Totem 04",
+        "Totem 05","Totem 06","Totem 07","Totem 08",
+        "Totem 09","Totem 10","Totem 11","Totem 12",
+        "Totem 13","Totem 14","Totem 15","Totem 16",
+    };
 }
 
 // ---------------------------------------------------------------
@@ -111,7 +281,7 @@ namespace GameDefaults {
 // into these tables for display and winner announcements.
 // ---------------------------------------------------------------
 namespace PlayerDefs {
-    constexpr uint8_t MAX_PLAYER_ID = 16;
+    constexpr uint8_t MAX_PLAYER_ID = 17;  // IDs 0 (reserved) + 1–16 (players)
 
     // Long readable names (≤11 chars + null).
     constexpr char playerNames[MAX_PLAYER_ID][12] = {
@@ -119,11 +289,13 @@ namespace PlayerDefs {
         "04-Blue",   "05-Orange",  "06-Red",     "07-Lime",
         "08-Magenta","09-Purple",  "10-Unknown", "11-Unknown",
         "12-Unknown","13-Unknown", "14-Unknown", "15-Unknown",
+        "16-Unknown",
     };
 
     // Short 3-capital-letter labels (3 chars + null).
     constexpr char playerShort[MAX_PLAYER_ID][4] = {
         "NON","CLR","GRN","YLW","BLU","ORG","RED","LME",
         "MAG","PUR","UN0","UN1","UN2","UN3","UN4","UN5",
+        "UN6",
     };
 }

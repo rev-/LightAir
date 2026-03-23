@@ -49,6 +49,14 @@ struct EnlightResult {
                                 // colour id (NEAR, 0 until near grid defined)
 };
 
+// Raw correlator output after a completed run — exposed for calibration routines.
+struct EnlightRawMeasure {
+    long long rout, gout, bout;    // far  correlator sums (signed)
+    long long rnear, gnear, bnear; // near correlator sums (signed)
+    uint32_t  satCount;            // saturated triples in this run
+    uint32_t  totalSamples;        // total triples processed (_arrayiter)
+};
+
 // Grid classifier: O(log N) lookup in non-overlapping (outr, outang) boxes
 struct GridClassifier {
     float   xThresh[GRID_MAX_THRESH];
@@ -96,6 +104,16 @@ public:
     //   { IDLE,       0 }  before any run()
     EnlightResult poll();
 
+    // Raw correlator accumulators from the last completed run.
+    // Valid to call immediately after poll() returns a non-RUNNING status.
+    // Values are reset by run(), so call this before the next run().
+    EnlightRawMeasure rawMeasure() const;
+
+    // Rebuild the sine/cosine lookup table with the given phase offset.
+    // Also precomputes _sin2total and reallocates _satPhaseCount.
+    // Safe to call outside of an active run().
+    void buildSintab(uint32_t phase);
+
 private:
     EnlightConfig   _cfg;
     EnlightCalib    _cal;
@@ -111,6 +129,21 @@ private:
     // Correlator kernel. Cosine = sintab[(idx+_cosOffset)%_goertzPeriod]; no second array.
     int32_t*    _sintab    = nullptr;
     uint32_t    _cosOffset = 0;
+
+    // Per-phase saturation counter.
+    // _satPhaseCount[j] is incremented whenever a triple at phase j = (_arrayiter % GP)
+    // hits SAT_HIGH or SAT_LOW on any channel.  Maximum value per phase per run() call is
+    // repetitions × _periodsPerCycle (≤ 13 per DMA cycle at V6R2 defaults); uint16_t is
+    // sufficient for up to ~5000 repetitions before overflow.
+    //
+    // A single array is enough for both far and near corrections because classify() weights
+    // it differently for each channel:
+    //   far  correction ← Σ_j satPhaseCount[j] × sintab[j]²          (sin² weight)
+    //   near correction ← Σ_j satPhaseCount[j] × sintab[(j+cosOffset)%GP]²  (cos² weight)
+    // The squared-kernel weighting provides automatic phase attribution: a saturation at the
+    // cosine peak (sin[j] = 0) contributes zero to the far correction and maximum to the near.
+    uint16_t*   _satPhaseCount = nullptr;
+    long long   _sin2total     = 0;  // Σ_j sintab[j]² = Σ_j cos[j]²; precomputed in buildSintab()
 
     // LED DIO SPI
     spi_device_handle_t _ledDevice   = nullptr;
@@ -146,7 +179,6 @@ private:
     TaskArgs        _taskArgs      = {};
 
     bool          generateWaveform();
-    void          buildSintab(uint32_t phase);
     void          buildGrid();
     int           gridLookup(float outr, float outang) const;
     void          buildAdcTxBuffer();

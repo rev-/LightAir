@@ -27,7 +27,7 @@ public:
 
     bool begin(const uint8_t selfMac[6]) override;
     bool send(const uint8_t mac[6], const uint8_t* data, size_t len) override;
-    bool receive(uint8_t* data, int& len, int maxLen)                 override;
+    bool receive(uint8_t* data, int& len, int maxLen, int8_t& rssi)  override;
 
 private:
     uint8_t _channel;
@@ -35,11 +35,11 @@ private:
     // SPSC ring buffer — written by ESP-NOW callback (core 0),
     //                     read by receive()           (core 1).
     portMUX_TYPE _mux = portMUX_INITIALIZER_UNLOCKED;
-    struct Entry { uint8_t data[ESPNOW_MAX_PKT_LEN]; int len; };
+    struct Entry { uint8_t data[ESPNOW_MAX_PKT_LEN]; int len; int8_t rssi; };
     Entry        _queue[ESPNOW_RECV_QUEUE];
     volatile int _head = 0;
     volatile int _tail = 0;
 
     static LightAir_RadioESPNow* _instance;
-    static void onRecv(const uint8_t* mac, const uint8_t* data, int len);
+    static void onRecv(const esp_now_recv_info_t* recv_info, const uint8_t* data, int len);
 };

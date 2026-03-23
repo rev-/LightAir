@@ -1,4 +1,5 @@
 #include <LightAir.h>
+#include "GameTypeIds.h"
 
 // ================================================================
 // Free For All — every player shines every other player.
@@ -52,7 +53,8 @@ namespace FFA {
 enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 
 // ---- Radio message types and reply sub-types ----
-enum Msg         : uint8_t { MSG_LIT = 0x10, MSG_SCORE_COLLECT = 0x12 };
+using RadioMsg::MSG_LIT;           // 0x10
+using RadioMsg::MSG_SCORE_COLLECT; // 0x12
 enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3 };
 
 // ---- Config variables ----
@@ -74,6 +76,8 @@ static int shoneTimes   = 0;
 static uint8_t   gState;
 static uint32_t  respawnAt;   // millis() when respawn fires
 static uint32_t  lastTickAt;  // millis() of last per-second decrement
+static bool      triggerWasActive = false;
+static uint32_t  releaseAt        = 0;
 
 // ---- Config vars (startup menu) ----
 // all vars must be int, 
@@ -141,14 +145,17 @@ static const WinnerVar winnerVars[] = {
 };
 
 // ---- onBegin: reset all runtime state from config ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&) {
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
+                    const LightAir_GameRunner&) {
     lives        = startLives;
     energy       = startEnergy;
     gameTimeLeft = gameTime;
     points       = 0;
     energySpent  = 0;
-    shoneTimes   = 0;
-    lastTickAt   = millis();
+    shoneTimes       = 0;
+    lastTickAt       = millis();
+    triggerWasActive = false;
+    releaseAt        = 0;
 }
 
 // ---- Shared per-second ticker (call from every active-state behavior) ----
@@ -210,9 +217,6 @@ static void doInGame(const InputReport& inp, const RadioReport&,
                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
 
-    static bool     triggerWasActive = false;
-    static uint32_t releaseAt        = 0;
-
     constexpr uint8_t REPS = 4;
     bool triggerActive = false;
 
@@ -262,13 +266,19 @@ static const StateBehavior behaviors[] = {
     { GAME_END, nullptr   },   // static display — no per-cycle logic needed
 };
 
+// ---- Totem requirements (BONUS and MALUS are optional) ----
+static const LightAir_TotemRequirement totemRequirements[] = {
+    { TotemRoleId::BONUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+    { TotemRoleId::MALUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+};
+
 } // namespace FFA
 
 // ================================================================
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
 const LightAir_Game game_ffa = {
-    /* typeId                */ 0x00000001,
+    /* typeId                */ GameTypeId::FREE_FOR_ALL,
     /* name                  */ "Free for All",
     /* configVars            */ FFA::configVars,         /* configCount            */ 5,
     /* monitorVars           */ FFA::monitorVars,        /* monitorCount           */ 8,
@@ -281,4 +291,8 @@ const LightAir_Game game_ffa = {
     /* winnerVars            */ FFA::winnerVars,         /* winnerVarCount         */ 2,
     /* scoringState          */ FFA::GAME_END,
     /* scoreMsgType          */ FFA::MSG_SCORE_COLLECT,
+    /* onScoreAnnounce       */ nullptr,
+    /* totemRequirements     */ FFA::totemRequirements,  /* totemRequirementCount  */ 2,
+    /* hasTeams              */ false,
+    /* teamBitmask           */ nullptr,
 };

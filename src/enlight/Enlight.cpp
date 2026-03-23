@@ -17,6 +17,7 @@ Enlight::~Enlight() {
     heap_caps_free(_adcTxBuf);
     heap_caps_free(_adcRxBuf);
     heap_caps_free(_sintab);
+    heap_caps_free(_satPhaseCount);
 }
 
 /* ============================================================
@@ -104,6 +105,20 @@ void Enlight::buildSintab(uint32_t phase) {
     const float k = 2.0f * (float)M_PI / (float)_goertzPeriod;
     for (uint32_t i = 0; i < _goertzPeriod; i++)
         _sintab[i] = (int32_t)roundf((float)SIN_MAG * sinf(k * (float)(i + phase)));
+
+    // Precompute Σ sintab[j]² = Σ cos[j]² (they are equal over a full period).
+    // Used once in classify() as the denominator for both far and near corrections.
+    _sin2total = 0;
+    for (uint32_t i = 0; i < _goertzPeriod; i++)
+        _sin2total += (long long)_sintab[i] * _sintab[i];
+
+    // Allocate the per-phase saturation counter (one array, GP entries, uint16_t).
+    // Zeroed here by calloc; zeroed again at the start of every run() via memset.
+    heap_caps_free(_satPhaseCount);
+    _satPhaseCount = (uint16_t*)heap_caps_calloc(_goertzPeriod, sizeof(uint16_t),
+                                                  MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    if (!_satPhaseCount)
+        ESP_LOGE(TAG, "satPhaseCount alloc failed");
 }
 
 /* ============================================================
@@ -152,7 +167,7 @@ int Enlight::gridLookup(float outr, float outang) const {
  * ============================================================ */
 bool Enlight::begin() {
     if (!generateWaveform()) return false;
-    buildSintab(0); if (!_sintab) return false;
+    buildSintab(_cal.phaseOff); if (!_sintab) return false;
     buildGrid();
 
     gpio_config_t gc={};
@@ -231,10 +246,15 @@ bool Enlight::run(uint32_t repetitions) {
     taskEXIT_CRITICAL(&_mux);
     _rout=_gout=_bout=_rnear=_gnear=_bnear=_rawsum=0;
     _arrayiter=_satCount=0;
+    if (_satPhaseCount) memset(_satPhaseCount, 0, _goertzPeriod * sizeof(uint16_t));
     _active=true;
     gpio_set_level((gpio_num_t)_cfg.afeOn,1);
     spawnCycle();
     return true;
+}
+
+EnlightRawMeasure Enlight::rawMeasure() const {
+    return { _rout, _gout, _bout, _rnear, _gnear, _bnear, _satCount, _arrayiter };
 }
 
 EnlightResult Enlight::poll() {
@@ -264,26 +284,40 @@ void Enlight::buildAdcTxBuffer() {
 /* ============================================================
  *   processAdcCycle()
  *   Far  kernel: sintab[idx]
- *   Near kernel: sintab[(idx+_cosOffset)%_goertzPeriod]
- *   Both accumulated in the same pass; no extra allocation.
+ *   Near kernel: sintab[(idx+_cosOffset)%GP]
+ *
+ *   Saturation control
+ *   ------------------
+ *   When any R/G/B channel clips, the triple is excluded from both
+ *   accumulators and its phase bucket is recorded in _satPhaseCount[idx].
+ *   classify() later weights this per-phase count by sin²[j] to correct
+ *   the far baseline and by cos²[j] to correct the near baseline.
+ *   The squared-kernel weighting provides automatic attribution: a saturation
+ *   at the cosine peak (sin[j] = 0) contributes nothing to the far correction.
  * ============================================================ */
 void Enlight::processAdcCycle() {
-    const uint32_t triples=_adcConvsPerCycle/ADC_CHANNELS;
-    for (uint32_t t=0;t<triples;t++) {
-        const uint32_t base=t*ADC_CHANNELS+ADC_PIPELINE_DELAY;
-        auto r12=[&](uint32_t s)->uint16_t{
-            return(((uint16_t)_adcRxBuf[s*2]<<8)|_adcRxBuf[s*2+1])&0x0FFF;};
-        const uint16_t rv=r12(base), gv=r12(base+1), bv=r12(base+2);
-        _rawsum+=rv+gv+bv;
-        const bool sat=(rv>=SAT_HIGH||rv<=SAT_LOW||gv>=SAT_HIGH||gv<=SAT_LOW
-                       ||bv>=SAT_HIGH||bv<=SAT_LOW);
-        if (sat) { _satCount++; }
-        else {
-            const uint32_t idx=_arrayiter%_goertzPeriod;
-            const int32_t  ks=_sintab[idx];
-            const int32_t  kc=_sintab[(idx+_cosOffset)%_goertzPeriod];
-            _rout+=(long long)rv*ks; _gout+=(long long)gv*ks; _bout+=(long long)bv*ks;
-            _rnear+=(long long)rv*kc; _gnear+=(long long)gv*kc; _bnear+=(long long)bv*kc;
+    const uint32_t triples = _adcConvsPerCycle / ADC_CHANNELS;
+    for (uint32_t t = 0; t < triples; t++) {
+        const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+        auto r12 = [&](uint32_t s) -> uint16_t {
+            return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
+        };
+        const uint16_t rv = r12(base), gv = r12(base+1), bv = r12(base+2);
+        _rawsum += rv + gv + bv;
+
+        const uint32_t idx = _arrayiter % _goertzPeriod;
+        const int32_t  ks  = _sintab[idx];
+        const int32_t  kc  = _sintab[(idx + _cosOffset) % _goertzPeriod];
+
+        if (rv >= SAT_HIGH || rv <= SAT_LOW ||
+            gv >= SAT_HIGH || gv <= SAT_LOW ||
+            bv >= SAT_HIGH || bv <= SAT_LOW) {
+            // Record which phase bucket was lost; classify() uses this for baseline correction.
+            _satPhaseCount[idx]++;
+            _satCount++;
+        } else {
+            _rout  += (long long)rv*ks; _gout  += (long long)gv*ks; _bout  += (long long)bv*ks;
+            _rnear += (long long)rv*kc; _gnear += (long long)gv*kc; _bnear += (long long)bv*kc;
         }
         _arrayiter++;
     }
@@ -291,38 +325,109 @@ void Enlight::processAdcCycle() {
 
 /* ============================================================
  *   classify()
+ *
+ *   Baseline correction for saturation-excluded samples
+ *   ----------------------------------------------------
+ *   The stored calibration values (rcal, gcal, …) were measured with ALL
+ *   samples present.  When saturated triples are excluded in processAdcCycle()
+ *   the accumulators are smaller, so subtracting the full baseline over-
+ *   subtracts and produces false zeroes.
+ *
+ *   Correction principle
+ *   Each sample at phase j contributes to rcal proportionally to sintab[j]²
+ *   (kernel power ≈ sin²).  The fraction of baseline energy lost through
+ *   excluded samples is therefore:
+ *
+ *     frac = Σ_j satPhaseCount[j] × sin²[j]  /  (N_per_phase × Σ_j sin²[j])
+ *
+ *   where N_per_phase = _arrayiter / GP is the number of times each phase
+ *   was visited (exact, since each period contains exactly one of each phase).
+ *   The corrected baseline is  cal × (1 − frac) = cal − cal × frac.
+ *
+ *   The SAME _satPhaseCount array is used for both far and near channels,
+ *   weighted by sin²[j] and cos²[j] respectively.  Because Σ sin²[j] = Σ cos²[j]
+ *   over a full period, the denominator is identical and is precomputed as
+ *   _sin2total in buildSintab().
+ *
+ *   Integer arithmetic (Q16 fixed-point, no float)
+ *   -----------------------------------------------
+ *   frac_q16 = (sin2_sat << 16) / denom     ∈ [0, 65536]
+ *   corr     = (cal × frac_q16 + (1<<15)) >> 16   (rounded)
+ *
+ *   Overflow check (worst case, all phases always saturated):
+ *     sin2_sat   ≤ N_per_phase × _sin2total  →  sin2_sat << 16 fits in int64
+ *     cal × frac_q16  ≤ UINT32_MAX × 65536 ≈ 2.8 × 10¹⁴  →  fits in int64
  * ============================================================ */
 EnlightResult Enlight::classify() {
-    const long long rout=(_rout>(long long)_cal.rcal)?_rout-_cal.rcal:0LL;
-    const long long gout=(_gout>(long long)_cal.gcal)?_gout-_cal.gcal:0LL;
-    const long long bout=(_bout>(long long)_cal.bcal)?_bout-_cal.bcal:0LL;
-    _rnear=(_rnear>(long long)_cal.rcalNear)?_rnear-_cal.rcalNear:0LL;
-    _gnear=(_gnear>(long long)_cal.gcalNear)?_gnear-_cal.gcalNear:0LL;
-    _bnear=(_bnear>(long long)_cal.bcalNear)?_bnear-_cal.bcalNear:0LL;
+    // Accumulate sin²-weighted and cos²-weighted saturation counts.
+    long long sin2_sat = 0, cos2_sat = 0;
+    if (_satPhaseCount && _sin2total > 0) {
+        for (uint32_t j = 0; j < _goertzPeriod; j++) {
+            if (!_satPhaseCount[j]) continue;
+            const long long sj = _sintab[j];
+            const long long cj = _sintab[(j + _cosOffset) % _goertzPeriod];
+            sin2_sat += (long long)_satPhaseCount[j] * sj * sj;
+            cos2_sat += (long long)_satPhaseCount[j] * cj * cj;
+        }
+    }
 
-    ESP_LOGD(TAG,"rawsum=%lld far=(%lld,%lld,%lld) near=(%lld,%lld,%lld) sat=%lu",
-             _rawsum,rout,gout,bout,_rnear,_gnear,_bnear,(unsigned long)_satCount);
+    // denom = N_per_phase × Σ sin²[j]  (total expected sin²-weighted sample count)
+    const long long n_per_phase = (long long)(_arrayiter / _goertzPeriod);
+    const long long denom       = n_per_phase * _sin2total;
 
-    if (_rawsum<=(long long)_cal.limpow) return {EnlightStatus::LOW_POW,0};
+    // Q16 correction fractions: 0 = no saturation, 65536 = all samples excluded.
+    const long long frac_far_q16  = (denom > 0) ? (sin2_sat << 16) / denom : 0LL;
+    const long long frac_near_q16 = (denom > 0) ? (cos2_sat << 16) / denom : 0LL;
 
-    const float farSum =(float)(llabs(rout) +llabs(gout) +llabs(bout));
-    const float nearSum=(float)(llabs(_rnear)+llabs(_gnear)+llabs(_bnear));
-    if (farSum>0.0f && (nearSum/farSum)>_cal.nearRatioMax) {
-        ESP_LOGD(TAG,"NEAR ratio=%.3f",(double)(nearSum/farSum));
+    // Corrected baselines: cal - round(cal × frac).  Clamped so they can't go negative.
+    // The + (1<<15) term rounds to nearest rather than truncating.
+#define CORR(cal, frac_q16) \
+    ((long long)(cal) - (((long long)(cal) * (frac_q16) + (1LL<<15)) >> 16))
+#define EFF(cal, frac_q16) \
+    (CORR(cal, frac_q16) > 0 ? CORR(cal, frac_q16) : 0LL)
+
+    const long long eff_rcal     = EFF(_cal.rcal,     frac_far_q16);
+    const long long eff_gcal     = EFF(_cal.gcal,     frac_far_q16);
+    const long long eff_bcal     = EFF(_cal.bcal,     frac_far_q16);
+    const long long eff_rcalNear = EFF(_cal.rcalNear, frac_near_q16);
+    const long long eff_gcalNear = EFF(_cal.gcalNear, frac_near_q16);
+    const long long eff_bcalNear = EFF(_cal.bcalNear, frac_near_q16);
+
+#undef EFF
+#undef CORR
+
+    const long long rout = (_rout  > eff_rcal)     ? _rout  - eff_rcal     : 0LL;
+    const long long gout = (_gout  > eff_gcal)     ? _gout  - eff_gcal     : 0LL;
+    const long long bout = (_bout  > eff_bcal)     ? _bout  - eff_bcal     : 0LL;
+    _rnear = (_rnear > eff_rcalNear) ? _rnear - eff_rcalNear : 0LL;
+    _gnear = (_gnear > eff_gcalNear) ? _gnear - eff_gcalNear : 0LL;
+    _bnear = (_bnear > eff_bcalNear) ? _bnear - eff_bcalNear : 0LL;
+
+    ESP_LOGD(TAG, "rawsum=%lld far=(%lld,%lld,%lld) near=(%lld,%lld,%lld) "
+                  "sat=%lu frac_far_q16=%lld frac_near_q16=%lld",
+             _rawsum, rout, gout, bout, _rnear, _gnear, _bnear,
+             (unsigned long)_satCount, frac_far_q16, frac_near_q16);
+
+    if (_rawsum <= (long long)_cal.limpow) return {EnlightStatus::LOW_POW, 0};
+
+    const float farSum  = (float)(llabs(rout)  + llabs(gout)  + llabs(bout));
+    const float nearSum = (float)(llabs(_rnear) + llabs(_gnear) + llabs(_bnear));
+    if (farSum > 0.0f && (nearSum / farSum) > _cal.nearRatioMax) {
+        ESP_LOGD(TAG, "NEAR ratio=%.3f", (double)(nearSum / farSum));
         return classifyNear();
     }
 
-    float outr=rout*_cal.rfact, outb=bout*_cal.bfact, outg=(float)gout;
-    const float s=outr+outb+outg;
-    if (s<=0.0f) return {EnlightStatus::NO_HIT,0};
-    outr/=s; outg/=s;
-    const float outang=(outr<1.0f)?(outg/(1.0f-outr)):1.0f;
-    const int hit=gridLookup(outr,outang);
-    if (hit>0) {
-        ESP_LOGI(TAG,"HIT player %d (outr=%.3f outang=%.3f)",hit,outr,outang);
-        return {EnlightStatus::PLAYER_HIT,(uint8_t)hit};
+    float outr = rout * _cal.rfact, outb = bout * _cal.bfact, outg = (float)gout;
+    const float s = outr + outb + outg;
+    if (s <= 0.0f) return {EnlightStatus::NO_HIT, 0};
+    outr /= s; outg /= s;
+    const float outang = (outr < 1.0f) ? (outg / (1.0f - outr)) : 1.0f;
+    const int hit = gridLookup(outr, outang);
+    if (hit > 0) {
+        ESP_LOGI(TAG, "HIT player %d (outr=%.3f outang=%.3f)", hit, outr, outang);
+        return {EnlightStatus::PLAYER_HIT, (uint8_t)hit};
     }
-    return {EnlightStatus::NO_HIT,0};
+    return {EnlightStatus::NO_HIT, 0};
 }
 
 /* ============================================================
