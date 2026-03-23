@@ -9,9 +9,9 @@ It has to be compiled for ESP32-S3 and is written to be flashed using Arduino ID
 
 ## Design guidelines
 ### Nonviolent semantics
-While a tag game is normally associated to a war simulation, LightAir wants to drop this label. We want to make clear a ray of light *is* a ray of light, not a metaphor for an ammunition or other means to hurt other people. This choice shows in many parts of the code, for example instead of HIT we use LIT, instead of SHOT DOWN we use SHONE, instead of AMMO we use ENERGY, instead of SHOOT we use ENLIGHT. Anyway, this terms have clear meanings and keep them throughout the code.
+While a tag game is normally associated to a war simulation, LightAir wants to drop this label. We want to make clear a ray of light **is** a ray of light, not a metaphor for an ammunition or other means to offend people. This choice shows in many parts of the code, for example by the use of terms like LIT, SHONE, ENLIGHT instead of the common counterparts used in other tag games. Anyway, these terms have clear meanings and keep them throughout the code.
 LightAir still represents conflict, but in a non-violent way where the interactions are a way to communicate and "recognize" each other, instead of submitting them.
-This is both an ethical choice and a building block for the game lore.
+This is not only an ethical choice, but mainly the base for more functional real-life interactions between players and also for the game lore.
 ### Game ruleset and configuration sharing
 1. Game ruleset and configuration is decided by one designed player (NVM settings) right after boot.
 2. once defined, the game and its configuration is shared with all the other players via ESP-NOW packets
