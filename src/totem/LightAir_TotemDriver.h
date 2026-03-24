@@ -1,6 +1,6 @@
 #pragma once
 #include "../radio/LightAir_Radio.h"
-#include "../game/LightAir_TotemOutput.h"
+#include "LightAir_TotemOutput.h"
 #include "../ui/totem/LightAir_TotemUICtrl.h"
 #include "../config.h"
 #include "LightAir_TotemRoleManager.h"
