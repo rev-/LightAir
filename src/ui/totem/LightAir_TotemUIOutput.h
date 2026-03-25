@@ -37,6 +37,7 @@ struct TotemUICmd {
                             //   Respawn       → player RGB colour
                             //   FlagMissing/Return/Taken → flag-team colour
                             //   ControlO/X    → team colour
+                            //   Idle          → RGB LED colour (0,0,0 = off)
                             //   others        → ignored (use 0,0,0)
 };
 

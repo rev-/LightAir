@@ -171,6 +171,7 @@ static const LightAir_TotemRequirement totemRequirements[] = {
     { TotemRoleId::FLAG_X, 1, 1, nullptr },   // exactly 1 required
     { TotemRoleId::BASE_O, 0, 4, nullptr },
     { TotemRoleId::BASE_X, 0, 4, nullptr },
+    { TotemRoleId::BASE,   0, 4, nullptr },
     { TotemRoleId::BONUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
     { TotemRoleId::MALUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
 };
@@ -512,13 +513,15 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
     // Minimum respawn timer: ignore beacons until the wait has elapsed.
     if (millis() < respawnAt) return;
 
-    // Scan for a qualifying BASE beacon: own team, RSSI >= proximity threshold.
+    // Scan for a qualifying BASE beacon: own team or teamless (payload[0]==0xFF),
+    // RSSI >= proximity threshold.
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type           != RadioEventType::MessageReceived) continue;
         if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
         if (ev.packet.payloadLen < 1)                             continue;
-        if (ev.packet.payload[0] != myTeam)                      continue;
+        if (ev.packet.payload[0] != myTeam &&
+            ev.packet.payload[0] != 0xFF)                         continue;
         if (ev.rssi           <  NEAR_RSSI_THRESHOLD)             continue;
         canRespawn = true;
         // Notify the BASE totem so it can show a Respawn animation.
@@ -592,7 +595,7 @@ const LightAir_Game game_flag = {
     /* scoringState          */ Flag::GAME_END,
     /* scoreMsgType          */ Flag::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ Flag::onScoreAnnounce,
-    /* totemRequirements     */ Flag::totemRequirements,   /* totemRequirementCount  */ 6,
+    /* totemRequirements     */ Flag::totemRequirements,   /* totemRequirementCount  */ 7,
     /* hasTeams              */ true,
     /* teamBitmask           */ &Flag::teamBitmask,
 };

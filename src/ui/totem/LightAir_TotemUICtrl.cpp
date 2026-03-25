@@ -56,7 +56,10 @@ void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
     switch (cmd.event) {
         case TotemUIEvent::Idle:
             _strip.loop(kAnimIdlePulse);
-            _rgb.off();
+            if (cmd.r > 0 || cmd.g > 0 || cmd.b > 0)
+                _rgb.set(cmd.r > 0, cmd.g > 0, cmd.b > 0);
+            else
+                _rgb.off();
             break;
 
         case TotemUIEvent::FlagMissing: {
