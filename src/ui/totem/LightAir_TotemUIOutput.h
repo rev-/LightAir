@@ -21,6 +21,7 @@ enum class TotemUIEvent : uint8_t {
     ControlO,      // control point held by team O; steady fill team-O colour
     ControlX,      // control point held by team X; steady fill team-X colour
     ControlContest,// contested; alternating team colours
+    ControlPlayer, // control point held by a non-standard team; steady fill cmd.r/g/b
     // ---- Extensibility ----
     Custom1,
     Custom2,

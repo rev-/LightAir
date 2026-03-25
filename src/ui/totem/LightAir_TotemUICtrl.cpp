@@ -45,6 +45,7 @@ bool LightAir_TotemUICtrl::isBackground(TotemUIEvent ev) const {
         case TotemUIEvent::ControlO:
         case TotemUIEvent::ControlX:
         case TotemUIEvent::ControlContest:
+        case TotemUIEvent::ControlPlayer:
             return true;
         default:
             return false;
@@ -92,6 +93,13 @@ void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
             };
             _strip.loop(a);
             _rgb.set(true, false, true);  // magenta = both teams
+            break;
+        }
+
+        case TotemUIEvent::ControlPlayer: {
+            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Fill, 0 };
+            _strip.loop(a);
+            _rgb.set(cmd.r > 0, cmd.g > 0, cmd.b > 0);
             break;
         }
 

@@ -48,13 +48,15 @@ constexpr uint8_t MSG_POINT_REPORT  = 0x14;
 // payload[0] = FlagEventType; no meaningful reply expected.
 constexpr uint8_t MSG_FLAG_EVENT    = 0x50;
 
-// Control-point beacon broadcast by CP totem every 2 s (Upkeep game).
-// payload[0] = cpTeam (0=O, 1=X, 0xFF=teamless).
-// Reply (0x53) subType = 1 (team-O) or 2 (team-X) to declare presence.
+// Control-point beacon broadcast by CP totem every 2 s (Upkeep, KingOfHill).
+// payload[0] = cpTeam: 0–15 = owner team/player index; 0xFF = neutral.
+//   In two-team games: 0=O, 1=X.  In KingOfHill: 0–15 = player index (cfg.id-1).
+// Reply (0x53) subType = myTeam+1 (1–16) to declare presence near this CP.
 constexpr uint8_t MSG_CP_BEACON     = 0x52;
 
-// Control-point score award broadcast by CP totem (Upkeep game).
-// payload[0] = team (0=O, 1=X) receiving the point.
+// Control-point score award broadcast by CP totem (Upkeep, KingOfHill).
+// payload[0] = team/player index (0–15) receiving the point.
+//   In two-team games: 0=O, 1=X.  In KingOfHill: 0–15 = player index (cfg.id-1).
 constexpr uint8_t MSG_CP_SCORE      = 0x54;
 
 // BASE totem beacon (new role-based architecture).
