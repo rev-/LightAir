@@ -301,3 +301,44 @@ namespace PlayerDefs {
         "UN6",
     };
 }
+
+// ---------------------------------------------------------------
+// Colour tables
+//
+// TeamColors  — one RGB entry per team (index 0=O, 1=X).
+// PlayerColors — one RGB entry per player ID (index 0–16, matching
+//                PlayerDefs::playerNames / playerShort).
+//
+// Used by the totem UI layer (LightAir_TotemUICtrl) and any runner
+// that needs to map a team or player ID to a display colour.
+// ---------------------------------------------------------------
+namespace TeamColors {
+    // [team][channel]  0=R, 1=G, 2=B
+    constexpr uint8_t kColors[2][3] = {
+        {   0, 255, 255 },  // team O : cyan
+        { 255,   0, 255 },  // team X : magenta
+    };
+}
+
+namespace PlayerColors {
+    // [playerID][channel]  0=R, 1=G, 2=B  — mirrors PlayerDefs::playerNames
+    constexpr uint8_t kColors[PlayerDefs::MAX_PLAYER_ID][3] = {
+        {   0,   0,   0 },  // 00-None    : off
+        { 255, 255, 255 },  // 01-Clear   : white
+        {   0, 255,   0 },  // 02-Green
+        { 255, 255,   0 },  // 03-Yellow
+        {   0,   0, 255 },  // 04-Blue
+        { 255, 128,   0 },  // 05-Orange
+        { 255,   0,   0 },  // 06-Red
+        { 128, 255,   0 },  // 07-Lime
+        { 255,   0, 255 },  // 08-Magenta
+        { 128,   0, 255 },  // 09-Purple
+        { 128, 128, 128 },  // 10-Unknown
+        { 128, 128, 128 },  // 11-Unknown
+        { 128, 128, 128 },  // 12-Unknown
+        { 128, 128, 128 },  // 13-Unknown
+        { 128, 128, 128 },  // 14-Unknown
+        { 128, 128, 128 },  // 15-Unknown
+        { 128, 128, 128 },  // 16-Unknown
+    };
+}

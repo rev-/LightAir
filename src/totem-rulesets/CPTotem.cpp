@@ -1,5 +1,6 @@
 #include <LightAir.h>
 #include "TotemRoleIds.h"
+#include "../config.h"
 
 // ================================================================
 // CPTotem — control-point role runner (new architecture).
@@ -10,9 +11,10 @@
 //
 // Team encoding
 //   cpTeam is a 0-indexed team/player slot:
-//     0 = team O  (two-team games)
-//     1 = team X  (two-team games)
-//     2–15 = individual players in King-of-Hill (up to 16 players)
+//     0 = team O  (two-team games) — display: cyan  (TeamColors::kColors[0])
+//     1 = team X  (two-team games) — display: magenta (TeamColors::kColors[1])
+//     2–15 = individual players in King-of-Hill (player ID = cpTeam+1);
+//            display: PlayerColors::kColors[cpTeam+1]
 //
 // Protocol
 //   Every CP_BEACON_INTERVAL_MS the runner:
@@ -39,28 +41,6 @@ static constexpr uint32_t CP_BEACON_INTERVAL_MS = 2000;
 static constexpr uint32_t CP_SCORE_INTERVAL_MS  = 10000;
 static constexpr uint8_t  CP_TEAM_NONE          = 0xFF;
 
-// ---- Per-team LED colours for the strip/RGB indicator ----
-// Index 0–1 match the ControlO / ControlX colours exactly so Upkeep
-// and other two-team games get the correct display without change.
-// Indices 2–15 supply distinct hues for up to 16-player King-of-Hill.
-static const struct { uint8_t r, g, b; } kTeamColors[16] = {
-    { 255,  80,   0 },  //  0: orange  (≡ team O)
-    {   0,  80, 255 },  //  1: blue    (≡ team X)
-    {   0, 200,   0 },  //  2: green
-    { 200, 200,   0 },  //  3: yellow
-    {   0, 200, 200 },  //  4: cyan
-    { 255,   0,   0 },  //  5: red
-    {   0, 255,   0 },  //  6: lime
-    { 200,   0, 200 },  //  7: magenta
-    { 100,   0, 200 },  //  8: purple
-    { 200, 200, 200 },  //  9: white
-    { 255, 140,   0 },  // 10: amber
-    {   0, 100, 200 },  // 11: steel
-    { 200, 100,   0 },  // 12: brown
-    { 100, 200, 100 },  // 13: mint
-    { 200,   0, 100 },  // 14: rose
-    { 100, 100,   0 },  // 15: olive
-};
 
 class CPTotem : public LightAir_TotemRunner {
     uint8_t  _cpTeam;
@@ -69,13 +49,15 @@ class CPTotem : public LightAir_TotemRunner {
     uint32_t _attachStart;
 
     void updateBackground(LightAir_TotemOutput& out) const {
-        if      (_cpTeam == CP_TEAM_NONE) out.ui.trigger(TotemUIEvent::Idle);
-        else if (_cpTeam == 0)            out.ui.trigger(TotemUIEvent::ControlO);
-        else if (_cpTeam == 1)            out.ui.trigger(TotemUIEvent::ControlX);
-        else                              out.ui.trigger(TotemUIEvent::ControlPlayer,
-                                                         kTeamColors[_cpTeam].r,
-                                                         kTeamColors[_cpTeam].g,
-                                                         kTeamColors[_cpTeam].b);
+        if (_cpTeam == CP_TEAM_NONE) {
+            out.ui.trigger(TotemUIEvent::Idle);
+        } else if (_cpTeam < 2) {
+            // Two-team games: use team colour (cyan for O, magenta for X).
+            out.ui.trigger(TotemUIEvent::Control, _cpTeam);
+        } else {
+            // King-of-Hill individual player: player ID = cpTeam + 1.
+            out.ui.trigger(TotemUIEvent::Control, 0xFF, _cpTeam + 1);
+        }
     }
 
 public:

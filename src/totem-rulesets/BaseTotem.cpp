@@ -1,5 +1,6 @@
 #include <LightAir.h>
 #include "TotemRoleIds.h"
+#include "../config.h"
 
 // ================================================================
 // BaseTotem — respawn-base role runner (new architecture).
@@ -35,9 +36,10 @@ class BaseTotem : public LightAir_TotemRunner {
 
     void teamColor(uint8_t& r, uint8_t& g, uint8_t& b) const {
         if (_team == 0xFF) { r = 255; g = 255; b = 255; return; }  // white = teamless
-        r = (_team == 0) ? 255 :   0;
-        g                = 80;
-        b = (_team == 0) ?   0 : 255;
+        uint8_t t = (_team < 2) ? _team : 0;
+        r = TeamColors::kColors[t][0];
+        g = TeamColors::kColors[t][1];
+        b = TeamColors::kColors[t][2];
     }
 
 public:
@@ -55,11 +57,12 @@ public:
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
         // Accept player reply to our beacon only.
         if (msg.msgType != MSG_BASE_BEACON + 1) return;
-        // Show Respawn animation in the replying player's team colour.
-        uint8_t r = (msg.team == 0) ? 255 :   0;
-        uint8_t g = 80;
-        uint8_t b = (msg.team == 0) ?   0 : 255;
-        out.ui.trigger(TotemUIEvent::Respawn, r, g, b);
+        // Wipe in the respawning player's team colour.
+        uint8_t t = (msg.team < 2) ? msg.team : 0;
+        out.ui.trigger(TotemUIEvent::Respawn,
+                       TeamColors::kColors[t][0],
+                       TeamColors::kColors[t][1],
+                       TeamColors::kColors[t][2]);
     }
 
     void update(LightAir_TotemOutput& out) override {
