@@ -1,6 +1,6 @@
 #include "AllTotems.h"
 #include "../totem-rulesets/TotemRoleIds.h"
-#include "../game/LightAir_TotemRunner.h"
+#include "LightAir_TotemRunner.h"
 
 // Runner singletons are defined as file-scope objects in their
 // respective totem-ruleset .cpp files and exposed here as plain

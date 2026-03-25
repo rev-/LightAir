@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "../game/LightAir_TotemRunner.h"
+#include "LightAir_TotemRunner.h"
 
 // ----------------------------------------------------------------
 // TotemRole — static descriptor for one totem role.
