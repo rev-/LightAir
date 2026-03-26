@@ -961,6 +961,15 @@ void LightAir_GameSetupMenu::commitToRunner() {
     for (uint8_t i = 0; i < PlayerDefs::MAX_PLAYER_ID; i++)
         _runner.setTeam(i, _teams[i]);
 
+    // For teamless games every player signals team=0xFF so that totems
+    // (and other players) can use the 0xFF sentinel uniformly.
+    // Save to NVS so it persists across reboots; update the live radio
+    // object so it takes effect for the current session immediately.
+    if (_game && !_game->hasTeams) {
+        player_config_save_team(0xFF);
+        _radio.setTeam(0xFF);
+    }
+
     // Add players to roster.
     for (uint8_t i = 0; i < _seenCount; i++) {
         uint8_t id = _seenIds[i];
