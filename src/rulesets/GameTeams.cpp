@@ -99,8 +99,8 @@ static uint32_t respawnAt;    // millis() before which BASE beacons are ignored
 static bool     canRespawn;   // set true by doOutGame when timer + RSSI condition met
 static bool     triggerWasActive = false;
 static uint32_t releaseAt        = 0;
-static uint8_t  myTeam;       // 0=O, 1=X; loaded from PlayerConfig in onBegin
-static int      teamBitmask;  // bit i=1 → player i on team X; filled from config blob
+static uint8_t  myTeam;       // 0=O, 1=X; loaded from runner in onBegin
+static uint8_t  teamMap[PlayerDefs::MAX_PLAYER_ID];  // per-player team index; filled from config blob
 
 // ---- Totem device-ID slots (populated in onBegin from runner) ----
 static uint8_t baseO_ids[4] = {};   // team-O base device IDs
@@ -144,17 +144,13 @@ static const LightAir_TotemRequirement totemRequirements[] = {
 // ---- Helper: is targetId on the opposing team? ----
 static bool isOpponent(uint8_t targetId) {
     if (targetId >= PlayerDefs::MAX_PLAYER_ID) return false;
-    bool targetOnX = (teamBitmask >> targetId) & 1;
-    // myTeam==0 (O) → opponent is on X (targetOnX true)
-    // myTeam==1 (X) → opponent is on O (targetOnX false)
-    return (myTeam == 0) ? targetOnX : !targetOnX;
+    return teamMap[targetId] != myTeam;
 }
 
 // ---- Helper: is senderId on the same team as this player? ----
 static bool isMyTeammate(uint8_t senderId) {
     if (senderId >= PlayerDefs::MAX_PLAYER_ID) return false;
-    bool senderOnX = (teamBitmask >> senderId) & 1;
-    return (myTeam == 0) ? !senderOnX : senderOnX;
+    return teamMap[senderId] == myTeam;
 }
 
 // ---- UIAction for friendly-fire feedback (UIEvent::Custom1) ----
@@ -170,7 +166,7 @@ static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
 };
 
 // ---- onBegin ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtrl* ui,
                     const LightAir_GameRunner& runner) {
     lives         = startLives;
     energy        = startEnergy;
@@ -185,9 +181,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
     triggerWasActive = false;
     releaseAt        = 0;
 
-    PlayerConfig cfg;
-    player_config_load(cfg);
-    myTeam = (cfg.team == 1) ? 1 : 0;
+    myTeam = runner.teamOf(radio.playerId());
 
     for (uint8_t i = 0; i < 4; i++) {
         baseO_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_O, i);
@@ -446,6 +440,6 @@ const LightAir_Game game_teams = {
     /* scoreMsgType          */ Teams::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ Teams::onScoreAnnounce,
     /* totemRequirements     */ Teams::totemRequirements,  /* totemRequirementCount  */ 5,
-    /* hasTeams              */ true,
-    /* teamBitmask           */ &Teams::teamBitmask,
+    /* teamCount             */ 2,
+    /* teamMap               */ Teams::teamMap,
 };

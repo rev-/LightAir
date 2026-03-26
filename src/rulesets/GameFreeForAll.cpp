@@ -293,6 +293,6 @@ const LightAir_Game game_ffa = {
     /* scoreMsgType          */ FFA::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ nullptr,
     /* totemRequirements     */ FFA::totemRequirements,  /* totemRequirementCount  */ 2,
-    /* hasTeams              */ false,
-    /* teamBitmask           */ nullptr,
+    /* teamCount             */ 0,
+    /* teamMap               */ nullptr,
 };

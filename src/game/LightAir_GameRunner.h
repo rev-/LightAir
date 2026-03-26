@@ -93,7 +93,7 @@ public:
 
     // ---- Team map ----
     // Call setTeam() from LightAir_GameSetupMenu::commitToRunner() before begin().
-    // teamOf() returns 0=O or 1=X; 0 if id is out of range.
+    // teamOf() returns the team index (0..7) or 0xFF for teamless/unassigned; 0xFF if id is out of range.
     void    setTeam(uint8_t id, uint8_t team);
     uint8_t teamOf(uint8_t id)  const;
 

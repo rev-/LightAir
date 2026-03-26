@@ -10,7 +10,6 @@
 
 // Identification keys
 #define CAL_KEY_ID              "id"
-#define CAL_KEY_TEAM            "team"
 #define CAL_KEY_HARDWARE        "hw"    // DeviceHardware enum stored as uint8
 
 // Calibration for Enlight: near/far channel baselines and white balance factors
@@ -44,21 +43,19 @@
 // ---------------------------------------------------------------
 // Player identity — stored alongside calibration because both are
 // device-specific constants.  id is permanent (set once, never changes
-// across games).  team is mutable at runtime but persists across power
-// cycles so it doesn't have to be re-entered every session.
+// across games).  Team is NOT stored in NVS; it is assigned at game-start
+// time via the config packet and applied live through LightAir_Radio.
 //
-// Default for both fields when the NVS key is absent: 0xFF (unset).
+// Default for id when the NVS key is absent: 0xFF (unset).
 // ---------------------------------------------------------------
 struct PlayerConfig {
     uint8_t        id;        // logical player ID (= mycolor); maps to LightAir_Radio playerId
-    uint8_t        team;      // team assignment; game-defined meaning
     DeviceHardware hardware;  // PLAYER or TOTEM; default = PLAYER when key absent
 };
 
 bool player_config_load(PlayerConfig& cfg);
 bool player_config_save(const PlayerConfig& cfg);
 bool player_config_save_id(uint8_t id);               // update only id
-bool player_config_save_team(uint8_t team);           // update only team
 bool player_config_save_hardware(DeviceHardware hw);  // update only hardware type
 
 struct EnlightCalib {

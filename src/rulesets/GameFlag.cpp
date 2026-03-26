@@ -129,7 +129,7 @@ static uint8_t  enemyFlagCarrierId;  // 0xFF = flag available at its totem
 static uint8_t  myFlagCarrierId;     // 0xFF = our flag at home
 
 static uint8_t  myTeam;      // 0=O, 1=X
-static int      teamBitmask;
+static uint8_t  teamMap[PlayerDefs::MAX_PLAYER_ID];  // per-player team index; filled from config blob
 
 // Cached UICtrl pointer for setBackground / clearBackground calls,
 // which are not exposed through the UIOutput queue.
@@ -203,12 +203,11 @@ static uint8_t enemyTeam()            { return myTeam ^ 1; }
 
 static bool isOpponent(uint8_t targetId) {
     if (targetId >= PlayerDefs::MAX_PLAYER_ID) return false;
-    bool targetOnX = (teamBitmask >> targetId) & 1;
-    return (myTeam == 0) ? targetOnX : !targetOnX;
+    return teamMap[targetId] != myTeam;
 }
 
 // ---- onBegin ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtrl* ui,
                     const LightAir_GameRunner& runner) {
     lives              = startLives;
     energy             = startEnergy;
@@ -228,9 +227,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
     releaseAt          = 0;
     uiCtrl             = ui;
 
-    PlayerConfig cfg;
-    player_config_load(cfg);
-    myTeam = (cfg.team == 1) ? 1 : 0;
+    myTeam = runner.teamOf(radio.playerId());
 
     for (uint8_t i = 0; i < 4; i++) {
         baseO_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_O, i);
@@ -596,6 +593,6 @@ const LightAir_Game game_flag = {
     /* scoreMsgType          */ Flag::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ Flag::onScoreAnnounce,
     /* totemRequirements     */ Flag::totemRequirements,   /* totemRequirementCount  */ 7,
-    /* hasTeams              */ true,
-    /* teamBitmask           */ &Flag::teamBitmask,
+    /* teamCount             */ 2,
+    /* teamMap               */ Flag::teamMap,
 };

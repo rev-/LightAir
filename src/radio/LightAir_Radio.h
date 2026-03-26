@@ -158,6 +158,10 @@ public:
     // Update session token (call at each game start / reset).
     void setSessionToken(uint8_t token) { _sessionToken = token; }
 
+    // Override the team field stamped into every outgoing packet.
+    // Called by LightAir_GameSetupMenu::commitToRunner() for teamless games.
+    void setTeam(uint8_t team) { _team = team; }
+
     // Active game typeId (read-back, e.g. for the totem driver).
     uint16_t typeId() const { return _typeId; }
 

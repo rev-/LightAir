@@ -14,7 +14,8 @@ class EnlightCalibRoutine;
 //
 //   [uint16_t typeId]
 //   [int32_t configVar0] … [int32_t configVarN]
-//   [int32_t teamBitmask]                    ← only if game.hasTeams
+//   [uint8_t teamMap0] … [uint8_t teamMap16]  ← MAX_PLAYER_ID bytes; only if game.teamCount > 0
+//                                                values: 0..teamCount-1 = team index, 0xFF = unassigned
 //   [uint8_t totemSlot0] … [uint8_t totemSlot15]  ← 16 entries (TotemRoleId per slot; 0 = unassigned)
 //   [uint8_t sessionToken]                   ← last byte; 0 = no session isolation
 //
@@ -23,20 +24,24 @@ class EnlightCalibRoutine;
 
 // Serialize all config data of a game into a byte buffer.
 // totemAssignment[slot] = roleId for each of the 16 totem slots (0 = unassigned).
+// teamMap[id] = team index 0..teamCount-1 (or 0xFF) for each player; only written when game.teamCount > 0.
 // sessionToken is appended as the final byte (0 = no session isolation).
 // Returns bytes written, or 0 if maxLen is insufficient.
 uint16_t game_serialize_config(const LightAir_Game& game,
                                 uint8_t* buf, uint16_t maxLen,
                                 const uint8_t totemAssignment[TotemDefs::MAX_TOTEMS] = nullptr,
+                                const uint8_t teamMap[PlayerDefs::MAX_PLAYER_ID] = nullptr,
                                 uint8_t sessionToken = 0);
 
 // Apply a received config blob.
 // Returns false if typeId doesn't match or blob is too short.
 // Values are clamped to [min, max].  Writes roleIds into totemAssignmentOut if non-null.
+// Writes per-player team indices into teamMapOut (size MAX_PLAYER_ID) if non-null.
 // If sessionTokenOut is non-null, the trailing session token byte is written there.
 bool game_apply_config(const LightAir_Game& game,
                         const uint8_t* buf, uint16_t len,
                         uint8_t totemAssignmentOut[TotemDefs::MAX_TOTEMS] = nullptr,
+                        uint8_t teamMapOut[PlayerDefs::MAX_PLAYER_ID] = nullptr,
                         uint8_t* sessionTokenOut = nullptr);
 
 // ----------------------------------------------------------------
@@ -49,7 +54,7 @@ bool game_apply_config(const LightAir_Game& game,
 //   S2    Scrollable game list (^/V; A=start, B=setup)
 //   S4    Setup sub-menu (Config / Teams / Totems)
 //   S4a   Config vars (3 visible; </> change, ^/V navigate, B back)
-//   S4b   Teams (3 visible; </> toggle O/X, ^/V navigate, B back)
+//   S4b   Teams (3 visible; </> cycle team 0..N-1, ^/V navigate, B back)
 //   S4c   Totems (16 slots; </> cycle role, ^/V navigate, B back)
 //   S5    Pre-start: share config → discovery → summary → confirm
 //
