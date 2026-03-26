@@ -21,10 +21,11 @@ static const char* TAG = "GameConfig";
 uint16_t game_serialize_config(const LightAir_Game& game,
                                 uint8_t* buf, uint16_t maxLen,
                                 const uint8_t totemAssignment[TotemDefs::MAX_TOTEMS],
+                                const uint8_t teamMap[PlayerDefs::MAX_PLAYER_ID],
                                 uint8_t sessionToken) {
     uint16_t minNeeded = 2
         + (uint16_t)game.configCount * 4
-        + (game.hasTeams ? 4 : 0)
+        + (game.teamCount > 0 ? PlayerDefs::MAX_PLAYER_ID : 0)
         + TotemDefs::MAX_TOTEMS   // 16 × uint8_t roleId
         + 1;
     if (maxLen < minNeeded) return 0;
@@ -40,11 +41,10 @@ uint16_t game_serialize_config(const LightAir_Game& game,
         pos += 4;
     }
 
-    // teamBitmask (if hasTeams)
-    if (game.hasTeams) {
-        int32_t mask = game.teamBitmask ? (int32_t)*game.teamBitmask : 0;
-        memcpy(buf + pos, &mask, 4);
-        pos += 4;
+    // teamMap (MAX_PLAYER_ID bytes; only if game.teamCount > 0)
+    if (game.teamCount > 0) {
+        for (uint8_t i = 0; i < PlayerDefs::MAX_PLAYER_ID; i++)
+            buf[pos++] = teamMap ? teamMap[i] : 0xFF;
     }
 
     // 16 totem slot assignments (roleId per slot; 0 = unassigned)
@@ -60,10 +60,11 @@ uint16_t game_serialize_config(const LightAir_Game& game,
 bool game_apply_config(const LightAir_Game& game,
                         const uint8_t* buf, uint16_t len,
                         uint8_t totemAssignmentOut[TotemDefs::MAX_TOTEMS],
+                        uint8_t teamMapOut[PlayerDefs::MAX_PLAYER_ID],
                         uint8_t* sessionTokenOut) {
     uint16_t minNeeded = 2
         + (uint16_t)game.configCount * 4
-        + (game.hasTeams ? 4 : 0)
+        + (game.teamCount > 0 ? PlayerDefs::MAX_PLAYER_ID : 0)
         + TotemDefs::MAX_TOTEMS
         + 1;
     if (len < minNeeded) {
@@ -88,12 +89,13 @@ bool game_apply_config(const LightAir_Game& game,
         *var.value = (int)val;
     }
 
-    // teamBitmask
-    if (game.hasTeams && pos + 4 <= len) {
-        int32_t mask;
-        memcpy(&mask, buf + pos, 4);
-        pos += 4;
-        if (game.teamBitmask) *game.teamBitmask = (int)mask;
+    // teamMap (MAX_PLAYER_ID bytes; only if game.teamCount > 0)
+    if (game.teamCount > 0) {
+        for (uint8_t i = 0; i < PlayerDefs::MAX_PLAYER_ID && pos < len; i++) {
+            uint8_t t = buf[pos++];
+            if (teamMapOut)    teamMapOut[i]    = t;
+            if (game.teamMap) game.teamMap[i]   = t;
+        }
     }
 
     // totem slot assignments (roleId per slot)
@@ -314,7 +316,7 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
                 const LightAir_Game& candidate = _mgr.game(g);
                 uint8_t token = 0;
                 if (game_apply_config(candidate, ev.packet.payload,
-                                      ev.packet.payloadLen, _totemAssignment, &token)) {
+                                      ev.packet.payloadLen, _totemAssignment, _teams, &token)) {
                     _game    = &candidate;
                     _gameIdx = g;
                     if (token != 0) _radio.setSessionToken(token);
@@ -463,15 +465,9 @@ void LightAir_GameSetupMenu::runSetupMenu() {
     const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
 
     // Build entry list: always Config + optional Teams + always Totems
-    // Entries: 0=Config, 1=Teams (if hasTeams), 2=Totems
-    // We always show all 3 rows (blank row if inapplicable).
-    // Cursor only moves to applicable entries.
-
-    // Collect applicable entry indices (0=Config,1=Teams,2=Totems)
-    // We always allow Config and Totems; Teams only if hasTeams.
-    // But cursor only lands on entries that are "active".
-    // We represent entries as indices 0..2 and skip via allowed[].
-    bool allowed[3] = { true, _game->hasTeams, true };
+    // Entries: 0=Config, 1=Teams (if teamCount > 0), 2=Totems
+    // Cursor only lands on applicable entries (blank row if inapplicable).
+    bool allowed[3] = { true, _game->teamCount > 0, true };
     uint8_t cursor = 0;
 
     auto renderSetupMenu = [&]() {
@@ -633,10 +629,10 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
 
         uint8_t pid = (uint8_t)(idx + 1);  // player IDs 1–15
         char buf[20];
-        snprintf(buf, sizeof(buf), "%s%-3s  %c",
+        snprintf(buf, sizeof(buf), "%s%-3s  T%u",
                  (delta == 0) ? ">" : " ",
                  PlayerDefs::playerShort[pid],
-                 _teams[pid] ? 'X' : 'O');
+                 _teams[pid]);
         _display.print(0, fh * row, buf);
     }
     _display.print(0, fh * 3, "^/V:sel <>:team B:");
@@ -657,11 +653,18 @@ void LightAir_GameSetupMenu::runTeamsSubmenu() {
             case 'V':
                 if (cursor < PlayerDefs::MAX_PLAYER_ID - 2) { cursor++; renderTeamEntry(cursor); }
                 break;
-            case '<':
-            case '>':
-                _teams[pid] ^= 1;  // toggle O/X
+            case '<': {
+                uint8_t n = _game->teamCount;
+                _teams[pid] = (_teams[pid] == 0) ? n - 1 : _teams[pid] - 1;
                 renderTeamEntry(cursor);
                 break;
+            }
+            case '>': {
+                uint8_t n = _game->teamCount;
+                _teams[pid] = (_teams[pid] + 1) % n;
+                renderTeamEntry(cursor);
+                break;
+            }
             case 'B': return;
         }
     }
@@ -860,7 +863,7 @@ void LightAir_GameSetupMenu::shareConfig() {
     _radio.setSessionToken(token);
 
     uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
-    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, _totemAssignment, token);
+    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, _totemAssignment, _teams, token);
     if (len > 0) _radio.broadcast(_msgType, blob, len);
 }
 
@@ -881,21 +884,25 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
     _display.clear();
     _display.setColor(true);
 
-    // Row 0: player count (+team breakdown if hasTeams)
+    // Row 0: player count (+team breakdown if teamCount > 0)
     {
-        // Count players (IDs not in totem range)
-        uint8_t nPlayers = 0, nO = 0, nX = 0;
+        uint8_t nPlayers = 0;
+        uint8_t counts[TeamColors::kCount] = {};
         for (uint8_t i = 0; i < _seenCount; i++) {
             uint8_t id = _seenIds[i];
             if (TotemDefs::isTotemId(id)) continue;
             nPlayers++;
-            if (_game->hasTeams) {
-                if (_teams[id] == 0) nO++; else nX++;
+            if (_game->teamCount > 0) {
+                uint8_t t = _teams[id];
+                if (t < _game->teamCount) counts[t]++;
             }
         }
         char buf[24];
-        if (_game->hasTeams) {
-            snprintf(buf, sizeof(buf), "Players:%u(%uO %uX)", nPlayers, nO, nX);
+        if (_game->teamCount > 0) {
+            uint8_t off = (uint8_t)snprintf(buf, sizeof(buf), "P:%u(", nPlayers);
+            for (uint8_t t = 0; t < _game->teamCount && off + 4 < sizeof(buf); t++)
+                off += (uint8_t)snprintf(buf + off, sizeof(buf) - off, "%u:%u ", t, counts[t]);
+            if (off > 0 && buf[off - 1] == ' ') buf[off - 1] = ')';
         } else {
             snprintf(buf, sizeof(buf), "Players: %u", nPlayers);
         }
@@ -940,7 +947,7 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
             case TotemRoleId::BASE_X: case TotemRoleId::FLAG_X: team = 1; break;
         }
         if (team != 0xFF)
-            off += snprintf(full + off, sizeof(full) - off, " %c", team == 0 ? 'O' : 'X');
+            off += snprintf(full + off, sizeof(full) - off, " T%u", team);
 
         // Horizontal scroll: clip to 18 chars
         constexpr uint8_t ROW_CHARS = 18;
@@ -958,17 +965,20 @@ void LightAir_GameSetupMenu::commitToRunner() {
     _runner.clearRoster();
     _runner.clearTotems();
 
+    // For teamless games every player uses team=0xFF.
+    // For team games, _teams[] was set by the DM (runTeamsSubmenu) or
+    // populated from the config blob (runWaiter via game_apply_config).
+    if (_game && _game->teamCount == 0) {
+        for (uint8_t i = 0; i < PlayerDefs::MAX_PLAYER_ID; i++)
+            _teams[i] = 0xFF;
+    }
+
     for (uint8_t i = 0; i < PlayerDefs::MAX_PLAYER_ID; i++)
         _runner.setTeam(i, _teams[i]);
 
-    // For teamless games every player signals team=0xFF so that totems
-    // (and other players) can use the 0xFF sentinel uniformly.
-    // Save to NVS so it persists across reboots; update the live radio
-    // object so it takes effect for the current session immediately.
-    if (_game && !_game->hasTeams) {
-        player_config_save_team(0xFF);
-        _radio.setTeam(0xFF);
-    }
+    // Set this device's team on the radio so it is stamped into every
+    // outgoing packet for the duration of the game.
+    _radio.setTeam(_teams[_radio.playerId()]);
 
     // Add players to roster.
     for (uint8_t i = 0; i < _seenCount; i++) {

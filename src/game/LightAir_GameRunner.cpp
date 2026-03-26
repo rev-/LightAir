@@ -117,7 +117,7 @@ void LightAir_GameRunner::setTeam(uint8_t id, uint8_t team) {
 
 uint8_t LightAir_GameRunner::teamOf(uint8_t id) const {
     if (id < PlayerDefs::MAX_PLAYER_ID) return _teamMap[id];
-    return 0;
+    return 0xFF;
 }
 
 /* =========================================================

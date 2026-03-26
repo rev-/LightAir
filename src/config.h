@@ -313,10 +313,17 @@ namespace PlayerDefs {
 // that needs to map a team or player ID to a display colour.
 // ---------------------------------------------------------------
 namespace TeamColors {
-    // [team][channel]  0=R, 1=G, 2=B
-    constexpr uint8_t kColors[2][3] = {
-        {   0, 255, 255 },  // team O : cyan
-        { 255,   0, 255 },  // team X : magenta
+    // [team][channel]  0=R, 1=G, 2=B  — up to 8 teams supported
+    static constexpr uint8_t kCount = 8;
+    constexpr uint8_t kColors[kCount][3] = {
+        {   0, 255, 255 },  // team 0 : cyan
+        { 255,   0, 255 },  // team 1 : magenta
+        { 255, 255,   0 },  // team 2 : yellow
+        { 255,   0,   0 },  // team 3 : red
+        {   0, 255,   0 },  // team 4 : green
+        { 255, 128,   0 },  // team 5 : orange
+        {   0,   0, 255 },  // team 6 : blue
+        { 128,   0, 255 },  // team 7 : purple
     };
 }
 

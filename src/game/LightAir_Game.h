@@ -28,7 +28,7 @@ enum class MenuResult : uint8_t { Confirmed, Cancelled };
 // roster[0..rosterCount-1]  — player IDs in collection order
 // accumMask                 — bit r = slots[r] is valid
 // slots[r]                  — winnerVarCount × int32_t LE for roster[r]
-// teamMap[id]               — 0=O, 1=X for player id (size MAX_PLAYER_ID)
+// teamMap[id]               — team index (0–7) or 0xFF (teamless) for player id (size MAX_PLAYER_ID)
 // myPlayerId                — this device's logical player ID
 // ----------------------------------------------------------------
 struct ScoreTable {
@@ -221,15 +221,17 @@ struct LightAir_Game {
     // The host assigns specific totem device IDs to each role in
     // LightAir_GameSetupMenu (S4c).
     //
-    // hasTeams enables the Teams submenu (S4b) where the host assigns each
-    // player to team O or team X.  teamBitmask points to a file-scope int
-    // in the ruleset; bit i=1 means player i is on team X.  Set to nullptr
-    // when hasTeams==false.
+    // teamCount > 0 enables the Teams submenu (S4b) where the host assigns each
+    // player to one of teamCount teams (indices 0..teamCount-1).
+    // teamMap points to a file-scope uint8_t[MAX_PLAYER_ID] in the ruleset;
+    // entry i holds the team index (0–7) or 0xFF if unassigned.
+    // teamCount == 0 means the game is teamless; teamMap may be nullptr.
+    // Maximum supported value: TeamColors::kCount (8).
     //
     const LightAir_TotemRequirement* totemRequirements;   // nullptr = none
     uint8_t                          totemRequirementCount;
-    bool                             hasTeams;
-    int*                             teamBitmask;   // bit i=1 → player i on team X; nullptr if !hasTeams
+    uint8_t                          teamCount;   // 0 = teamless; 2–8 = number of teams
+    uint8_t*                         teamMap;     // size MAX_PLAYER_ID; nullptr if teamCount==0
 
     // Called by GameRunner immediately before esp_restart() after the player
     // presses A+B on the end-game screen.  Use for last-moment display updates

@@ -314,6 +314,6 @@ const LightAir_Game game_outflow = {
     /* scoreMsgType          */ Outflow::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ nullptr,
     /* totemRequirements     */ Outflow::totemRequirements,  /* totemRequirementCount  */ 2,
-    /* hasTeams              */ false,
-    /* teamBitmask           */ nullptr,
+    /* teamCount             */ 0,
+    /* teamMap               */ nullptr,
 };

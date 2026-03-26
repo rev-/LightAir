@@ -72,7 +72,7 @@ void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
                 b = PlayerColors::kColors[pid][2];
             } else {
                 // Team-based: look up by team index in cmd.r
-                uint8_t team = (cmd.r < 2) ? cmd.r : 0;
+                uint8_t team = (cmd.r < TeamColors::kCount) ? cmd.r : 0;
                 r = TeamColors::kColors[team][0];
                 g = TeamColors::kColors[team][1];
                 b = TeamColors::kColors[team][2];

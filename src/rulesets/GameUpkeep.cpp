@@ -120,8 +120,8 @@ static uint8_t  gState;
 static uint32_t lastTickAt;
 static uint32_t respawnAt;
 static bool     canRespawn;
-static uint8_t  myTeam;         // 0=O, 1=X; loaded in onBegin
-static int      teamBitmask;    // bit i=1 → player i on team X
+static uint8_t  myTeam;         // 0=O, 1=X; loaded from runner in onBegin
+static uint8_t  teamMap[PlayerDefs::MAX_PLAYER_ID];  // per-player team index; filled from config blob
 
 // Moved from doInGame static locals so they reset correctly on game restart.
 static bool     triggerWasActive = false;
@@ -183,8 +183,7 @@ static bool isMyTeamBase(uint8_t senderId) {
 
 static bool isOpponent(uint8_t targetId) {
     if (targetId >= PlayerDefs::MAX_PLAYER_ID) return false;
-    bool onX = (teamBitmask >> targetId) & 1;
-    return (myTeam == 0) ? onX : !onX;
+    return teamMap[targetId] != myTeam;
 }
 
 // Returns the index (0–5) of a known CP with the given sender ID, or -1.
@@ -216,7 +215,7 @@ static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
 };
 
 // ---- onBegin ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtrl* ui,
                     const LightAir_GameRunner& runner) {
     lives            = startLives;
     energy           = startEnergy;
@@ -235,9 +234,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
     for (uint8_t i = 0; i < 6; i++) cpState[i] = CP_TEAM_NONE;
     snprintf(teamScoreStr, sizeof(teamScoreStr), "0/0");
 
-    PlayerConfig cfg;
-    player_config_load(cfg);
-    myTeam = (cfg.team == 1) ? 1 : 0;
+    myTeam = runner.teamOf(radio.playerId());
 
     numActiveCPs = 0;
     for (uint8_t i = 0; i < 6; i++) {
@@ -549,6 +546,6 @@ const LightAir_Game game_upkeep = {
     /* onScoreAnnounce       */ Upkeep::onScoreAnnounce,
     /* totemRequirements     */ Upkeep::totemRequirements,
     /* totemRequirementCount */ 6,
-    /* hasTeams              */ true,
-    /* teamBitmask           */ &Upkeep::teamBitmask,
+    /* teamCount             */ 2,
+    /* teamMap               */ Upkeep::teamMap,
 };

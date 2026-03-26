@@ -419,6 +419,6 @@ const LightAir_Game game_koh = {
     /* scoreMsgType          */ KoH::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ nullptr,                 // default individual ranking
     /* totemRequirements     */ KoH::totemRequirements,  /* totemRequirementCount  */ 4,
-    /* hasTeams              */ false,
-    /* teamBitmask           */ nullptr,
+    /* teamCount             */ 0,
+    /* teamMap               */ nullptr,
 };
