@@ -246,28 +246,30 @@ static void updateRunDisplay(bool waitingClient) {
     char buf[22];
     dispBegin();
 
+    // Row 0: IP and port — always visible so the user can connect.
+    IPAddress ip = WiFi.localIP();
+    snprintf(buf, sizeof(buf), "%d.%d.%d.%d:%u",
+             ip[0], ip[1], ip[2], ip[3], TCP_PORT);
+    dispRow(0, buf);
+
     if (waitingClient) {
-        IPAddress ip = WiFi.localIP();
-        snprintf(buf, sizeof(buf), "%d.%d.%d.%d:%u",
-                 ip[0], ip[1], ip[2], ip[3], TCP_PORT);
-        dispRow(0, buf);
         dispRow(2, "Waiting for");
         dispRow(3, "TCP client...");
         return dispFlush();
     }
 
-    dispRow(0, gDataMode == DataMode::RAW ? "Mode: RAW" : "Mode: ELABORATED");
+    dispRow(1, gDataMode == DataMode::RAW ? "Mode: RAW" : "Mode: ELAB");
 
     if (gTrigMode == TrigMode::MANUAL) {
-        dispRow(1, "Trig: MANUAL");
-        dispRow(2, "Press TRIG 1");
+        dispRow(2, "Trig: MANUAL");
+        dispRow(3, "Press TRIG 1");
     } else {
-        snprintf(buf, sizeof(buf), "Trig: AUTO  %us", gIntervalSec);
-        dispRow(1, buf);
+        snprintf(buf, sizeof(buf), "Trig: AUTO %us", gIntervalSec);
+        dispRow(2, buf);
         uint32_t elapsed = (millis() - gLastTrigMs) / 1000;
         uint32_t remain  = (gIntervalSec > elapsed) ? gIntervalSec - elapsed : 0;
         snprintf(buf, sizeof(buf), "Next in: %lus", (unsigned long)remain);
-        dispRow(2, buf);
+        dispRow(3, buf);
     }
 
     snprintf(buf, sizeof(buf), "Sent: %lu", (unsigned long)gTxCount);
