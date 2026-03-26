@@ -165,6 +165,7 @@ static const LightAir_TotemRequirement totemRequirements[] = {
     { TotemRoleId::CP,     3, 6, nullptr },
     { TotemRoleId::BASE_O, 1, 3, nullptr },
     { TotemRoleId::BASE_X, 1, 3, nullptr },
+    { TotemRoleId::BASE,   0, 3, nullptr },
     { TotemRoleId::BONUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
     { TotemRoleId::MALUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
 };
@@ -462,7 +463,8 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
         if (ev.type           != RadioEventType::MessageReceived) continue;
         if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
         if (ev.packet.payloadLen < 1)                             continue;
-        if (ev.packet.payload[0] != myTeam)                      continue;
+        if (ev.packet.payload[0] != myTeam &&
+            ev.packet.payload[0] != 0xFF)                         continue;
         if (ev.rssi            < NEAR_BASE_RSSI)                  continue;
         canRespawn = true;
         // Notify the BASE totem so it can show a Respawn animation.
@@ -546,7 +548,7 @@ const LightAir_Game game_upkeep = {
     /* scoreMsgType          */ Upkeep::MSG_SCORE_COLLECT,
     /* onScoreAnnounce       */ Upkeep::onScoreAnnounce,
     /* totemRequirements     */ Upkeep::totemRequirements,
-    /* totemRequirementCount */ 5,
+    /* totemRequirementCount */ 6,
     /* hasTeams              */ true,
     /* teamBitmask           */ &Upkeep::teamBitmask,
 };

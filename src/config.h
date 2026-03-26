@@ -48,13 +48,15 @@ constexpr uint8_t MSG_POINT_REPORT  = 0x14;
 // payload[0] = FlagEventType; no meaningful reply expected.
 constexpr uint8_t MSG_FLAG_EVENT    = 0x50;
 
-// Control-point beacon broadcast by CP totem every 2 s (Upkeep game).
-// payload[0] = cpTeam (0=O, 1=X, 0xFF=teamless).
-// Reply (0x53) subType = 1 (team-O) or 2 (team-X) to declare presence.
+// Control-point beacon broadcast by CP totem every 2 s (Upkeep, KingOfHill).
+// payload[0] = cpTeam: 0–15 = owner team/player index; 0xFF = neutral.
+//   In two-team games: 0=O, 1=X.  In KingOfHill: 0–15 = player index (cfg.id-1).
+// Reply (0x53) subType = myTeam+1 (1–16) to declare presence near this CP.
 constexpr uint8_t MSG_CP_BEACON     = 0x52;
 
-// Control-point score award broadcast by CP totem (Upkeep game).
-// payload[0] = team (0=O, 1=X) receiving the point.
+// Control-point score award broadcast by CP totem (Upkeep, KingOfHill).
+// payload[0] = team/player index (0–15) receiving the point.
+//   In two-team games: 0=O, 1=X.  In KingOfHill: 0–15 = player index (cfg.id-1).
 constexpr uint8_t MSG_CP_SCORE      = 0x54;
 
 // BASE totem beacon (new role-based architecture).
@@ -297,5 +299,46 @@ namespace PlayerDefs {
         "NON","CLR","GRN","YLW","BLU","ORG","RED","LME",
         "MAG","PUR","UN0","UN1","UN2","UN3","UN4","UN5",
         "UN6",
+    };
+}
+
+// ---------------------------------------------------------------
+// Colour tables
+//
+// TeamColors  — one RGB entry per team (index 0=O, 1=X).
+// PlayerColors — one RGB entry per player ID (index 0–16, matching
+//                PlayerDefs::playerNames / playerShort).
+//
+// Used by the totem UI layer (LightAir_TotemUICtrl) and any runner
+// that needs to map a team or player ID to a display colour.
+// ---------------------------------------------------------------
+namespace TeamColors {
+    // [team][channel]  0=R, 1=G, 2=B
+    constexpr uint8_t kColors[2][3] = {
+        {   0, 255, 255 },  // team O : cyan
+        { 255,   0, 255 },  // team X : magenta
+    };
+}
+
+namespace PlayerColors {
+    // [playerID][channel]  0=R, 1=G, 2=B  — mirrors PlayerDefs::playerNames
+    constexpr uint8_t kColors[PlayerDefs::MAX_PLAYER_ID][3] = {
+        {   0,   0,   0 },  // 00-None    : off
+        { 255, 255, 255 },  // 01-Clear   : white
+        {   0, 255,   0 },  // 02-Green
+        { 255, 255,   0 },  // 03-Yellow
+        {   0,   0, 255 },  // 04-Blue
+        { 255, 128,   0 },  // 05-Orange
+        { 255,   0,   0 },  // 06-Red
+        { 128, 255,   0 },  // 07-Lime
+        { 255,   0, 255 },  // 08-Magenta
+        { 128,   0, 255 },  // 09-Purple
+        { 128, 128, 128 },  // 10-Unknown
+        { 128, 128, 128 },  // 11-Unknown
+        { 128, 128, 128 },  // 12-Unknown
+        { 128, 128, 128 },  // 13-Unknown
+        { 128, 128, 128 },  // 14-Unknown
+        { 128, 128, 128 },  // 15-Unknown
+        { 128, 128, 128 },  // 16-Unknown
     };
 }

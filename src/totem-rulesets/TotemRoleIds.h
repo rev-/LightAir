@@ -21,4 +21,5 @@ namespace TotemRoleId {
     constexpr uint8_t CP     = 5;   // control point (teamless)
     constexpr uint8_t BONUS  = 6;   // bonus pickup (teamless)
     constexpr uint8_t MALUS  = 7;   // malus pickup (teamless)
+    constexpr uint8_t BASE   = 8;   // respawn base, teamless (respawns any nearby player)
 }

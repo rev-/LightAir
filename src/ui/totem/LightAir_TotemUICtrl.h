@@ -14,7 +14,7 @@
 //   strip  — a StripAnimation (one-shot or looping)
 //   rgb    — an RGB colour (on/off)
 //
-// Looping background states (Idle, FlagMissing, ControlO/X,
+// Looping background states (Idle, FlagMissing, Control,
 // ControlContest) call strip.loop() and set a persistent RGB colour.
 // One-shot events (Respawn, FlagTaken, etc.) call strip.play() which
 // pre-empts the background for its duration, then the background resumes.

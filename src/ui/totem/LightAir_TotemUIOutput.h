@@ -18,9 +18,11 @@ enum class TotemUIEvent : uint8_t {
     // ---- Looping background states ----
     Idle,          // game active, no specific state; gentle slow pulse
     FlagMissing,   // flag away from home; slow blink in flag-team colour
-    ControlO,      // control point held by team O; steady fill team-O colour
-    ControlX,      // control point held by team X; steady fill team-X colour
-    ControlContest,// contested; alternating team colours
+    Control,       // CP owned: steady fill in team or player colour.
+                   //   cmd.r = 0 or 1  → team index; colour from TeamColors::kColors.
+                   //   cmd.r = 0xFF    → player-based; cmd.g = player ID (0–16);
+                   //                    colour from PlayerColors::kColors.
+    ControlContest,// contested; alternating team colours (no cmd colour used)
     // ---- Extensibility ----
     Custom1,
     Custom2,
@@ -36,7 +38,8 @@ struct TotemUICmd {
     uint8_t      r, g, b;  // colour param:
                             //   Respawn       → player RGB colour
                             //   FlagMissing/Return/Taken → flag-team colour
-                            //   ControlO/X    → team colour
+                            //   Control       → cmd.r = team (0/1) or 0xFF; cmd.g = player ID
+                            //   Idle          → RGB LED colour (0,0,0 = off)
                             //   others        → ignored (use 0,0,0)
 };
 

@@ -17,6 +17,7 @@ extern const LightAir_Game game_outflow;
 extern const LightAir_Game game_teams;
 extern const LightAir_Game game_upkeep;
 extern const LightAir_Game game_flag;
+extern const LightAir_Game game_koh;
 
 void registerAllGames(LightAir_GameManager& mgr) {
     assert(mgr.registerGame(game_ffa));
@@ -24,4 +25,5 @@ void registerAllGames(LightAir_GameManager& mgr) {
     assert(mgr.registerGame(game_teams));
     assert(mgr.registerGame(game_upkeep));
     assert(mgr.registerGame(game_flag));
+    assert(mgr.registerGame(game_koh));
 }

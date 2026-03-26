@@ -15,11 +15,12 @@ void LightAir_TotemRGB_HW::begin(int pinComm, int pinR, int pinG, int pinB,
     off();
 }
 
-void LightAir_TotemRGB_HW::set(bool r, bool g, bool b) {
-    // Drive colour channels first, then enable common.
-    digitalWrite(_pinR, r ? HIGH : LOW);
-    digitalWrite(_pinG, g ? HIGH : LOW);
-    digitalWrite(_pinB, b ? HIGH : LOW);
+void LightAir_TotemRGB_HW::set(uint8_t r, uint8_t g, uint8_t b) {
+    if (r == 0 && g == 0 && b == 0) { off(); return; }
+    // Drive PWM channels first, then enable common to avoid colour flicker.
+    analogWrite(_pinR, r);
+    analogWrite(_pinG, g);
+    analogWrite(_pinB, b);
     digitalWrite(_pinComm, _commonActive);
 }
 

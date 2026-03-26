@@ -22,5 +22,6 @@ namespace GameTypeId {
     constexpr uint16_t FLAG         = 0x0003;
     constexpr uint16_t OUTFLOW      = 0x0004;
     constexpr uint16_t UPKEEP       = 0x0005;
-    // Next available: 0x0006
+    constexpr uint16_t KING_OF_HILL = 0x0006;
+    // Next available: 0x0007
 }
