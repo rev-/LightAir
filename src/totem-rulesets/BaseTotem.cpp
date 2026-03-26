@@ -57,12 +57,21 @@ public:
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
         // Accept player reply to our beacon only.
         if (msg.msgType != MSG_BASE_BEACON + 1) return;
-        // Wipe in the respawning player's team colour.
-        uint8_t t = (msg.team < 2) ? msg.team : 0;
-        out.ui.trigger(TotemUIEvent::Respawn,
-                       TeamColors::kColors[t][0],
-                       TeamColors::kColors[t][1],
-                       TeamColors::kColors[t][2]);
+        uint8_t r, g, b;
+        if (_team == 0xFF) {
+            // Teamless base: wipe in the respawning player's personal colour.
+            uint8_t pid = (msg.senderId < PlayerDefs::MAX_PLAYER_ID) ? msg.senderId : 0;
+            r = PlayerColors::kColors[pid][0];
+            g = PlayerColors::kColors[pid][1];
+            b = PlayerColors::kColors[pid][2];
+        } else {
+            // Team base: wipe in the respawning player's team colour.
+            uint8_t t = (msg.team < 2) ? msg.team : 0;
+            r = TeamColors::kColors[t][0];
+            g = TeamColors::kColors[t][1];
+            b = TeamColors::kColors[t][2];
+        }
+        out.ui.trigger(TotemUIEvent::Respawn, r, g, b);
     }
 
     void update(LightAir_TotemOutput& out) override {
