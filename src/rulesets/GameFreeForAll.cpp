@@ -145,9 +145,8 @@ static const WinnerVar winnerVars[] = {
 };
 
 // ---- onBegin: reset all runtime state from config ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtrl*,
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
                     const LightAir_GameRunner&) {
-    radio.setTeam(0xFF);  // FFA is teamless; stamp 0xFF into every outgoing packet
     lives        = startLives;
     energy       = startEnergy;
     gameTimeLeft = gameTime;
