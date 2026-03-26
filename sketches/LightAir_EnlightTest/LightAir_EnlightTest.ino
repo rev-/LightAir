@@ -381,8 +381,8 @@ void loop() {
             Serial.printf("Client connected: %s\n",
                           tcpClient.remoteIP().toString().c_str());
 
-            // Send header so the receiver knows the mode.
-            char hdr[48];
+            // Session header: mode/trigger settings, then column labels.
+            char hdr[64];
             if (gTrigMode == TrigMode::AUTO) {
                 snprintf(hdr, sizeof(hdr), "# mode=%s trig=AUTO%us\n",
                          gDataMode == DataMode::RAW ? "RAW" : "ELAB",
@@ -392,6 +392,23 @@ void loop() {
                          gDataMode == DataMode::RAW ? "RAW" : "ELAB");
             }
             tcpClient.print(hdr);
+
+            // Column labels so each field is self-documenting.
+            if (gDataMode == DataMode::RAW) {
+                tcpClient.print(
+                    "# RAW,"
+                    "timestamp_ms,"
+                    "rout(far-R),gout(far-G),bout(far-B),"
+                    "rnear(near-R),gnear(near-G),bnear(near-B),"
+                    "satCount,totalSamples\n");
+            } else {
+                tcpClient.print(
+                    "# ELAB,"
+                    "timestamp_ms,"
+                    "status,matched_id,"
+                    "rout(far-R),gout(far-G),bout(far-B),"
+                    "rnear(near-R),gnear(near-G),bnear(near-B)\n");
+            }
         } else {
             if (millis() - lastDispMs > 500) {
                 updateRunDisplay(true);
