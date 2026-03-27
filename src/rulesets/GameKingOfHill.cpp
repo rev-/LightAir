@@ -421,4 +421,5 @@ const LightAir_Game game_koh = {
     /* totemRequirements     */ KoH::totemRequirements,  /* totemRequirementCount  */ 4,
     /* teamCount             */ 0,
     /* teamMap               */ nullptr,
+    /* onEnd                 */ nullptr,
 };

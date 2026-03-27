@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <math.h>
 
+using namespace InputDefaults;
+
 static const char* TAG = "EnlightCalib";
 
 EnlightCalibRoutine::EnlightCalibRoutine(Enlight&            e,

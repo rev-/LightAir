@@ -44,9 +44,11 @@ enum class EnlightStatus : uint8_t {
 };
 
 struct EnlightResult {
-    EnlightStatus status = EnlightStatus::IDLE;
-    uint8_t       id     = 0;  // player index (PLAYER_HIT),
-                                // colour id (NEAR, 0 until near grid defined)
+    EnlightStatus status;
+    uint8_t       id;  // player index (PLAYER_HIT),
+                        // colour id (NEAR, 0 until near grid defined)
+    EnlightResult() : status(EnlightStatus::IDLE), id(0) {}
+    EnlightResult(EnlightStatus s, uint8_t i) : status(s), id(i) {}
 };
 
 // Raw correlator output after a completed run — exposed for calibration routines.

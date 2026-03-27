@@ -1,6 +1,7 @@
 #include "LightAir_GameSetupMenu.h"
 #include "../enlight/EnlightCalibRoutine.h"
 #include "../nvs_config.h"
+#include "../totem-rulesets/TotemRoleIds.h"
 #include <Arduino.h>
 #include <esp_log.h>
 #include <esp_random.h>

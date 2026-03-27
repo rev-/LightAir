@@ -236,5 +236,5 @@ struct LightAir_Game {
     // Called by GameRunner immediately before esp_restart() after the player
     // presses A+B on the end-game screen.  Use for last-moment display updates
     // or NVS writes.  nullptr = skip.
-    void (*onEnd)(LightAir_DisplayCtrl&) = nullptr;
+    void (*onEnd)(LightAir_DisplayCtrl&);
 };

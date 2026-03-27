@@ -442,4 +442,5 @@ const LightAir_Game game_teams = {
     /* totemRequirements     */ Teams::totemRequirements,  /* totemRequirementCount  */ 5,
     /* teamCount             */ 2,
     /* teamMap               */ Teams::teamMap,
+    /* onEnd                 */ nullptr,
 };
