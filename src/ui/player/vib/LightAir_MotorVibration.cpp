@@ -1,4 +1,4 @@
-#include "LightAir_VibrationCtrl.h"
+#include "LightAir_MotorVibration.h"
 #include "LightAir_Vibration.h"
 #include <Arduino.h>
 
