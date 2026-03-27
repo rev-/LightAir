@@ -1,6 +1,6 @@
 #pragma once
 #include "Enlight.h"
-#include "../ui/display/LightAir_Display.h"
+#include "../ui/player/display/LightAir_Display.h"
 #include "../input/LightAir_InputCtrl.h"
 
 // ---------------------------------------------------------------
