@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include "../input/LightAir_InputTypes.h"
 #include "../radio/LightAir_Radio.h"
-#include "../ui/display/LightAir_DisplayCtrl.h"
+#include "../ui/player/display/LightAir_DisplayCtrl.h"
 #include "LightAir_GameOutput.h"
 
 // ----------------------------------------------------------------
