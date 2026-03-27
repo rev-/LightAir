@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-#include "../ui/display/LightAir_Display_Icons.h"
+#include "../ui/player/display/LightAir_Display_Icons.h"
 
 // ----------------------------------------------------------------
 // VarType — discriminates the two kinds of monitored variable.
