@@ -548,4 +548,5 @@ const LightAir_Game game_upkeep = {
     /* totemRequirementCount */ 6,
     /* teamCount             */ 2,
     /* teamMap               */ Upkeep::teamMap,
+    /* onEnd                 */ nullptr,
 };

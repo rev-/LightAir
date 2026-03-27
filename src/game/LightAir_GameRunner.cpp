@@ -505,8 +505,7 @@ void LightAir_GameRunner::scoreAnnounce() const {
 void LightAir_GameRunner::postScoreAnnounce() {
     const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
     _display->activateBindingSet(_emptyBindingSetId);
-    _display->print(0, fh * 5, "A+B: Restart");
-    _display->flush();
+    _display->showMessage("A+B: Restart");
     _endExitReady = true;
 }
 

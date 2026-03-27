@@ -316,4 +316,5 @@ const LightAir_Game game_outflow = {
     /* totemRequirements     */ Outflow::totemRequirements,  /* totemRequirementCount  */ 2,
     /* teamCount             */ 0,
     /* teamMap               */ nullptr,
+    /* onEnd                 */ nullptr,
 };
