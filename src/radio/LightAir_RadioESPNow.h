@@ -2,6 +2,7 @@
 #include "LightAir_RadioTransport.h"
 #include <esp_now.h>
 #include <WiFi.h>
+#include "esp_idf_version.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 
@@ -41,5 +42,9 @@ private:
     volatile int _tail = 0;
 
     static LightAir_RadioESPNow* _instance;
+#if ESP_IDF_VERSION_MAJOR >= 5
     static void onRecv(const esp_now_recv_info_t* recv_info, const uint8_t* data, int len);
+#else
+    static void onRecv(const uint8_t* mac_addr, const uint8_t* data, int len);
+#endif
 };
