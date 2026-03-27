@@ -70,6 +70,7 @@ bool LightAir_RadioESPNow::receive(uint8_t* data, int& len, int maxLen, int8_t& 
 // ----------------------------------------------------------------
 // Static ESP-NOW callback — WiFi task, core 0
 // ----------------------------------------------------------------
+#if ESP_IDF_VERSION_MAJOR >= 5
 void LightAir_RadioESPNow::onRecv(const esp_now_recv_info_t* recv_info,
                                    const uint8_t* data, int len) {
     LightAir_RadioESPNow* self = _instance;
@@ -78,6 +79,14 @@ void LightAir_RadioESPNow::onRecv(const esp_now_recv_info_t* recv_info,
     int8_t rssi = (recv_info && recv_info->rx_ctrl)
                   ? (int8_t)recv_info->rx_ctrl->rssi
                   : 0;
+#else
+void LightAir_RadioESPNow::onRecv(const uint8_t* mac_addr,
+                                   const uint8_t* data, int len) {
+    LightAir_RadioESPNow* self = _instance;
+    if (!self || len <= 0 || len > ESPNOW_MAX_PKT_LEN) return;
+
+    int8_t rssi = 0;  // rx_ctrl not available in ESP-IDF 4.x callback
+#endif
 
     taskENTER_CRITICAL(&self->_mux);
     int nextHead = (self->_head + 1) % ESPNOW_RECV_QUEUE;

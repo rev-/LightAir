@@ -12,7 +12,7 @@
 #include <math.h>
 
 // Fixed hardware constants
-static constexpr size_t   SPI_MAX_DMA_LEN    = 32767;
+static constexpr size_t   ENLIGHT_SPI_MAX_DMA_LEN = 32767;
 static constexpr uint32_t ADC_BYTES_PER_CONV = 2;
 static constexpr uint32_t ADC_PIPELINE_DELAY = 1;
 static constexpr uint32_t ADC_CHANNELS       = 3;

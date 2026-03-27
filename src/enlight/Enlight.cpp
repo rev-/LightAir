@@ -23,7 +23,7 @@ Enlight::~Enlight() {
 /* ============================================================
  *   generateWaveform()
  *   1. Round frequency to nearest GOERTZ_GRAIN-multiple period.
- *   2. _periodsPerCycle = floor(SPI_MAX_DMA_LEN / waveformBytes).
+ *   2. _periodsPerCycle = floor(ENLIGHT_SPI_MAX_DMA_LEN / waveformBytes).
  *      All buffers are sized once. Cycle duration logged at INFO.
  *   3. Sigma-delta PDM for one period; replicate across DMA buffer.
  *      desired = (0.5+off) + (0.5-off)*PDM_AMP*sin/cos(theta)
@@ -39,7 +39,7 @@ bool Enlight::generateWaveform() {
     _goertzPeriod  = _periodClocks / GOERTZ_GRAIN;
     _actualFreqHz  = (float)_cfg.ledClockHz / (float)_periodClocks;
 
-    _periodsPerCycle  = (uint32_t)(SPI_MAX_DMA_LEN / _waveformBytes);
+    _periodsPerCycle  = (uint32_t)(ENLIGHT_SPI_MAX_DMA_LEN / _waveformBytes);
     if (_periodsPerCycle == 0) {
         ESP_LOGE(TAG, "Waveform (%lu bytes) exceeds DMA limit", (unsigned long)_waveformBytes);
         return false;
