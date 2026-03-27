@@ -1,5 +1,5 @@
 #pragma once
-#include "../radio/LightAir_RadioOutput.h"
+#include "../game/LightAir_RadioOutput.h"
 #include "../ui/totem/LightAir_TotemUIOutput.h"
 
 // ----------------------------------------------------------------
