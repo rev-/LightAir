@@ -346,7 +346,7 @@ static void doInGame(const InputReport& inp, const RadioReport&,
 }
 
 static void doOutGame(const InputReport&, const RadioReport& radio,
-                      LightAir_DisplayCtrl&, GameOutput&) {
+                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
 
     // Minimum respawn timer: ignore beacons until the wait has elapsed.

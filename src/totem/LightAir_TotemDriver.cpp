@@ -107,9 +107,8 @@ void LightAir_TotemDriver::flushOutput(LightAir_TotemOutput& out) {
     // ---- Radio: queued replies ----
     for (uint8_t i = 0; i < out.radio.replyCount; i++) {
         const RadioReplyMsg& r = out.radio.replies[i];
-        if (r.subType != 0) {
-            uint8_t pl[1] = { r.subType };
-            _radio.replyTo(r.senderId, r.origMsgType, r.origTimestamp, pl, 1);
+        if (r.payloadLen > 0) {
+            _radio.replyTo(r.senderId, r.origMsgType, r.origTimestamp, r.payload, r.payloadLen);
         } else {
             _radio.replyTo(r.senderId, r.origMsgType, r.origTimestamp);
         }
