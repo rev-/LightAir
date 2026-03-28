@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 
 // ----------------------------------------------------------------
 // LightAir_TotemRGB — abstract interface for a totem RGB LED.

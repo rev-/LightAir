@@ -29,7 +29,7 @@ void LightAir_SSD1306Display::drawRect(uint8_t x, uint8_t y, uint8_t w, uint8_t 
 
 void LightAir_SSD1306Display::drawBitmap(uint8_t x, uint8_t y, uint8_t w, uint8_t h,
                                    const uint8_t* data) {
-    _hw.drawXbm(x, y, w, h, data);
+    _hw.drawXbm(x, y, w, h, (const char*)data);
 }
 
 void LightAir_SSD1306Display::print(uint8_t x, uint8_t y, const char* text) {
