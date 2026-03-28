@@ -1,5 +1,7 @@
 #pragma once
 #include <stdint.h>
+#include "player_pins.h"
+#include "totem_pins.h"
 
 // ================================================================
 // RadioMsg — central registry of all game and infrastructure
@@ -154,21 +156,21 @@ struct EnlightConfig {
 
 namespace EnlightDefaults {
     constexpr uint8_t  ADC_HOST      = 1;        // SPI2_HOST
-    constexpr int      ADC_CLK       = 47;
-    constexpr int      ADC_SDO       = 14;
-    constexpr int      ADC_SDI       = 21;
-    constexpr int      ADC_CS        = 13;
+    constexpr int      ADC_CLK       = PLAYER_ADC_CLK;
+    constexpr int      ADC_SDO       = PLAYER_ADC_SDO;
+    constexpr int      ADC_SDI       = PLAYER_ADC_SDI;
+    constexpr int      ADC_CS        = PLAYER_ADC_CS;
     constexpr uint32_t ADC_CLOCK_HZ  = 16000000;
     constexpr uint8_t  ADC_CMD_R     = 24;
     constexpr uint8_t  ADC_CMD_G     = 32;
     constexpr uint8_t  ADC_CMD_B     = 40;
     constexpr uint8_t  LED_HOST      = 2;        // SPI3_HOST
-    constexpr int      LED_SDO       = 38;
-    constexpr int      LED_SDI_OUT   = 36;
+    constexpr int      LED_SDO       = PLAYER_LED_SDO;
+    constexpr int      LED_SDI_OUT   = PLAYER_LED_SDI_OUT;
     constexpr uint32_t LED_CLOCK_HZ  = 16000000;
     constexpr uint32_t LED_FREQ_HZ   = 1667;
     constexpr float    PDM_AMP_OFFSET = 0.0f;
-    constexpr int      AFE_ON        = 9;
+    constexpr int      AFE_ON        = PLAYER_AFE_ON;
     constexpr uint8_t  TASK_CORE        = 0;
     constexpr uint16_t MS_PER_REP       = 8;   // hardware constant: ms per enlight.run() repetition
 }

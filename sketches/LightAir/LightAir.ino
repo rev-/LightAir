@@ -15,15 +15,13 @@
 // A single compiled binary can be flashed to either board type; the
 // correct path is selected at runtime, which simplifies OTA updates.
 //
-// Pin definitions are in player_pins.h and totem_pins.h.
+// Pin definitions are in src/player_pins.h and src/totem_pins.h.
 // ================================================================
 
 #include <LightAir.h>
 #include "../../src/rulesets/AllGames.h"
 #include "../../src/totem/AllTotems.h"
 #include "../../src/enlight/Enlight.h"
-#include "player_pins.h"
-#include "totem_pins.h"
 
 // ----------------------------------------------------------------
 // Enlight global pointer

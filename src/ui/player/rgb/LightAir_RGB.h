@@ -13,3 +13,5 @@ public:
     // Turn off RGB output
     virtual void off() = 0;
 };
+
+#endif
