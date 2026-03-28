@@ -185,6 +185,7 @@ private:
     bool            _active       = false;  // set by run(), cleared by poll() after result consumed
 
     uint32_t        _repsRemaining = 0;
+    bool            _firstCycle    = false;  // true on the first DMA cycle after AFE power-on
     TaskHandle_t    _taskHandle    = nullptr;
     struct TaskArgs { Enlight* self; };
     TaskArgs        _taskArgs      = {};

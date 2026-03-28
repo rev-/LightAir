@@ -6,6 +6,7 @@
 #include "soc/gpio_sig_map.h"
 #include "esp_rom_gpio.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 static const char* TAG = "Enlight";
 static constexpr uint16_t SAT_HIGH = 4085;
@@ -248,6 +249,7 @@ bool Enlight::run(uint32_t repetitions) {
     _arrayiter=_satCount=0;
     if (_satPhaseCount) memset(_satPhaseCount, 0, _goertzPeriod * sizeof(uint16_t));
     _active=true;
+    _firstCycle=true;
     gpio_set_level((gpio_num_t)_cfg.afeOn,1);
     spawnCycle();
     return true;
@@ -465,6 +467,11 @@ void Enlight::onCycleDone() {
 
 void Enlight::dmaTask(void* arg) {
     Enlight* s=static_cast<TaskArgs*>(arg)->self;
+    if (s->_firstCycle) {
+        s->_firstCycle=false;
+        const int64_t t0=esp_timer_get_time();
+        while (esp_timer_get_time()-t0 < (int64_t)s->_cfg.afeStartupUs) {}
+    }
     spi_device_queue_trans(s->_ledDevice,&s->_ledTrans,portMAX_DELAY);
     spi_device_queue_trans(s->_adcDevice,&s->_adcTrans,portMAX_DELAY);
     spi_transaction_t* r;
