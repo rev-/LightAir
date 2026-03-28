@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include "LightAir_Display.h"
 #include "LightAir_Display_Icons.h"
-#include "../../config.h"
+#include "../../../config.h"
 
 class LightAir_DisplayCtrl {
 public:

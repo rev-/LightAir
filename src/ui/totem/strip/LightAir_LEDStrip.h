@@ -31,7 +31,13 @@ struct StripAnimation {
     StripEffect effect;
     uint16_t    durationMs;  // total duration for one-shot; period for loops
     // Optional secondary colour for Alternate effect (defaults to off)
-    uint8_t     r2 = 0, g2 = 0, b2 = 0;
+    uint8_t     r2, g2, b2;
+    StripAnimation()
+        : r(0), g(0), b(0), effect(StripEffect::Off), durationMs(0), r2(0), g2(0), b2(0) {}
+    StripAnimation(uint8_t r, uint8_t g, uint8_t b,
+                   StripEffect effect, uint16_t durationMs,
+                   uint8_t r2 = 0, uint8_t g2 = 0, uint8_t b2 = 0)
+        : r(r), g(g), b(b), effect(effect), durationMs(durationMs), r2(r2), g2(g2), b2(b2) {}
 };
 
 class LightAir_LEDStrip {
