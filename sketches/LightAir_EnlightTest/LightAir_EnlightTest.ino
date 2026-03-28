@@ -90,8 +90,9 @@ static const EnlightConfig enlightCfg = {
     /* ledClockHz  */ EnlightDefaults::LED_CLOCK_HZ,
     /* ledFreqHz   */ EnlightDefaults::LED_FREQ_HZ,
     /* pdmAmpOff   */ EnlightDefaults::PDM_AMP_OFFSET,
-    /* afeOn       */ EnlightDefaults::AFE_ON,
-    /* taskCore    */ EnlightDefaults::TASK_CORE,
+    /* afeOn         */ EnlightDefaults::AFE_ON,
+    /* taskCore      */ EnlightDefaults::TASK_CORE,
+    /* afeStartupUs  */ EnlightDefaults::AFE_STARTUP_MICROS,
 };
 
 static WiFiServer tcpServer(TCP_PORT);
