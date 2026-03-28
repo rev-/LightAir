@@ -6,8 +6,10 @@
 //
 // Setup menu (keypad):
 //   Step 1 — Data mode
-//               RAW        : correlator accumulators per channel
-//                            (rout/gout/bout = far, rnear/gnear/bnear = near)
+//               RAW        : individual 12-bit ADC samples from the last
+//                            DMA cycle, one SAMPLE line per RGB triple.
+//                            Set ENLIGHT_REPS=1; only the last cycle is
+//                            retained after poll().
 //               ELABORATED : classification result + correlator accumulators
 //   Step 2 — Trigger mode
 //               MANUAL : primary trigger button fires one measurement
@@ -22,8 +24,15 @@
 // Stream format (newline-terminated ASCII CSV):
 //   On connect :  # mode=<RAW|ELAB> trig=<MANUAL|AUTO[Ns]>
 //
-//   RAW  line :  RAW,<ms>,<rout>,<gout>,<bout>,<rnear>,<gnear>,<bnear>,
-//                    <satCount>,<totalSamples>
+//   RAW block :
+//     RAW_BEGIN,<ms>,<sample_count>
+//     SAMPLE,<ms>,<idx>,<r>,<g>,<b>,<sat>
+//       ... (sample_count lines) ...
+//     RAW_END,<ms>
+//
+//     <r>/<g>/<b> are raw 12-bit ADC values (0–4095).
+//     <sat> is 1 if any channel >= 4085 or <= 10, else 0.
+//     <idx> counts RGB triples (0-based), not raw conversions.
 //
 //   ELAB line :  ELAB,<ms>,<status>,<id>,<rout>,<gout>,<bout>,
 //                     <rnear>,<gnear>,<bnear>
@@ -40,9 +49,14 @@
 #define TCP_PORT      9000
 
 // Number of Enlight DMA repetitions per measurement.
-// 1 cycle ≈ 7.8 ms at V6R2 defaults → 5 reps ≈ 39 ms per shot.
-#define ENLIGHT_REPS  5
+// RAW mode: set to 1 — only the last DMA cycle is retained after poll().
+// ELABORATED mode: 5 reps ≈ 39 ms per shot at V6R2 defaults.
+#define ENLIGHT_REPS  1
 // ------------------------------------------------------------------------
+
+// Saturation thresholds (must match Enlight.cpp)
+static constexpr uint16_t kSatHigh = 4085;
+static constexpr uint16_t kSatLow  = 10;
 
 // ================================================================
 // Hardware objects  (pin constants come from player_pins.h via LightAir.h)
@@ -292,6 +306,11 @@ static const char* statusStr(EnlightStatus s) {
     }
 }
 
+// Decode one 12-bit ADC value from the DMA buffer (big-endian, bits [11:0]).
+static inline uint16_t adcSample(const uint8_t* buf, uint32_t convIdx) {
+    return (((uint16_t)buf[convIdx * 2] << 8) | buf[convIdx * 2 + 1]) & 0x0FFF;
+}
+
 static void takeMeasurement() {
     enlight->run(ENLIGHT_REPS);
 
@@ -304,31 +323,48 @@ static void takeMeasurement() {
         delay(1);  // yield to FreeRTOS scheduler
     } while (millis() - t0 < 2000);
 
-    // rawMeasure() must be called before the next run(); grab it now.
-    EnlightRawMeasure raw = enlight->rawMeasure();
     uint32_t ts = millis();
 
     if (!tcpClient || !tcpClient.connected()) return;
 
-    char line[128];
+    char line[96];
     if (gDataMode == DataMode::RAW) {
-        snprintf(line, sizeof(line),
-            "RAW,%lu,%lld,%lld,%lld,%lld,%lld,%lld,%lu,%lu\n",
-            (unsigned long)ts,
-            raw.rout,  raw.gout,  raw.bout,
-            raw.rnear, raw.gnear, raw.bnear,
-            (unsigned long)raw.satCount,
-            (unsigned long)raw.totalSamples);
+        // Stream individual 12-bit ADC samples from the last DMA cycle.
+        // Only the last cycle is retained; ENLIGHT_REPS=1 is recommended.
+        const uint8_t* buf   = enlight->rawAdcBuf();
+        const uint32_t trips = enlight->adcConvsPerCycle() / ADC_CHANNELS;
+
+        snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu\n",
+                 (unsigned long)ts, (unsigned long)trips);
+        tcpClient.print(line);
+
+        for (uint32_t t = 0; t < trips; t++) {
+            const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+            const uint16_t rv = adcSample(buf, base);
+            const uint16_t gv = adcSample(buf, base + 1);
+            const uint16_t bv = adcSample(buf, base + 2);
+            const int sat = (rv >= kSatHigh || rv <= kSatLow ||
+                             gv >= kSatHigh || gv <= kSatLow ||
+                             bv >= kSatHigh || bv <= kSatLow) ? 1 : 0;
+            snprintf(line, sizeof(line), "SAMPLE,%lu,%lu,%u,%u,%u,%d\n",
+                     (unsigned long)ts, (unsigned long)t, rv, gv, bv, sat);
+            tcpClient.print(line);
+        }
+
+        snprintf(line, sizeof(line), "RAW_END,%lu\n", (unsigned long)ts);
+        tcpClient.print(line);
     } else {
+        // rawMeasure() must be called before the next run(); grab it now.
+        EnlightRawMeasure raw = enlight->rawMeasure();
         snprintf(line, sizeof(line),
             "ELAB,%lu,%s,%u,%lld,%lld,%lld,%lld,%lld,%lld\n",
             (unsigned long)ts,
             statusStr(res.status), res.id,
             raw.rout,  raw.gout,  raw.bout,
             raw.rnear, raw.gnear, raw.bnear);
+        tcpClient.print(line);
     }
 
-    tcpClient.print(line);
     gTxCount++;
 }
 
@@ -398,11 +434,9 @@ void loop() {
             // Column labels so each field is self-documenting.
             if (gDataMode == DataMode::RAW) {
                 tcpClient.print(
-                    "# RAW,"
-                    "timestamp_ms,"
-                    "rout(far-R),gout(far-G),bout(far-B),"
-                    "rnear(near-R),gnear(near-G),bnear(near-B),"
-                    "satCount,totalSamples\n");
+                    "# RAW_BEGIN,timestamp_ms,sample_count\n"
+                    "# SAMPLE,timestamp_ms,triple_idx,r(12bit),g(12bit),b(12bit),saturated\n"
+                    "# RAW_END,timestamp_ms\n");
             } else {
                 tcpClient.print(
                     "# ELAB,"

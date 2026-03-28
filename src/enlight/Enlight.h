@@ -111,6 +111,15 @@ public:
     // Values are reset by run(), so call this before the next run().
     EnlightRawMeasure rawMeasure() const;
 
+    // Access to the raw ADC DMA buffer from the last completed DMA cycle.
+    // Only the last cycle is retained; call before the next run().
+    // Buffer layout: interleaved 16-bit big-endian values, 12-bit ADC in
+    // bits [11:0].  Use ADC_PIPELINE_DELAY and ADC_CHANNELS to decode:
+    //   base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY  (for triple index t)
+    //   rv = ((buf[base*2] << 8) | buf[base*2+1]) & 0x0FFF
+    const uint8_t* rawAdcBuf()        const { return _adcRxBuf;        }
+    uint32_t       adcConvsPerCycle() const { return _adcConvsPerCycle; }
+
     // Rebuild the sine/cosine lookup table with the given phase offset.
     // Also precomputes _sin2total and reallocates _satPhaseCount.
     // Safe to call outside of an active run().
