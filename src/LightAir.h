@@ -54,3 +54,6 @@
 #include "totem/LightAir_TotemRoleManager.h"
 #include "totem/AllTotems.h"
 #include "totem-rulesets/TotemRoleIds.h"
+
+// Rulesets
+#include "rulesets/AllGames.h"
