@@ -12,6 +12,9 @@ It has to be compiled for ESP32-S3 and is written to be flashed using Arduino ID
 While a tag game is normally associated to a war simulation, LightAir wants to drop this label. We want to make clear a ray of light **is** a ray of light, not a metaphor for an ammunition or other means to offend people. This choice shows in many parts of the code, for example by the use of terms like LIT, SHONE, ENLIGHT instead of the common counterparts used in other tag games. Anyway, these terms have clear meanings and keep them throughout the code.
 LightAir still represents conflict, but in a non-violent way where the interactions are a way to communicate and "recognize" each other, instead of submitting them.
 This is not only an ethical choice, but mainly the base for more functional real-life interactions between players and also for the game lore.
+### Open sourceness and participation
+The whole LightAir project is based on open source - code is shared on github with GPL licence, while hardware parts are designed and realized with open source programs.
+Participation is considered an important asset, so for example the software is structured to define a ruleset (a game type) with a file that is as simple as practically feasible.
 ### Game ruleset and configuration sharing
 1. Game ruleset and configuration is decided by one designed player (NVM settings) right after boot.
 2. once defined, the game and its configuration is shared with all the other players via ESP-NOW packets
