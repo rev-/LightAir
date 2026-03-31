@@ -298,7 +298,7 @@ static const LightAir_TotemRequirement totemRequirements[] = {
 // ================================================================
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
-const LightAir_Game game_outflow = {
+extern const LightAir_Game game_outflow = {
     /* typeId                */ GameTypeId::OUTFLOW,
     /* name                  */ "Outflow",
     /* configVars            */ Outflow::configVars,         /* configCount            */ 5,

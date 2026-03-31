@@ -403,7 +403,7 @@ static const StateBehavior behaviors[] = {
 // ================================================================
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
-const LightAir_Game game_koh = {
+extern const LightAir_Game game_koh = {
     /* typeId                */ GameTypeId::KING_OF_HILL,
     /* name                  */ "King of Hill",
     /* configVars            */ KoH::configVars,         /* configCount            */ 6,
