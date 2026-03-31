@@ -127,7 +127,7 @@ void setup() {
 
         static RadioConfig radioCfg;
         radio  = new LightAir_Radio(transport, cfg.id,
-                                    RadioToken::UNSET, 0, cfg.team, radioCfg);
+                                    RadioToken::UNSET, 0, 0, radioCfg);
         driver = new LightAir_TotemDriver(*radio, totemUi, roleMgr);
 
         totemRgb.begin(TOTEM_PIN_COMM, TOTEM_PIN_R, TOTEM_PIN_G, TOTEM_PIN_B);
@@ -170,7 +170,7 @@ void setup() {
         // Radio
         static RadioConfig radioCfg;
         radio = new LightAir_Radio(transport, cfg.id,
-                                   RadioToken::UNSET, 0, cfg.team, radioCfg);
+                                   RadioToken::UNSET, 0, 0, radioCfg);
         if (!radio->begin()) {
             Serial.println("Radio init FAILED — halting");
             while (true) delay(1000);
