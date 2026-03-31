@@ -19,9 +19,6 @@
 // ================================================================
 
 #include <LightAir.h>
-#include "../../src/rulesets/AllGames.h"
-#include "../../src/totem/AllTotems.h"
-#include "../../src/enlight/Enlight.h"
 
 // ----------------------------------------------------------------
 // Enlight global pointer
