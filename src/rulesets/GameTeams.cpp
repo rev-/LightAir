@@ -424,7 +424,7 @@ static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
 // ================================================================
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
-const LightAir_Game game_teams = {
+extern const LightAir_Game game_teams = {
     /* typeId                */ GameTypeId::TEAMS,
     /* name                  */ "Teams",
     /* configVars            */ Teams::configVars,         /* configCount            */ 7,

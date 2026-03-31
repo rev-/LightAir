@@ -277,7 +277,7 @@ static const LightAir_TotemRequirement totemRequirements[] = {
 // ================================================================
 // Public game descriptor — registered in AllGames.cpp
 // ================================================================
-const LightAir_Game game_ffa = {
+extern const LightAir_Game game_ffa = {
     /* typeId                */ GameTypeId::FREE_FOR_ALL,
     /* name                  */ "Free for All",
     /* configVars            */ FFA::configVars,         /* configCount            */ 5,
