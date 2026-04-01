@@ -228,7 +228,7 @@ namespace DisplayDefaults {
     // 2 columns fit in SCREEN_WIDTH; CELL_HEIGHT includes 2 px padding below text.
     constexpr uint8_t CELL_COLS         = 2;
     constexpr uint8_t CELL_WIDTH        = SCREEN_WIDTH / CELL_COLS;   // 64
-    constexpr uint8_t CELL_HEIGHT       = FONT_HEIGHT + 2;
+    constexpr uint8_t CELL_HEIGHT       = FONT_HEIGHT + 1;
     // Y coordinate of the last text row — always pinned to the screen bottom.
     constexpr uint8_t BOTTOM_LINE_Y     = SCREEN_HEIGHT - FONT_HEIGHT;
 }
