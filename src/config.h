@@ -230,7 +230,7 @@ namespace DisplayDefaults {
     constexpr uint8_t CELL_WIDTH        = SCREEN_WIDTH / CELL_COLS;   // 64
     constexpr uint8_t CELL_HEIGHT       = FONT_HEIGHT + 1;
     // Y coordinate of the last text row — always pinned to the screen bottom.
-    constexpr uint8_t BOTTOM_LINE_Y     = SCREEN_HEIGHT - FONT_HEIGHT;
+    constexpr uint8_t BOTTOM_LINE_Y     = SCREEN_HEIGHT - FONT_HEIGHT - FONT_TOP_PADDING;
 }
 
 // ---------------------------------------------------------------
