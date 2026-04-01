@@ -464,7 +464,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
             } else {
                 buf[0] = '\0';  // blank row
             }
-            _display.print(0, DisplayDefaults::FONT_HEIGHT * r * 2, buf);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * r, buf);
         }
         printLegend("O:Start  X:Enter", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
