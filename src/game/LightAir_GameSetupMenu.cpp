@@ -829,7 +829,7 @@ void LightAir_GameSetupMenu::shareConfig() {
     _display.clear();
     _display.setColor(true);
     _display.print(0, 0,  "Share config?");
-    printLegend("O:YES  X:Skip", DisplayDefaults::FONT_HEIGHT);
+    printLegend("O:YES  X:Skip", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 
     char key = waitForKey();
