@@ -218,7 +218,7 @@ namespace DisplayDefaults {
     constexpr uint8_t SCREEN_WIDTH      = 128;
     constexpr uint8_t SCREEN_HEIGHT     = 64;
     constexpr uint8_t TRAY_HEIGHT       = 21;
-    constexpr uint8_t FONT_HEIGHT       = 9;
+    constexpr uint8_t FONT_HEIGHT       = 10;
     // ArialMT_Plain_10 glyphs start 3 px below the cell top (font leading).
     // Add this offset when aligning icons to text rendered at the same y.
     constexpr uint8_t FONT_TOP_PADDING  = 3;
