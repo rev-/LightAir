@@ -45,7 +45,7 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
             display.selectBindingSet(_bindings[b].setId);
             const uint8_t px = var.col * DisplayDefaults::CELL_WIDTH;
             const uint8_t py = var.row * DisplayDefaults::CELL_HEIGHT
-                               + 2 * DisplayDefaults::FONT_HEIGHT;
+                               + 3 * DisplayDefaults::FONT_HEIGHT;
             if (var.type == VarType::INT)
                 display.bindIntVariable(var.asInt, var.icon, px, py);
             else
