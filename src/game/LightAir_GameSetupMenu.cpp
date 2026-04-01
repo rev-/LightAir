@@ -464,7 +464,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
             } else {
                 buf[0] = '\0';  // blank row
             }
-            _display.print(0, DisplayDefaults::FONT_HEIGHT * r * 2, buf);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * r, buf);
         }
         printLegend("O:Start  X:Enter", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
@@ -546,7 +546,7 @@ void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
         snprintf(buf, sizeof(buf), "%s%-8s%d",
                  (delta == 0) ? ">" : " ",
                  var.name, *var.value);
-        _display.print(0, DisplayDefaults::FONT_HEIGHT * (row + 2), buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
     printLegend("^/V:sel <>:val X:", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
@@ -613,7 +613,7 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
                  (delta == 0) ? ">" : " ",
                  PlayerDefs::playerShort[pid],
                  _teams[pid]);
-        _display.print(0, DisplayDefaults::FONT_HEIGHT * (row + 2), buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
     printLegend("^/V:sel <>:team X:", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
@@ -726,7 +726,7 @@ void LightAir_GameSetupMenu::renderTotemEntry(uint8_t cursor) {
                  (delta == 0) ? ">" : " ",
                  TotemDefs::totemShort[slot],
                  totemRoleLabel(_totemAssignment[slot]));
-        _display.print(0, DisplayDefaults::FONT_HEIGHT * (row + 2), buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
     printLegend("^/V:sel <>:role X:", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();

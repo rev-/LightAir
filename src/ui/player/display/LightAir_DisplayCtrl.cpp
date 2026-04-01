@@ -171,7 +171,7 @@ void LightAir_DisplayCtrl::renderInt(VariableBinding& b) {
     _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
-    drawIcon(b.icon, b.x, b.y);
+    drawIcon(b.icon, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
 
     char buf[12];
     snprintf(buf, sizeof(buf), "%d", value);
@@ -204,7 +204,7 @@ void LightAir_DisplayCtrl::renderCooldown(VariableBinding& b) {
     _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
-    drawIcon(ICON_HOURGLASS, b.x, b.y);
+    drawIcon(ICON_HOURGLASS, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
     drawBar(b.x + 10, b.y + 2, b.barWidth, 6, ratio);
 }
 
@@ -219,7 +219,7 @@ void LightAir_DisplayCtrl::renderString(VariableBinding& b) {
     _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
-    drawIcon(b.icon, b.x, b.y);
+    drawIcon(b.icon, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
     _display.print(b.x + 10, b.y, b.lastText);
 }
 
