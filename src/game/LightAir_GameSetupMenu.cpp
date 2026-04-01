@@ -147,7 +147,7 @@ MenuResult LightAir_GameSetupMenu::run() {
         _display.setColor(true);
         _display.print(0, 0,      "Welcome to LightAir");
         _display.print(0, fh,     playerLine);
-        _display.print(0, fh * 3, "A:Play  B:Settings");
+        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Play  B:Settings");
         _display.flush();
 
         char key = waitForKey();
@@ -214,7 +214,7 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
             snprintf(row, sizeof(row), "%c %s", (i == sel) ? '>' : ' ', kEntries[i]);
             _display.print(0, fh * (1 + i), row);
         }
-        _display.print(0, fh * 3, "A:Select  B:Back");
+        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Select  B:Back");
         _display.flush();
 
         char key = waitForKey();
@@ -248,8 +248,8 @@ void LightAir_GameSetupMenu::runIdSettings() {
         _display.setColor(true);
         _display.print(0, 0,      idRow);
         _display.print(0, fh,     dmRow);
-        _display.print(0, fh * 2, "</> Chg  ^/V Nav");
-        _display.print(0, fh * 3, "A:Save   B:Cancel");
+        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y - fh, "</> Chg  ^/V Nav");
+        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y,      "A:Save   B:Cancel");
         _display.flush();
 
         char key = waitForKey();
@@ -287,7 +287,7 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
     _display.clear();
     _display.setColor(true);
     _display.print(0, 0,      "Waiting for host");
-    _display.print(0, fh,     "A:Join  B:Cancel");
+    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Join  B:Cancel");
     _display.flush();
 
     // Find the game matching any incoming config typeId.
@@ -328,7 +328,7 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
                     _display.setColor(true);
                     _display.print(0, 0,      "Game ready:");
                     _display.print(0, fh,     buf);
-                    _display.print(0, fh * 2, "A:Join  B:Cancel");
+                    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Join  B:Cancel");
                     _display.flush();
                     break;
                 }
@@ -357,7 +357,7 @@ bool LightAir_GameSetupMenu::runRestartPrompt() {
     _display.setColor(true);
     _display.print(0, 0,  "Last:");
     _display.print(0, fh, buf);
-    _display.print(0, fh * 2, "A:Restart  B:New");
+    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Restart  B:New");
     _display.flush();
 
     while (true) {
@@ -404,8 +404,8 @@ void LightAir_GameSetupMenu::renderGameList(uint8_t sel) {
         _display.print(0, fh * 2, buf);
     }
 
-    // Row 3: controls
-    _display.print(0, fh * 3, "A:Start  B:Setup");
+    // Bottom row: controls
+    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Start  B:Setup");
 
     _display.flush();
 }
@@ -485,7 +485,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
             }
             _display.print(0, fh * r, buf);
         }
-        _display.print(0, fh * 3, "A:Start  B:Enter");
+        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Start  B:Enter");
         _display.flush();
     };
 
@@ -568,7 +568,7 @@ void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
                  var.name, *var.value);
         _display.print(0, fh * row, buf);
     }
-    _display.print(0, fh * 3, "^/V:sel <>:val B:");
+    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "^/V:sel <>:val B:");
     _display.flush();
 }
 
@@ -636,7 +636,7 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
                  _teams[pid]);
         _display.print(0, fh * row, buf);
     }
-    _display.print(0, fh * 3, "^/V:sel <>:team B:");
+    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "^/V:sel <>:team B:");
     _display.flush();
 }
 
@@ -750,7 +750,7 @@ void LightAir_GameSetupMenu::renderTotemEntry(uint8_t cursor) {
                  totemRoleLabel(_totemAssignment[slot]));
         _display.print(0, fh * row, buf);
     }
-    _display.print(0, fh * 3, "^/V:sel <>:role B:");
+    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "^/V:sel <>:role B:");
     _display.flush();
 }
 
@@ -958,7 +958,7 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
         _display.print(0, fh * (row + 1), rowBuf);
     }
 
-    _display.print(0, fh * 3, "A:Start  B:Back");
+    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Start  B:Back");
     _display.flush();
 }
 
@@ -1023,6 +1023,6 @@ void LightAir_GameSetupMenu::showMessage2(const char* l0, const char* l1,
     if (l0 && l0[0]) _display.print(0, 0,      l0);
     if (l1 && l1[0]) _display.print(0, fh,     l1);
     if (l2 && l2[0]) _display.print(0, fh * 2, l2);
-    if (l3 && l3[0]) _display.print(0, fh * 3, l3);
+    if (l3 && l3[0]) _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, l3);
     _display.flush();
 }
