@@ -146,7 +146,7 @@ MenuResult LightAir_GameSetupMenu::run() {
         _display.setColor(true);
         _display.print(0, 0,                              "Welcome to LightAir");
         _display.print(0, DisplayDefaults::FONT_HEIGHT,    playerLine);
-        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Play  B:Settings");
+        printLegend("O:Play  X:Settings", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
         char key = waitForKey();
@@ -212,7 +212,7 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
             snprintf(row, sizeof(row), "%c %s", (i == sel) ? '>' : ' ', kEntries[i]);
             _display.print(0, DisplayDefaults::FONT_HEIGHT * (1 + i), row);
         }
-        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Select  B:Back");
+        printLegend("O:Select  X:Back", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
         char key = waitForKey();
@@ -245,8 +245,8 @@ void LightAir_GameSetupMenu::runIdSettings() {
         _display.setColor(true);
         _display.print(0, 0,                                                            idRow);
         _display.print(0, DisplayDefaults::FONT_HEIGHT,                                 dmRow);
-        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT, "</> Chg  ^/V Nav");
-        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y,                                "A:Save   B:Cancel");
+        printLegend("</> Chg  ^/V Nav", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
+        printLegend("O:Save   X:Cancel", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
         char key = waitForKey();
@@ -283,7 +283,7 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
     _display.clear();
     _display.setColor(true);
     _display.print(0, 0,      "Waiting for host");
-    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Join  B:Cancel");
+    printLegend("O:Join  X:Cancel", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 
     // Find the game matching any incoming config typeId.
@@ -324,7 +324,7 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
                     _display.setColor(true);
                     _display.print(0, 0,                              "Game ready:");
                     _display.print(0, DisplayDefaults::FONT_HEIGHT,   buf);
-                    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Join  B:Cancel");
+                    printLegend("O:Join  X:Cancel", DisplayDefaults::BOTTOM_LINE_Y);
                     _display.flush();
                     break;
                 }
@@ -352,7 +352,7 @@ bool LightAir_GameSetupMenu::runRestartPrompt() {
     _display.setColor(true);
     _display.print(0, 0,                              "Last:");
     _display.print(0, DisplayDefaults::FONT_HEIGHT,   buf);
-    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Restart  B:New");
+    printLegend("O:Restart  X:New", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 
     while (true) {
@@ -399,7 +399,7 @@ void LightAir_GameSetupMenu::renderGameList(uint8_t sel) {
     }
 
     // Bottom row: controls
-    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Start  B:Setup");
+    printLegend("O:Start  X:Setup", DisplayDefaults::BOTTOM_LINE_Y);
 
     _display.flush();
 }
@@ -476,9 +476,9 @@ void LightAir_GameSetupMenu::runSetupMenu() {
             } else {
                 buf[0] = '\0';  // blank row
             }
-            _display.print(0, DisplayDefaults::FONT_HEIGHT * r, buf);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * r * 2, buf);
         }
-        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Start  B:Enter");
+        printLegend("O:Start  X:Enter", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
     };
 
@@ -558,9 +558,9 @@ void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
         snprintf(buf, sizeof(buf), "%s%-8s%d",
                  (delta == 0) ? ">" : " ",
                  var.name, *var.value);
-        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * (row + 2), buf);
     }
-    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "^/V:sel <>:val B:");
+    printLegend("^/V:sel <>:val X:", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 }
 
@@ -625,9 +625,9 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
                  (delta == 0) ? ">" : " ",
                  PlayerDefs::playerShort[pid],
                  _teams[pid]);
-        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * (row + 2), buf);
     }
-    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "^/V:sel <>:team B:");
+    printLegend("^/V:sel <>:team X:", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 }
 
@@ -738,9 +738,9 @@ void LightAir_GameSetupMenu::renderTotemEntry(uint8_t cursor) {
                  (delta == 0) ? ">" : " ",
                  TotemDefs::totemShort[slot],
                  totemRoleLabel(_totemAssignment[slot]));
-        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * (row + 2), buf);
     }
-    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "^/V:sel <>:role B:");
+    printLegend("^/V:sel <>:role X:", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 }
 
@@ -841,7 +841,7 @@ void LightAir_GameSetupMenu::shareConfig() {
     _display.clear();
     _display.setColor(true);
     _display.print(0, 0,  "Share config?");
-    _display.print(0, DisplayDefaults::FONT_HEIGHT, "A:YES  B:Skip");
+    printLegend("O:YES  X:Skip", DisplayDefaults::FONT_HEIGHT);
     _display.flush();
 
     char key = waitForKey();
@@ -946,7 +946,7 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
         _display.print(0, DisplayDefaults::FONT_HEIGHT * (row + 1), rowBuf);
     }
 
-    _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Start  B:Back");
+    printLegend("O:Start  X:Back", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 }
 
@@ -1012,4 +1012,12 @@ void LightAir_GameSetupMenu::showMessage2(const char* l0, const char* l1,
     if (l2 && l2[0]) _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, l2);
     if (l3 && l3[0]) _display.print(0, DisplayDefaults::BOTTOM_LINE_Y,   l3);
     _display.flush();
+}
+
+void LightAir_GameSetupMenu::printLegend(const char* text, uint8_t y) {
+    uint16_t w = _display.textWidth(text);
+    uint8_t  x = (w < DisplayDefaults::SCREEN_WIDTH)
+                 ? (uint8_t)((DisplayDefaults::SCREEN_WIDTH - w) / 2)
+                 : 0;
+    _display.print(x, y, text);
 }
