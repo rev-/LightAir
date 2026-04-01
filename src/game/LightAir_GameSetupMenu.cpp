@@ -372,35 +372,23 @@ bool LightAir_GameSetupMenu::runRestartPrompt() {
  * ========================================================= */
 
 void LightAir_GameSetupMenu::renderGameList(uint8_t sel) {
-    const uint8_t n    = _mgr.count();
+    const uint8_t n = _mgr.count();
 
     _display.clear();
     _display.setColor(true);
 
-    // Row 0: game above cursor (blank at top)
-    if (sel > 0) {
+    // Show up to 5 entries: sel-2 … sel+2, cursor pinned to row 2.
+    for (int8_t delta = -2; delta <= 2; delta++) {
+        int8_t idx = (int8_t)sel + delta;
+        if (idx < 0 || idx >= (int8_t)n) continue;
+        uint8_t row = (uint8_t)(delta + 2);  // rows 0-4
         char buf[20];
-        snprintf(buf, sizeof(buf), "  %.16s", _mgr.game(sel - 1).name);
-        _display.print(0, 0, buf);
+        snprintf(buf, sizeof(buf), "%s%.16s",
+                 (delta == 0) ? "> " : "  ", _mgr.game((uint8_t)idx).name);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
 
-    // Row 1: current game (cursor)
-    {
-        char buf[20];
-        snprintf(buf, sizeof(buf), "> %.16s", _mgr.game(sel).name);
-        _display.print(0, DisplayDefaults::FONT_HEIGHT, buf);
-    }
-
-    // Row 2: game below cursor (blank at bottom)
-    if (sel + 1 < n) {
-        char buf[20];
-        snprintf(buf, sizeof(buf), "  %.16s", _mgr.game(sel + 1).name);
-        _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, buf);
-    }
-
-    // Bottom row: controls
     printLegend("O:Start  X:Setup", DisplayDefaults::BOTTOM_LINE_Y);
-
     _display.flush();
 }
 
@@ -841,7 +829,7 @@ void LightAir_GameSetupMenu::shareConfig() {
     _display.clear();
     _display.setColor(true);
     _display.print(0, 0,  "Share config?");
-    printLegend("O:YES  X:Skip", DisplayDefaults::FONT_HEIGHT);
+    printLegend("O:YES  X:Skip", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 
     char key = waitForKey();
