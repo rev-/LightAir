@@ -221,6 +221,11 @@ namespace DisplayDefaults {
     constexpr uint8_t FONT_HEIGHT       = 10;
     constexpr uint8_t CONTENT_HEIGHT    = SCREEN_HEIGHT - TRAY_HEIGHT;
     constexpr uint8_t TRAY_MAX_MESSAGES = TRAY_HEIGHT / FONT_HEIGHT;
+    // Grid cell dimensions for MonitorVar layout (col/row → pixel coords).
+    // 2 columns fit in SCREEN_WIDTH; CELL_HEIGHT includes 2 px padding below text.
+    constexpr uint8_t CELL_COLS         = 2;
+    constexpr uint8_t CELL_WIDTH        = SCREEN_WIDTH / CELL_COLS;   // 64
+    constexpr uint8_t CELL_HEIGHT       = 12;
 }
 
 // ---------------------------------------------------------------

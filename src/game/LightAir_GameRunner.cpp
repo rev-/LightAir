@@ -43,10 +43,12 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
         for (uint8_t b = 0; b < _bindingCount; b++) {
             if (!(var.stateMask & (1u << _bindings[b].state))) continue;
             display.selectBindingSet(_bindings[b].setId);
+            const uint8_t px = var.col * DisplayDefaults::CELL_WIDTH;
+            const uint8_t py = var.row * DisplayDefaults::CELL_HEIGHT;
             if (var.type == VarType::INT)
-                display.bindIntVariable(var.asInt, var.icon, var.col, var.row);
+                display.bindIntVariable(var.asInt, var.icon, px, py);
             else
-                display.bindStringVariable(var.asChars, var.icon, var.col, var.row);
+                display.bindStringVariable(var.asChars, var.icon, px, py);
         }
     }
 

@@ -168,7 +168,7 @@ void LightAir_DisplayCtrl::renderInt(VariableBinding& b) {
     b.lastValue = value;
 
     _display.setColor(false);
-    _display.fillRect(b.x, b.y, 64, 12);
+    _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
     drawIcon(b.icon, b.x, b.y);
@@ -201,7 +201,7 @@ void LightAir_DisplayCtrl::renderCooldown(VariableBinding& b) {
     float ratio = (float)elapsed / b.cooldownTime;
 
     _display.setColor(false);
-    _display.fillRect(b.x, b.y, 64, 12);
+    _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
     drawIcon(ICON_HOURGLASS, b.x, b.y);
@@ -216,7 +216,7 @@ void LightAir_DisplayCtrl::renderString(VariableBinding& b) {
     b.lastText[sizeof(b.lastText) - 1] = '\0';
 
     _display.setColor(false);
-    _display.fillRect(b.x, b.y, 64, 12);
+    _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
     drawIcon(b.icon, b.x, b.y);
