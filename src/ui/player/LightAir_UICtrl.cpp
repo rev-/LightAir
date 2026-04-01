@@ -226,16 +226,6 @@ void LightAir_UICtrl::applyPolicy(
       _backgroundRunning = false;
     }
     startNextEvent();
-  } else if (action.priority > _current.action->priority) {
-    // New event outranks the currently playing one — preempt it.
-    // The current event is abandoned (not re-queued); the new event
-    // (highest priority in the heap) starts immediately.
-    _ticker.detach();
-    if (_audio) _audio->stop();
-    if (_vib)   _vib->stop();
-    if (_rgb)   _rgb->setColor(0,0,0);
-    _isRunning = false;
-    startNextEvent();
   }
 }
 
