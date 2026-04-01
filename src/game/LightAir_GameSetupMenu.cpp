@@ -138,15 +138,14 @@ MenuResult LightAir_GameSetupMenu::run() {
 
     // ---- Home screen ----
     while (true) {
-        const uint8_t fh  = DisplayDefaults::FONT_HEIGHT;
         const uint8_t pid = _radio.playerId();
         char playerLine[20];
         snprintf(playerLine, sizeof(playerLine), "Player %s",
                  (pid < PlayerDefs::MAX_PLAYER_ID) ? PlayerDefs::playerNames[pid] : "???");
         _display.clear();
         _display.setColor(true);
-        _display.print(0, 0,      "Welcome to LightAir");
-        _display.print(0, fh,     playerLine);
+        _display.print(0, 0,                              "Welcome to LightAir");
+        _display.print(0, DisplayDefaults::FONT_HEIGHT,    playerLine);
         _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Play  B:Settings");
         _display.flush();
 
@@ -205,14 +204,13 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
     uint8_t sel = 0;
 
     while (true) {
-        const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
         _display.clear();
         _display.setColor(true);
         _display.print(0, 0, "-- Settings --");
         for (uint8_t i = 0; i < kCount; i++) {
             char row[20];
             snprintf(row, sizeof(row), "%c %s", (i == sel) ? '>' : ' ', kEntries[i]);
-            _display.print(0, fh * (1 + i), row);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * (1 + i), row);
         }
         _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Select  B:Back");
         _display.flush();
@@ -236,7 +234,6 @@ void LightAir_GameSetupMenu::runIdSettings() {
     uint8_t cursor = 0;  // 0 = ID row, 1 = DM row
 
     while (true) {
-        const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
         char idRow[20], dmRow[20];
         snprintf(idRow, sizeof(idRow), "%cID: %s",
                  (cursor == 0) ? '>' : ' ',
@@ -246,10 +243,10 @@ void LightAir_GameSetupMenu::runIdSettings() {
                  dm ? "Yes" : "No");
         _display.clear();
         _display.setColor(true);
-        _display.print(0, 0,      idRow);
-        _display.print(0, fh,     dmRow);
-        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y - fh, "</> Chg  ^/V Nav");
-        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y,      "A:Save   B:Cancel");
+        _display.print(0, 0,                                                            idRow);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT,                                 dmRow);
+        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT, "</> Chg  ^/V Nav");
+        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y,                                "A:Save   B:Cancel");
         _display.flush();
 
         char key = waitForKey();
@@ -283,7 +280,6 @@ void LightAir_GameSetupMenu::runIdSettings() {
  * ========================================================= */
 
 MenuResult LightAir_GameSetupMenu::runWaiter() {
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
     _display.clear();
     _display.setColor(true);
     _display.print(0, 0,      "Waiting for host");
@@ -326,8 +322,8 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
                     snprintf(buf, sizeof(buf), "%.16s", candidate.name);
                     _display.clear();
                     _display.setColor(true);
-                    _display.print(0, 0,      "Game ready:");
-                    _display.print(0, fh,     buf);
+                    _display.print(0, 0,                              "Game ready:");
+                    _display.print(0, DisplayDefaults::FONT_HEIGHT,   buf);
                     _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Join  B:Cancel");
                     _display.flush();
                     break;
@@ -348,15 +344,14 @@ bool LightAir_GameSetupMenu::runRestartPrompt() {
     if (lastIdx == 0xFF || lastIdx >= _mgr.count()) return false;  // no saved game
 
     const LightAir_Game& lastGame = _mgr.game(lastIdx);
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%.16s", lastGame.name);
 
     _display.clear();
     _display.setColor(true);
-    _display.print(0, 0,  "Last:");
-    _display.print(0, fh, buf);
+    _display.print(0, 0,                              "Last:");
+    _display.print(0, DisplayDefaults::FONT_HEIGHT,   buf);
     _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Restart  B:New");
     _display.flush();
 
@@ -377,7 +372,6 @@ bool LightAir_GameSetupMenu::runRestartPrompt() {
  * ========================================================= */
 
 void LightAir_GameSetupMenu::renderGameList(uint8_t sel) {
-    const uint8_t fh   = DisplayDefaults::FONT_HEIGHT;
     const uint8_t n    = _mgr.count();
 
     _display.clear();
@@ -394,14 +388,14 @@ void LightAir_GameSetupMenu::renderGameList(uint8_t sel) {
     {
         char buf[20];
         snprintf(buf, sizeof(buf), "> %.16s", _mgr.game(sel).name);
-        _display.print(0, fh, buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT, buf);
     }
 
     // Row 2: game below cursor (blank at bottom)
     if (sel + 1 < n) {
         char buf[20];
         snprintf(buf, sizeof(buf), "  %.16s", _mgr.game(sel + 1).name);
-        _display.print(0, fh * 2, buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, buf);
     }
 
     // Bottom row: controls
@@ -463,7 +457,6 @@ void LightAir_GameSetupMenu::runGameList() {
  * ========================================================= */
 
 void LightAir_GameSetupMenu::runSetupMenu() {
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
 
     // Build entry list: always Config + optional Teams + always Totems
     // Entries: 0=Config, 1=Teams (if teamCount > 0), 2=Totems
@@ -483,7 +476,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
             } else {
                 buf[0] = '\0';  // blank row
             }
-            _display.print(0, fh * r, buf);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * r, buf);
         }
         _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Start  B:Enter");
         _display.flush();
@@ -520,7 +513,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
                     // Show error for 2 s.
                     _display.clear();
                     _display.setColor(true);
-                    _display.print(0, fh, "Rules not met!");
+                    _display.print(0, DisplayDefaults::FONT_HEIGHT, "Rules not met!");
                     _display.flush();
                     delay(2000);
                     renderSetupMenu();
@@ -551,7 +544,6 @@ bool LightAir_GameSetupMenu::validateTotems() const {
  * ========================================================= */
 
 void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
     _display.clear();
     _display.setColor(true);
 
@@ -566,7 +558,7 @@ void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
         snprintf(buf, sizeof(buf), "%s%-8s%d",
                  (delta == 0) ? ">" : " ",
                  var.name, *var.value);
-        _display.print(0, fh * row, buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
     _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "^/V:sel <>:val B:");
     _display.flush();
@@ -619,7 +611,6 @@ void LightAir_GameSetupMenu::runConfigSubmenu() {
 
 void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
     // cursor is a player ID index 0-based (0 = player ID 1, …, 14 = player ID 15).
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
     _display.clear();
     _display.setColor(true);
 
@@ -634,7 +625,7 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
                  (delta == 0) ? ">" : " ",
                  PlayerDefs::playerShort[pid],
                  _teams[pid]);
-        _display.print(0, fh * row, buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
     _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "^/V:sel <>:team B:");
     _display.flush();
@@ -734,7 +725,6 @@ uint8_t LightAir_GameSetupMenu::nextTotemRole(uint8_t slot, int8_t dir) const {
 }
 
 void LightAir_GameSetupMenu::renderTotemEntry(uint8_t cursor) {
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
     _display.clear();
     _display.setColor(true);
 
@@ -748,7 +738,7 @@ void LightAir_GameSetupMenu::renderTotemEntry(uint8_t cursor) {
                  (delta == 0) ? ">" : " ",
                  TotemDefs::totemShort[slot],
                  totemRoleLabel(_totemAssignment[slot]));
-        _display.print(0, fh * row, buf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
     _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "^/V:sel <>:role B:");
     _display.flush();
@@ -848,11 +838,10 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
 }
 
 void LightAir_GameSetupMenu::shareConfig() {
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
     _display.clear();
     _display.setColor(true);
     _display.print(0, 0,  "Share config?");
-    _display.print(0, fh, "A:YES  B:Skip");
+    _display.print(0, DisplayDefaults::FONT_HEIGHT, "A:YES  B:Skip");
     _display.flush();
 
     char key = waitForKey();
@@ -881,7 +870,6 @@ bool LightAir_GameSetupMenu::wasSeen(uint8_t id) const {
 }
 
 void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
     _display.clear();
     _display.setColor(true);
 
@@ -955,7 +943,7 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
         uint8_t start = (hScroll < strlen(full)) ? hScroll : 0;
         char rowBuf[ROW_CHARS + 2];
         snprintf(rowBuf, sizeof(rowBuf), "%s", full + start);
-        _display.print(0, fh * (row + 1), rowBuf);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * (row + 1), rowBuf);
     }
 
     _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, "A:Start  B:Back");
@@ -1017,12 +1005,11 @@ char LightAir_GameSetupMenu::waitForKey() {
 
 void LightAir_GameSetupMenu::showMessage2(const char* l0, const char* l1,
                                            const char* l2, const char* l3) {
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
     _display.clear();
     _display.setColor(true);
-    if (l0 && l0[0]) _display.print(0, 0,      l0);
-    if (l1 && l1[0]) _display.print(0, fh,     l1);
-    if (l2 && l2[0]) _display.print(0, fh * 2, l2);
-    if (l3 && l3[0]) _display.print(0, DisplayDefaults::BOTTOM_LINE_Y, l3);
+    if (l0 && l0[0]) _display.print(0, 0,                                l0);
+    if (l1 && l1[0]) _display.print(0, DisplayDefaults::FONT_HEIGHT,     l1);
+    if (l2 && l2[0]) _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, l2);
+    if (l3 && l3[0]) _display.print(0, DisplayDefaults::BOTTOM_LINE_Y,   l3);
     _display.flush();
 }
