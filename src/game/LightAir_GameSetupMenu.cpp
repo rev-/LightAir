@@ -535,10 +535,10 @@ void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
     _display.clear();
     _display.setColor(true);
 
-    // Show 3 entries: above cursor, cursor, below cursor.
-    for (int8_t delta = -1; delta <= 1; delta++) {
+    // Show 5 entries: cursor centred at row 2.
+    for (int8_t delta = -2; delta <= 2; delta++) {
         int8_t idx = (int8_t)cursor + delta;
-        uint8_t row = (uint8_t)(delta + 1);  // row 0, 1, 2
+        uint8_t row = (uint8_t)(delta + 2);  // rows 0-4
         if (idx < 0 || idx >= (int8_t)total) continue;
 
         const ConfigVar& var = _game->configVars[idx];
@@ -548,7 +548,7 @@ void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
                  var.name, *var.value);
         _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
-    printLegend("^/V:sel <>:val X:", DisplayDefaults::BOTTOM_LINE_Y);
+    printLegend("^V:sel <>:val X:exit", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 }
 

@@ -274,6 +274,11 @@ static void doInGame(const InputReport& inp, const RadioReport&,
     EnlightResult r = enlightPtr->poll();
     if (r.status == EnlightStatus::PLAYER_HIT)
         out.radio.sendTo(r.id, MSG_LIT);
+
+    // Set depletion flag if energy reached zero (from either active or passive drain),
+    // unless a fatal hit already set pendingShone (mutually exclusive).
+    if (energy == 0 && !pendingShone)
+        pendingDepletion = true;
 }
 
 static void doOutGame(const InputReport&, const RadioReport&,
