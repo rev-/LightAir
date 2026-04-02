@@ -50,7 +50,7 @@ void LightAir_DisplayCtrl::activateBindingSet(uint8_t setId) {
  * ========================================================= */
 
 bool LightAir_DisplayCtrl::bindIntVariable(int* variable, IconType icon, uint8_t x, uint8_t y) {
-    if (y >= DisplayDefaults::CONTENT_HEIGHT) return false;
+    if (y < DisplayDefaults::TRAY_HEIGHT) return false;
 
     BindingSet& set = _sets[_selectedSet];
     if (set.locked || set.count >= DisplayDefaults::MAX_BINDINGS) return false;
@@ -73,7 +73,7 @@ bool LightAir_DisplayCtrl::bindCooldownVariable(
     uint32_t cooldownTimeMs,
     uint8_t barWidth
 ) {
-    if (y >= DisplayDefaults::CONTENT_HEIGHT) return false;
+    if (y < DisplayDefaults::TRAY_HEIGHT) return false;
 
     BindingSet& set = _sets[_selectedSet];
     if (set.locked || set.count >= DisplayDefaults::MAX_BINDINGS) return false;
@@ -92,7 +92,7 @@ bool LightAir_DisplayCtrl::bindCooldownVariable(
 }
 
 bool LightAir_DisplayCtrl::bindStringVariable(const char* str, IconType icon, uint8_t x, uint8_t y) {
-    if (y >= DisplayDefaults::CONTENT_HEIGHT) return false;
+    if (y < DisplayDefaults::TRAY_HEIGHT) return false;
 
     BindingSet& set = _sets[_selectedSet];
     if (set.locked || set.count >= DisplayDefaults::MAX_BINDINGS) return false;
@@ -251,7 +251,7 @@ void LightAir_DisplayCtrl::renderTray() {
     // incremental redraw: only dirty slots
     for (uint8_t i = 0; i < DisplayDefaults::TRAY_MAX_MESSAGES; i++) {
         if (!_tray[i].dirty) continue;
-        uint8_t y = DisplayDefaults::CONTENT_HEIGHT + i * DisplayDefaults::FONT_HEIGHT;
+        uint8_t y = i * DisplayDefaults::FONT_HEIGHT;
         _display.setColor(false);
         _display.fillRect(0, y, DisplayDefaults::SCREEN_WIDTH, DisplayDefaults::FONT_HEIGHT);
         _display.setColor(true);

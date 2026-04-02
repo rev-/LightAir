@@ -68,14 +68,14 @@ enum ReplySubType : uint8_t {
 };
 
 // ---- Config variables ----
-static int startEnergy = 50;
+static int startEnergy = 100;
 static int hitDmg      = 50;
 static int drainRate   = 10;   // energy points per 10 s; drainIntervalMs = 10000/drainRate
 static int respawnSecs = 30;
 static int gameTime    = 900;
 
 // ---- Runtime variables ----
-static int energy       = 50;
+static int energy       = 100;
 static int gameTimeLeft = 900;
 static int points       = 100;  // starts at 100; drops on self-depletion
 static int shoneTimes   = 0;
@@ -95,7 +95,7 @@ static bool pendingDepletion;   // passive drain zeroed energy this cycle
 static const ConfigVar configVars[] = {
     //name           value           min   max   step
     { "Energy",     &startEnergy,   50,   200,  25  },
-    { "HitDmg",     &hitDmg,        25,   100,  25  },
+    { "HitDmg",     &hitDmg,        25,   200,  25  },
     { "DrainRate",  &drainRate,      2,    20,   2  },
     { "Respawn",    &respawnSecs,    5,   120,   5  },
     { "Time",       &gameTime,      60,   900,  60  },
