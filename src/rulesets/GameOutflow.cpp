@@ -94,7 +94,7 @@ static bool pendingDepletion;   // passive drain zeroed energy this cycle
 // ---- Config vars (startup menu) ----
 static const ConfigVar configVars[] = {
     //name           value           min   max   step
-    { "Energy",     &startEnergy,   50,   200,  25  },
+    { "Energy",     &energy,        50,   200,  25  },
     { "HitDmg",     &hitDmg,        25,   200,  25  },
     { "DrainRate",  &drainRate,      2,    20,   2  },
     { "Respawn",    &respawnSecs,    5,   120,   5  },
@@ -255,7 +255,7 @@ static void doInGame(const InputReport& inp, const RadioReport&,
     tickGameTime();
     tickDrain();
 
-    constexpr uint8_t REPS = 4;
+    constexpr uint8_t REPS = 10;
 
     for (uint8_t i = 0; i < inp.buttonCount; i++) {
         if (inp.buttons[i].id != InputDefaults::TRIG_1_ID) continue;
