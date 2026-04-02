@@ -264,6 +264,7 @@ static void doInGame(const InputReport& inp, const RadioReport&,
             if (energy > 0) {
                 energy--;
                 energySpent++;
+                if (energy == 0) pendingDepletion = true;
                 enlightPtr->run(REPS);
                 out.ui.triggerEnlight(REPS * EnlightDefaults::MS_PER_REP);
             }
