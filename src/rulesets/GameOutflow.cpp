@@ -42,7 +42,7 @@
 //   Winner: most points; tie-break: fewest shoneTimes.
 //
 // Config vars
-//   startEnergy  : energy at game start / after respawn (default 50).
+//   startEnergy  : energy at game start / after respawn (default 100).
 //   hitDmg       : energy lost per hit received (default 50, clamp to 0).
 //   drainRate    : energy points drained per 10 seconds (default 10 → 1/s).
 //   respawnSecs  : seconds until auto-respawn (default 30).
@@ -232,6 +232,7 @@ static void onDepletion(LightAir_DisplayCtrl& disp, GameOutput& out) {
 }
 static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
     energy = startEnergy;
+    lastDrainAt = millis()
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
 }
