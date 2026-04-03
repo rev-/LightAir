@@ -19,7 +19,7 @@
 // ================================================================
 
 #include <LightAir.h>
-#include "../../src/enlight/EnlightCalibRoutine.h"
+#include "../src/enlight/EnlightCalibRoutine.h"
 
 // ----------------------------------------------------------------
 // Enlight global pointer

@@ -232,7 +232,7 @@ static void onDepletion(LightAir_DisplayCtrl& disp, GameOutput& out) {
 }
 static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
     energy = startEnergy;
-    lastDrainAt = millis()
+    lastDrainAt = millis();
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
 }
