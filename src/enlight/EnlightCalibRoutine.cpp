@@ -22,6 +22,7 @@ void EnlightCalibRoutine::run() {
     step1();
     step2();
     step3();
+    step4();
 }
 
 /* ============================================================
@@ -240,6 +241,80 @@ void EnlightCalibRoutine::step3() {
     snprintf(l1, sizeof(l1), "FarMax:  %lu", (unsigned long)maxFar);
     showLines(l0, l1, nullptr, nullptr, nullptr, "TRIG2: done");
     waitTrig(TRIG_2_ID);
+}
+
+/* ============================================================
+ *   Step 4 — calibration summary (paged NVS readback)
+ * ============================================================ */
+
+void EnlightCalibRoutine::step4() {
+    // Read all calibration values fresh from NVS.
+    EnlightCalib cal;
+    enlight_calib_load(cal);
+
+    // Build one formatted line per calibration value.
+    struct CalEntry { char line[22]; };
+    const uint8_t N_ENTRIES    = 13;
+    const uint8_t ROWS_PER_PAGE = 5;
+    const uint8_t N_PAGES      = (N_ENTRIES + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
+
+    CalEntry entries[N_ENTRIES];
+    snprintf(entries[0].line,  sizeof(entries[0].line),  "phsOff: %lu",  (unsigned long)cal.phaseOff);
+    snprintf(entries[1].line,  sizeof(entries[1].line),  "rcal:   %lu",  (unsigned long)cal.rcal);
+    snprintf(entries[2].line,  sizeof(entries[2].line),  "gcal:   %lu",  (unsigned long)cal.gcal);
+    snprintf(entries[3].line,  sizeof(entries[3].line),  "bcal:   %lu",  (unsigned long)cal.bcal);
+    snprintf(entries[4].line,  sizeof(entries[4].line),  "rcalN:  %lu",  (unsigned long)cal.rcalNear);
+    snprintf(entries[5].line,  sizeof(entries[5].line),  "gcalN:  %lu",  (unsigned long)cal.gcalNear);
+    snprintf(entries[6].line,  sizeof(entries[6].line),  "bcalN:  %lu",  (unsigned long)cal.bcalNear);
+    snprintf(entries[7].line,  sizeof(entries[7].line),  "limpow: %lu",  (unsigned long)cal.limpow);
+    snprintf(entries[8].line,  sizeof(entries[8].line),  "rfact:  %.4g", (double)cal.rfact);
+    snprintf(entries[9].line,  sizeof(entries[9].line),  "bfact:  %.4g", (double)cal.bfact);
+    snprintf(entries[10].line, sizeof(entries[10].line), "nRatMx: %.4g", (double)cal.nearRatioMax);
+    snprintf(entries[11].line, sizeof(entries[11].line), "mxNrW:  %lu",  (unsigned long)cal.maxNearWhite);
+    snprintf(entries[12].line, sizeof(entries[12].line), "mxFrW:  %lu",  (unsigned long)cal.maxFarWhite);
+
+    uint8_t page = 0;
+    for (;;) {
+        // Render the current page.
+        _disp.clear();
+        _disp.setColor(true);
+
+        const uint8_t base = page * ROWS_PER_PAGE;
+        for (uint8_t r = 0; r < ROWS_PER_PAGE; r++) {
+            const uint8_t idx = base + r;
+            if (idx >= N_ENTRIES) break;
+            _disp.print(0, r * 10, entries[idx].line);
+        }
+
+        char footer[22];
+        snprintf(footer, sizeof(footer), "^V pg%u/%u TRIG2:done", page + 1, N_PAGES);
+        _disp.print(0, 50, footer);
+        _disp.flush();
+
+        // Wait for TRIG2 (exit) or ^ / V (page change).
+        bool redraw = false;
+        while (!redraw) {
+            const InputReport& rep = _input.poll();
+
+            for (uint8_t i = 0; i < rep.buttonCount; i++) {
+                if (rep.buttons[i].id == TRIG_2_ID &&
+                    (rep.buttons[i].state == ButtonState::PRESSED ||
+                     rep.buttons[i].state == ButtonState::PRESSED_HELD))
+                    return;
+            }
+
+            for (uint8_t i = 0; i < rep.keyEventCount; i++) {
+                const InputReport::KeyEntry& ke = rep.keyEvents[i];
+                if (ke.keypadId != _keypadId) continue;
+                if (ke.state != KeyState::RELEASED &&
+                    ke.state != KeyState::RELEASED_HELD) continue;
+                if (ke.key == '^' && page > 0)           { page--; redraw = true; }
+                if (ke.key == 'V' && page < N_PAGES - 1) { page++; redraw = true; }
+            }
+
+            delay(10);
+        }
+    }
 }
 
 /* ============================================================
