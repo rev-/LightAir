@@ -44,8 +44,8 @@
 #include <LightAir.h>
 
 // ---- Edit these before flashing ----------------------------------------
-#define WIFI_SSID     "YOUR_SSID"
-#define WIFI_PASSWORD "YOUR_PASSWORD"
+#define WIFI_SSID     "TIM-54267233"
+#define WIFI_PASSWORD "3GyCKKKTcRTTAA7YP9cUyEEC"
 #define TCP_PORT      9000
 
 // Number of Enlight DMA repetitions per measurement.
