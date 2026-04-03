@@ -35,8 +35,8 @@ void EnlightCalibRoutine::step1() {
               "TRIG1 to start.");
     waitTrig(TRIG_1_ID);
 
-    float sumR = 0.f, sumG = 0.f, sumB = 0.f;
-    float ssR  = 0.f, ssG  = 0.f, ssB  = 0.f;
+    long long sumR = 0, sumG = 0, sumB = 0;
+    long long ssR  = 0, ssG  = 0, ssB  = 0;
     uint32_t n = 0;
 
     while (n < N_RUNS) {
@@ -48,17 +48,20 @@ void EnlightCalibRoutine::step1() {
         EnlightRawMeasure m;
         if (!runOne(m)) continue;  // severe saturation — discard, don't count
 
-        float r = (float)m.rout, g = (float)m.gout, b = (float)m.bout;
+        // Best phase should be read here, then ordered to extract the mode
+
+        long long r = m.rout, g = m.gout, b = m.bout;
         sumR += r;  ssR += r * r;
         sumG += g;  ssG += g * g;
         sumB += b;  ssB += b * b;
         n++;
+
     }
 
-    const float avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
-    const float sdR  = sqrtf(fmaxf(0.f, ssR / n - avgR * avgR));
-    const float sdG  = sqrtf(fmaxf(0.f, ssG / n - avgG * avgG));
-    const float sdB  = sqrtf(fmaxf(0.f, ssB / n - avgB * avgB));
+    const long long avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
+    const float sdR  = sqrtf(fmaxf(0.f, ssR / n - (avgR * avgR)));
+    const float sdG  = sqrtf(fmaxf(0.f, ssG / n - (avgG * avgG)));
+    const float sdB  = sqrtf(fmaxf(0.f, ssB / n - (avgB * avgB)));
 
     showLines("Scanning phase", "Please wait...");
 
@@ -102,12 +105,12 @@ void EnlightCalibRoutine::step2() {
     long long sRF[N_RUNS], sGF[N_RUNS], sBF[N_RUNS];
     long long sRN[N_RUNS], sGN[N_RUNS], sBN[N_RUNS];
 
-    float sumRF = 0.f, ssRF = 0.f;
-    float sumGF = 0.f, ssGF = 0.f;
-    float sumBF = 0.f, ssBF = 0.f;
-    float sumRN = 0.f, ssRN = 0.f;
-    float sumGN = 0.f, ssGN = 0.f;
-    float sumBN = 0.f, ssBN = 0.f;
+    long long sumRF = 0, ssRF = 0;
+    long long sumGF = 0, ssGF = 0;
+    long long sumBF = 0, ssBF = 0;
+    long long sumRN = 0, ssRN = 0;
+    long long sumGN = 0, ssGN = 0;
+    long long sumBN = 0, ssBN = 0;
     uint32_t n = 0;
 
     while (n < N_RUNS) {
@@ -122,8 +125,8 @@ void EnlightCalibRoutine::step2() {
         sRF[n] = m.rout;  sGF[n] = m.gout;  sBF[n] = m.bout;
         sRN[n] = m.rnear; sGN[n] = m.gnear; sBN[n] = m.bnear;
 
-        float rf = (float)m.rout,  gf = (float)m.gout,  bf = (float)m.bout;
-        float rn = (float)m.rnear, gn = (float)m.gnear, bn = (float)m.bnear;
+        long long rf = m.rout, gf = m.gout, bf = m.bout;
+        long long rn = m.rnear, gn = m.gnear, bn = m.bnear;
 
         sumRF += rf;  ssRF += rf * rf;
         sumGF += gf;  ssGF += gf * gf;
@@ -158,12 +161,12 @@ void EnlightCalibRoutine::step2() {
     // Compute averages and stdevs for display.
     const float aRF = sumRF / n, aGF = sumGF / n, aBF = sumBF / n;
     const float aRN = sumRN / n, aGN = sumGN / n, aBN = sumBN / n;
-    const float sdRF = sqrtf(fmaxf(0.f, ssRF / n - aRF * aRF));
-    const float sdGF = sqrtf(fmaxf(0.f, ssGF / n - aGF * aGF));
-    const float sdBF = sqrtf(fmaxf(0.f, ssBF / n - aBF * aBF));
-    const float sdRN = sqrtf(fmaxf(0.f, ssRN / n - aRN * aRN));
-    const float sdGN = sqrtf(fmaxf(0.f, ssGN / n - aGN * aGN));
-    const float sdBN = sqrtf(fmaxf(0.f, ssBN / n - aBN * aBN));
+    const float sdRF = sqrtf(fmaxf(0.f, ssRF / n - (aRF * aRF)));
+    const float sdGF = sqrtf(fmaxf(0.f, ssGF / n - (aGF * aGF)));
+    const float sdBF = sqrtf(fmaxf(0.f, ssBF / n - (aBF * aBF)));
+    const float sdRN = sqrtf(fmaxf(0.f, ssRN / n - (aRN * aRN)));
+    const float sdGN = sqrtf(fmaxf(0.f, ssGN / n - (aGN * aGN)));
+    const float sdBN = sqrtf(fmaxf(0.f, ssBN / n - (aBN * aBN)));
 
     char l0[24], l1[24], l2[24], l3[24], l4[24], l5[24];
     snprintf(l0, sizeof(l0), "F R:%.0f G:%.0f", (double)aRF, (double)aGF);
