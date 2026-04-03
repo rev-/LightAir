@@ -312,8 +312,8 @@ void EnlightCalibRoutine::waitTrig(uint8_t trigId) {
         const InputReport& rep = _input.poll();
         for (uint8_t i = 0; i < rep.buttonCount; i++) {
             if (rep.buttons[i].id == trigId &&
-                (rep.buttons[i].state == ButtonState::RELEASED ||
-                 rep.buttons[i].state == ButtonState::RELEASED_HELD))
+                (rep.buttons[i].state == ButtonState::PRESSED ||
+                 rep.buttons[i].state == ButtonState::PRESSED_HELD))
                 return;
         }
         delay(10);
