@@ -19,6 +19,7 @@
 // ================================================================
 
 #include <LightAir.h>
+#include "../../src/enlight/EnlightCalibRoutine.h"
 
 // ----------------------------------------------------------------
 // Enlight global pointer
@@ -50,8 +51,9 @@ static LightAir_TotemDriver*     driver = nullptr;
 // ================================================================
 
 // ---- Enlight (heap-allocated after NVS calibration is loaded) ----
-static EnlightCalib  enlightCalib;
-static Enlight*      enlight = nullptr;
+static EnlightCalib       enlightCalib;
+static Enlight*           enlight      = nullptr;
+static EnlightCalibRoutine* calibRoutine = nullptr;
 
 // EnlightConfig: pin values come from player_pins.h;
 // timing/frequency constants come from EnlightDefaults (src/config.h).
@@ -148,8 +150,10 @@ void setup() {
 
         // Enlight
         enlight_calib_load(enlightCalib);
-        enlight    = new Enlight(enlightCfg, enlightCalib);
-        enlightPtr = enlight;
+        enlight      = new Enlight(enlightCfg, enlightCalib);
+        enlightPtr   = enlight;
+        calibRoutine = new EnlightCalibRoutine(*enlight, rawDisplay, input,
+                                               InputDefaults::KEYPAD_ID);
         if (!enlight->begin()) {
             Serial.println("Enlight init FAILED — halting");
             while (true) delay(1000);
@@ -182,6 +186,7 @@ void setup() {
                                     rawDisplay, input,
                                     InputDefaults::KEYPAD_ID,
                                     *radio);
+        menu.setCalibRoutine(*calibRoutine);
         if (menu.run() != MenuResult::Confirmed) {
             Serial.println("Setup menu cancelled — rebooting");
             ESP.restart();
