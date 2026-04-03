@@ -51,6 +51,7 @@ private:
     void step1();
     void step2();
     void step3();
+    void step4();  // calibration summary — paged view of all NVS values
 
     // Run one Enlight measurement (REPS repetitions) and block until done.
     // Returns false if saturation rate exceeds SAT_THRESH (run should be
