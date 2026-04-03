@@ -10,11 +10,13 @@
 // After completion the device proceeds with normal game setup.
 //
 // Step 1 — Phase offset (clear target in view):
-//   Collect 50 valid Enlight runs (100 ms apart).  A run is discarded
-//   (and not counted) if its saturation rate exceeds SAT_THRESH (10 %).
-//   Display average and standard deviation of rout/gout/bout.
-//   Scan all goertzPeriod phase offsets (3 quick runs each) to find the
-//   phase that maximises rout+gout+bout.  Save it to NVS and apply it.
+//   For each of N_RUNS measurements the user presses TRIG1 to trigger a
+//   single Enlight run.  Runs with saturation > SAT_THRESH are discarded
+//   (user must press TRIG1 again).  For each valid run the raw ADC buffer
+//   is correlated against a shifted sine table at offsets 0…goertzPeriod/4
+//   (0°…90°); the offset yielding the maximum sum is recorded as the
+//   bestPhase for that shot.  After all shots the bestPhase values are
+//   sorted and the median is saved to NVS and applied.
 //   Press TRIG2 to continue.
 //
 // Step 2 — Baseline ("void", no target):
@@ -55,10 +57,10 @@ private:
     // discarded and not counted toward the total).
     bool runOne(EnlightRawMeasure& out);
 
-    // Scan all phase offsets 0..(goertzPeriod-1), running SCAN_REPS
-    // measurements at each.  Returns the offset with the highest total
-    // far correlator output (rout+gout+bout).
-    uint32_t scanBestPhase();
+    // From the raw ADC buffer of the last completed run, correlate each
+    // triple against a sine table shifted by p = 0…goertzPeriod/4 and
+    // return the offset p that yields the maximum sum.
+    uint32_t computeBestPhase();
 
     // Display up to 6 text rows (y = 0, 10, 20, 30, 40, 50).
     void showLines(const char* l0 = nullptr, const char* l1 = nullptr,
@@ -77,6 +79,5 @@ private:
     static constexpr uint32_t N_RUNS     = 50;    // valid runs to collect per step
     static constexpr uint32_t REPS       = 5;     // run() repetitions per measurement
     static constexpr uint32_t DELAY_MS   = 100;   // ms between measurements
-    static constexpr uint32_t SCAN_REPS  = 3;     // measurements per phase during scan
     static constexpr float    SAT_THRESH = 0.10f; // discard if > 10 % saturated
 };

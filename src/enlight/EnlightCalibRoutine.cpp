@@ -28,44 +28,51 @@ void EnlightCalibRoutine::run() {
  *   Step 1 — phase offset + clear-target statistics
  * ============================================================ */
 
+static int cmp_u32(const void* a, const void* b) {
+    const uint32_t x = *(const uint32_t*)a;
+    const uint32_t y = *(const uint32_t*)b;
+    return (x > y) - (x < y);
+}
+
 void EnlightCalibRoutine::step1() {
     showLines("Step 1: Phase",
               "Clear target in",
-              "view. Hold still.",
-              "TRIG1 to start.");
-    waitTrig(TRIG_1_ID);
+              "view.",
+              "TRIG1 per shot.");
 
+    uint32_t  phases[N_RUNS];
     long long sumR = 0, sumG = 0, sumB = 0;
     long long ssR  = 0, ssG  = 0, ssB  = 0;
-    uint32_t n = 0;
+    uint32_t  n = 0;
 
     while (n < N_RUNS) {
-        char rem[20];
-        snprintf(rem, sizeof(rem), "Rem: %lu", (unsigned long)(N_RUNS - n));
-        showLines("Clear target", rem);
-        delay(DELAY_MS);
+        char prompt[24];
+        snprintf(prompt, sizeof(prompt), "Shot %lu/%lu - TRIG1",
+                 (unsigned long)(n + 1), (unsigned long)N_RUNS);
+        showLines("Clear target", prompt);
+        waitTrig(TRIG_1_ID);
 
         EnlightRawMeasure m;
-        if (!runOne(m)) continue;  // severe saturation — discard, don't count
+        if (!runOne(m)) {
+            // Severe saturation — inform user and don't count this shot.
+            showLines("Saturated!", "Try again.", "TRIG1 to retry.");
+            delay(500);
+            continue;
+        }
 
-        // Best phase should be read here, then ordered to extract the mode
+        // Compute bestPhase for this shot from the captured ADC buffer.
+        phases[n] = computeBestPhase();
 
         long long r = m.rout, g = m.gout, b = m.bout;
         sumR += r;  ssR += r * r;
         sumG += g;  ssG += g * g;
         sumB += b;  ssB += b * b;
         n++;
-
     }
 
-    const long long avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
-    const float sdR  = sqrtf(fmaxf(0.f, ssR / n - (avgR * avgR)));
-    const float sdG  = sqrtf(fmaxf(0.f, ssG / n - (avgG * avgG)));
-    const float sdB  = sqrtf(fmaxf(0.f, ssB / n - (avgB * avgB)));
-
-    showLines("Scanning phase", "Please wait...");
-
-    const uint32_t bestPhase = scanBestPhase();
+    // Sort phase values and take the median.
+    qsort(phases, n, sizeof(uint32_t), cmp_u32);
+    const uint32_t bestPhase = phases[n / 2];
 
     // Persist and immediately apply the optimal phase offset.
     EnlightCalib cal;
@@ -75,6 +82,11 @@ void EnlightCalibRoutine::step1() {
     _e.buildSintab(bestPhase);
 
     // Show results.
+    const long long avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
+    const float sdR = sqrtf(fmaxf(0.f, (float)(ssR / n) - (float)(avgR * avgR)));
+    const float sdG = sqrtf(fmaxf(0.f, (float)(ssG / n) - (float)(avgG * avgG)));
+    const float sdB = sqrtf(fmaxf(0.f, (float)(ssB / n) - (float)(avgB * avgB)));
+
     char l0[24], l1[24], l2[24], l3[24], l4[24];
     snprintf(l0, sizeof(l0), "R:%.0f G:%.0f", (double)avgR, (double)avgG);
     snprintf(l1, sizeof(l1), "B:%.0f", (double)avgB);
@@ -243,29 +255,41 @@ bool EnlightCalibRoutine::runOne(EnlightRawMeasure& out) {
     return (float)out.satCount / (float)out.totalSamples <= SAT_THRESH;
 }
 
-uint32_t EnlightCalibRoutine::scanBestPhase() {
-    const uint32_t gp = _e.goertzPeriod();
-    uint32_t bestPhase = 0;
-    long long bestVal  = 0;
-    bool found = false;
+uint32_t EnlightCalibRoutine::computeBestPhase() {
+    const uint32_t gp       = _e.goertzPeriod();
+    const uint32_t maxOff   = gp / 4;            // scan 0 … 90°
+    const uint8_t* buf      = _e.rawAdcBuf();
+    const uint32_t nTriples = _e.adcConvsPerCycle() / ADC_CHANNELS;
 
-    for (uint32_t p = 0; p < gp; p++) {
-        _e.buildSintab(p);
-        long long sumVal = 0;
-        for (uint32_t r = 0; r < SCAN_REPS; r++) {
-            EnlightRawMeasure m;
-            _e.run(REPS);
-            while (_e.poll().status == EnlightStatus::RUNNING)
-                delay(1);
-            m = _e.rawMeasure();
-            sumVal += m.rout + m.gout + m.bout;
+    // Precompute one period of integer sine values (same scale as Enlight's sintab).
+    int32_t* sinLut = (int32_t*)malloc(gp * sizeof(int32_t));
+    if (!sinLut) return 0;
+    for (uint32_t i = 0; i < gp; i++)
+        sinLut[i] = (int32_t)roundf((float)SIN_MAG * sinf(2.0f * (float)M_PI * i / (float)gp));
+
+    uint32_t  bestPhase = 0;
+    long long bestVal   = 0;
+    bool      found     = false;
+
+    for (uint32_t p = 0; p <= maxOff; p++) {
+        long long sum = 0;
+        for (uint32_t t = 0; t < nTriples; t++) {
+            // Each DMA cycle holds an exact integer number of periods, so
+            // triple t has phase (t % gp) within that cycle.
+            const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+            const long long rv = (((uint16_t)buf[base*2]     << 8) | buf[base*2+1])     & 0x0FFF;
+            const long long gv = (((uint16_t)buf[(base+1)*2] << 8) | buf[(base+1)*2+1]) & 0x0FFF;
+            const long long bv = (((uint16_t)buf[(base+2)*2] << 8) | buf[(base+2)*2+1]) & 0x0FFF;
+            sum += (rv + gv + bv) * sinLut[(t % gp + p) % gp];
         }
-        if (!found || sumVal > bestVal) {
-            bestVal  = sumVal;
+        if (!found || sum > bestVal) {
+            bestVal   = sum;
             bestPhase = p;
-            found    = true;
+            found     = true;
         }
     }
+
+    free(sinLut);
     return bestPhase;
 }
 
