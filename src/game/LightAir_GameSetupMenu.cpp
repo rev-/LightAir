@@ -145,7 +145,8 @@ MenuResult LightAir_GameSetupMenu::run() {
         _display.clear();
         _display.setColor(true);
         _display.print(0, 0,                              "Welcome to LightAir");
-        _display.print(0, DisplayDefaults::FONT_HEIGHT,    playerLine);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT,    "V 1.0.0");
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, playerLine);
         printLegend("O:Play  X:Settings", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
@@ -245,7 +246,7 @@ void LightAir_GameSetupMenu::runIdSettings() {
         _display.setColor(true);
         _display.print(0, 0,                                                            idRow);
         _display.print(0, DisplayDefaults::FONT_HEIGHT,                                 dmRow);
-        printLegend("</> Chg  ^/V Nav", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
+        printLegend("^V Nav  <> Chg", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
         printLegend("O:Save   X:Cancel", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
@@ -466,7 +467,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
             }
             _display.print(0, DisplayDefaults::FONT_HEIGHT * r, buf);
         }
-        printLegend("O:Start  X:Enter", DisplayDefaults::BOTTOM_LINE_Y);
+        printLegend("O:Enter  X:Skip", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
     };
 
@@ -488,14 +489,14 @@ void LightAir_GameSetupMenu::runSetupMenu() {
                 if (c < 3) { cursor = c; renderSetupMenu(); }
                 break;
             }
-            case 'B':
+            case 'A':
                 // Enter highlighted submenu.
                 if (cursor == 0) runConfigSubmenu();
                 else if (cursor == 1) runTeamsSubmenu();
                 else                  runTotemsSubmenu();
                 renderSetupMenu();
                 break;
-            case 'A':
+            case 'B':
                 // Validate required totems before proceeding.
                 if (!validateTotems()) {
                     // Show error for 2 s.
@@ -548,7 +549,7 @@ void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
                  var.name, *var.value);
         _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
-    printLegend("^V:sel <>:val X:exit", DisplayDefaults::BOTTOM_LINE_Y);
+    printLegend("^V Nav  <> Chg  X:Exit", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 }
 
@@ -615,7 +616,7 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
                  _teams[pid]);
         _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
-    printLegend("^/V:sel <>:team X:", DisplayDefaults::BOTTOM_LINE_Y);
+    printLegend("^V Nav  <> Chg  X:Exit", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 }
 
@@ -728,7 +729,7 @@ void LightAir_GameSetupMenu::renderTotemEntry(uint8_t cursor) {
                  totemRoleLabel(_totemAssignment[slot]));
         _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
-    printLegend("^/V:sel <>:role X:", DisplayDefaults::BOTTOM_LINE_Y);
+    printLegend("^V Nav  <> Chg  X:Exit", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 }
 
