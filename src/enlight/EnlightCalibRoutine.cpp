@@ -298,8 +298,7 @@ void EnlightCalibRoutine::step4() {
 
             for (uint8_t i = 0; i < rep.buttonCount; i++) {
                 if (rep.buttons[i].id == TRIG_2_ID &&
-                    (rep.buttons[i].state == ButtonState::PRESSED ||
-                     rep.buttons[i].state == ButtonState::HELD))
+                    (rep.buttons[i].state == ButtonState::HELD))
                     return;
             }
 
