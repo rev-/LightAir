@@ -1,0 +1,10 @@
+profiles:
+  ESP32-S3-WROOM-1-N8R8:
+    fqbn: esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=8M,PartitionScheme=default_8MB,DebugLevel=none,PSRAM=opi,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default
+    platforms:
+      - platform: esp32:esp32 (2.0.17)
+    libraries:
+      - ESP8266 and ESP32 OLED driver for SSD1306 displays (4.6.2)
+      - FastLED (3.10.3)
+    programmer: esptool
+default_profile: ESP32-S3-WROOM-1-N8R8

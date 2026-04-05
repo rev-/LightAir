@@ -1,4 +1,6 @@
-#pragma once
+#ifndef CONFIG_H
+#define CONFIG_H
+
 #include <stdint.h>
 #include "player_pins.h"
 #include "totem_pins.h"
@@ -365,3 +367,5 @@ namespace PlayerColors {
         { 128, 128, 128 },  // 16-Unknown
     };
 }
+
+#endif // CONFIG_H

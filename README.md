@@ -7,6 +7,15 @@ This is the software library for LightAir. It is thought to allow for virtualiza
 It tries to make new game definitions as easy as possible, with the scope to promote the developing of new rule sets that work on the same platform.
 It has to be compiled for ESP32-S3 and is written to be flashed using Arduino IDE, which is more simple than ESP-IDF.
 
+## Build instruction
+In order to compile you need `make` and `arduino-cli` installed.
+
+```sh
+ make build/debug/LightAir.ino.bin
+```
+
+You can then upload the `LightAir.ino.bin` to the board using the Arduino IDE or Arduino CLI.
+
 ## Design guidelines
 ### Nonviolent semantics
 While a tag game is normally associated to a war simulation, LightAir wants to drop this label. We want to make clear a ray of light **is** a ray of light, not a metaphor for an ammunition or other means to offend people. This choice shows in many parts of the code, for example by the use of terms like LIT, SHONE, ENLIGHT instead of the common counterparts used in other tag games. Anyway, these terms have clear meanings and keep them throughout the code.
@@ -20,3 +29,4 @@ Participation is considered an important asset, so for example the software is s
 2. once defined, the game and its configuration is shared with all the other players via ESP-NOW packets
 3. therefore, players must all be within radio reach, while totems are not required to
 4. Totems are "activated" by custom messages by the players. This allows totems to be planted outside radio reach at the beginning of the game
+

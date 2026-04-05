@@ -1,4 +1,5 @@
-#pragma once
+#ifndef TOTEM_ROLE_IDS_H
+#define TOTEM_ROLE_IDS_H
 #include <stdint.h>
 
 // ----------------------------------------------------------------
@@ -39,3 +40,4 @@ inline const char* totemRoleName(uint8_t roleId) {
         default:                  return "?";
     }
 }
+#endif // TOTEM_ROLE_IDS_H
