@@ -1,0 +1,30 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup Arduino CLI
+      # You may pin to the exact commit or the version.
+      # uses: arduino/setup-arduino-cli@81d310742121c928ea9c8bbd407b4217b432ae02
+      uses: arduino/setup-arduino-cli@v2.0.0
+    - name: Build with Make
+      run: make ./build/debug/LightAir.ino.bin
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ba-dua-report
+        path: ./build/debug/LightAir.ino.bin
+        if-no-files-found: error
+        retention-days: 30
+
