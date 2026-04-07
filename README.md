@@ -14,7 +14,11 @@ In order to compile you need `make` and `arduino-cli` installed.
  make build/debug/LightAir.ino.bin
 ```
 
-You can then upload the `LightAir.ino.bin` to the board using the Arduino IDE or Arduino CLI.
+You can then upload the `LightAir.ino.bin` to the board using the Arduino IDE or Arduino CLI. For example:
+
+```sh
+arduino-cli upload --input-file ./build/debug/LightAir.ino.bin -p /dev/ttyACM0 -b esp32:esp32:esp32s3
+```
 
 ## Design guidelines
 ### Nonviolent semantics
