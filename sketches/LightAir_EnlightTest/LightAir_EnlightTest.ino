@@ -332,8 +332,10 @@ static void takeMeasurement() {
     if (gDataMode == DataMode::RAW) {
         // Stream individual 12-bit ADC samples from the last DMA cycle.
         // Only the last cycle is retained; ENLIGHT_REPS=1 is recommended.
-        const uint8_t* buf   = enlight->rawAdcBuf();
-        const uint32_t trips = enlight->adcConvsPerCycle() / ADC_CHANNELS;
+        const uint8_t*  buf    = enlight->rawAdcBuf();
+        const uint32_t  trips  = enlight->adcConvsPerCycle() / ADC_CHANNELS;
+        const int32_t*  sintab = enlight->rawSintab();
+        const uint32_t  gp     = enlight->goertzPeriod();
 
         snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu\n",
                  (unsigned long)ts, (unsigned long)trips);
@@ -347,8 +349,9 @@ static void takeMeasurement() {
             const int sat = (rv >= kSatHigh || rv <= kSatLow ||
                              gv >= kSatHigh || gv <= kSatLow ||
                              bv >= kSatHigh || bv <= kSatLow) ? 1 : 0;
-            snprintf(line, sizeof(line), "SAMPLE,%lu,%lu,%u,%u,%u,%d\n",
-                     (unsigned long)ts, (unsigned long)t, rv, gv, bv, sat);
+            const int32_t sinVal = sintab ? sintab[t % gp] : 0;
+            snprintf(line, sizeof(line), "SAMPLE,%lu,%lu,%u,%u,%u,%d,%ld\n",
+                     (unsigned long)ts, (unsigned long)t, rv, gv, bv, sat, (long)sinVal);
             tcpClient.print(line);
         }
 
