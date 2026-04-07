@@ -120,6 +120,12 @@ public:
     const uint8_t* rawAdcBuf()        const { return _adcRxBuf;        }
     uint32_t       adcConvsPerCycle() const { return _adcConvsPerCycle; }
 
+    // Raw sine lookup table used by the correlator (length = goertzPeriod()).
+    // sintab[t % goertzPeriod()] is the far-kernel weight for triple t.
+    // Cosine (near) kernel weight: sintab[(t % goertzPeriod() + cosOffset) % goertzPeriod()].
+    // Valid after begin() / buildSintab(); nullptr if allocation failed.
+    const int32_t* rawSintab() const { return _sintab; }
+
     // Rebuild the sine/cosine lookup table with the given phase offset.
     // Also precomputes _sin2total and reallocates _satPhaseCount.
     // Safe to call outside of an active run().
