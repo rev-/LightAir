@@ -288,6 +288,16 @@ void Enlight::buildAdcTxBuffer() {
  *   Far  kernel: sintab[idx]
  *   Near kernel: sintab[(idx+_cosOffset)%GP]
  *
+ *   First-period skip (per DMA cycle)
+ *   ------------------------------------
+ *   The ~300-500 us gap between consecutive DMA cycles is long enough for the
+ *   photodiode circuit to partially re-settle.  The first sine period of every
+ *   DMA cycle is therefore excluded from all accumulators (_rawsum, correlators,
+ *   _satPhaseCount).  _arrayiter is still incremented for those triples so that
+ *   the phase index (idx = _arrayiter % GP) stays aligned for the remaining
+ *   (_periodsPerCycle - 1) periods, which still form an integer multiple of GP,
+ *   guaranteeing zero mean for the correlator sums.
+ *
  *   Saturation control
  *   ------------------
  *   When any R/G/B channel clips, the triple is excluded from both
@@ -300,6 +310,8 @@ void Enlight::buildAdcTxBuffer() {
 void Enlight::processAdcCycle() {
     const uint32_t triples = _adcConvsPerCycle / ADC_CHANNELS;
     for (uint32_t t = 0; t < triples; t++) {
+        if (t < _goertzPeriod) { _arrayiter++; continue; }
+
         const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
         auto r12 = [&](uint32_t s) -> uint16_t {
             return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
@@ -373,8 +385,11 @@ EnlightResult Enlight::classify() {
         }
     }
 
-    // denom = N_per_phase × Σ sin²[j]  (total expected sin²-weighted sample count)
-    const long long n_per_phase = (long long)(_arrayiter / _goertzPeriod);
+    // denom = N_per_phase × Σ sin²[j]  (total expected sin²-weighted sample count).
+    // The first period of every DMA cycle is skipped (photodiode re-settling), so
+    // only (_periodsPerCycle - 1) periods per cycle contributed to the accumulators.
+    const long long cycles      = (long long)(_arrayiter / (_goertzPeriod * _periodsPerCycle));
+    const long long n_per_phase = (long long)(_periodsPerCycle - 1) * cycles;
     const long long denom       = n_per_phase * _sin2total;
 
     // Q16 correction fractions: 0 = no saturation, 65536 = all samples excluded.
@@ -388,12 +403,14 @@ EnlightResult Enlight::classify() {
 #define EFF(cal, frac_q16) \
     (CORR(cal, frac_q16) > 0 ? CORR(cal, frac_q16) : 0LL)
 
-    const long long eff_rcal     = EFF(_cal.rcal,     frac_far_q16);
-    const long long eff_gcal     = EFF(_cal.gcal,     frac_far_q16);
-    const long long eff_bcal     = EFF(_cal.bcal,     frac_far_q16);
-    const long long eff_rcalNear = EFF(_cal.rcalNear, frac_near_q16);
-    const long long eff_gcalNear = EFF(_cal.gcalNear, frac_near_q16);
-    const long long eff_bcalNear = EFF(_cal.bcalNear, frac_near_q16);
+    // Scale the single-cycle calibration baselines by the number of cycles so
+    // they match the accumulated correlator sums, then apply saturation correction.
+    const long long eff_rcal     = EFF(_cal.rcal     * cycles, frac_far_q16);
+    const long long eff_gcal     = EFF(_cal.gcal     * cycles, frac_far_q16);
+    const long long eff_bcal     = EFF(_cal.bcal     * cycles, frac_far_q16);
+    const long long eff_rcalNear = EFF(_cal.rcalNear * cycles, frac_near_q16);
+    const long long eff_gcalNear = EFF(_cal.gcalNear * cycles, frac_near_q16);
+    const long long eff_bcalNear = EFF(_cal.bcalNear * cycles, frac_near_q16);
 
 #undef EFF
 #undef CORR
