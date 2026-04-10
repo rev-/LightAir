@@ -288,6 +288,15 @@ void Enlight::buildAdcTxBuffer() {
  *   Far  kernel: sintab[idx]
  *   Near kernel: sintab[(idx+_cosOffset)%GP]
  *
+ *   First-period skip
+ *   -----------------
+ *   The photodiode circuit has a startup delay that distorts the samples from
+ *   the first sine period.  Those triples are excluded from all accumulators
+ *   (_rawsum, correlators, _satPhaseCount).  _arrayiter is still incremented
+ *   so that the phase index (idx = _arrayiter % GP) remains aligned for every
+ *   subsequent period.  The 12 remaining periods still form an integer multiple
+ *   of GP, guaranteeing zero mean for the correlator sums.
+ *
  *   Saturation control
  *   ------------------
  *   When any R/G/B channel clips, the triple is excluded from both
@@ -300,6 +309,8 @@ void Enlight::buildAdcTxBuffer() {
 void Enlight::processAdcCycle() {
     const uint32_t triples = _adcConvsPerCycle / ADC_CHANNELS;
     for (uint32_t t = 0; t < triples; t++) {
+        if (_arrayiter < _goertzPeriod) { _arrayiter++; continue; }
+
         const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
         auto r12 = [&](uint32_t s) -> uint16_t {
             return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
@@ -373,8 +384,10 @@ EnlightResult Enlight::classify() {
         }
     }
 
-    // denom = N_per_phase × Σ sin²[j]  (total expected sin²-weighted sample count)
-    const long long n_per_phase = (long long)(_arrayiter / _goertzPeriod);
+    // denom = N_per_phase × Σ sin²[j]  (total expected sin²-weighted sample count).
+    // Subtract 1: the first period is always skipped (photodiode settling), so only
+    // (_arrayiter / _goertzPeriod - 1) complete periods contributed to the accumulators.
+    const long long n_per_phase = (long long)(_arrayiter / _goertzPeriod) - 1LL;
     const long long denom       = n_per_phase * _sin2total;
 
     // Q16 correction fractions: 0 = no saturation, 65536 = all samples excluded.
