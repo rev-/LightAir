@@ -403,12 +403,14 @@ EnlightResult Enlight::classify() {
 #define EFF(cal, frac_q16) \
     (CORR(cal, frac_q16) > 0 ? CORR(cal, frac_q16) : 0LL)
 
-    const long long eff_rcal     = EFF(_cal.rcal,     frac_far_q16);
-    const long long eff_gcal     = EFF(_cal.gcal,     frac_far_q16);
-    const long long eff_bcal     = EFF(_cal.bcal,     frac_far_q16);
-    const long long eff_rcalNear = EFF(_cal.rcalNear, frac_near_q16);
-    const long long eff_gcalNear = EFF(_cal.gcalNear, frac_near_q16);
-    const long long eff_bcalNear = EFF(_cal.bcalNear, frac_near_q16);
+    // Scale the single-cycle calibration baselines by the number of cycles so
+    // they match the accumulated correlator sums, then apply saturation correction.
+    const long long eff_rcal     = EFF(_cal.rcal     * cycles, frac_far_q16);
+    const long long eff_gcal     = EFF(_cal.gcal     * cycles, frac_far_q16);
+    const long long eff_bcal     = EFF(_cal.bcal     * cycles, frac_far_q16);
+    const long long eff_rcalNear = EFF(_cal.rcalNear * cycles, frac_near_q16);
+    const long long eff_gcalNear = EFF(_cal.gcalNear * cycles, frac_near_q16);
+    const long long eff_bcalNear = EFF(_cal.bcalNear * cycles, frac_near_q16);
 
 #undef EFF
 #undef CORR
