@@ -9,8 +9,6 @@
 #include "esp_timer.h"
 
 static const char* TAG = "Enlight";
-static constexpr uint16_t SAT_HIGH = 4085;
-static constexpr uint16_t SAT_LOW  = 10;
 
 Enlight::Enlight(const EnlightConfig& cfg, const EnlightCalib& cal) : _cfg(cfg), _cal(cal) {}
 Enlight::~Enlight() {
@@ -323,9 +321,9 @@ void Enlight::processAdcCycle() {
         const int32_t  ks  = _sintab[idx];
         const int32_t  kc  = _sintab[(idx + _cosOffset) % _goertzPeriod];
 
-        if (rv >= SAT_HIGH || rv <= SAT_LOW ||
-            gv >= SAT_HIGH || gv <= SAT_LOW ||
-            bv >= SAT_HIGH || bv <= SAT_LOW) {
+        if (rv >= _cfg.SatHigh || rv <= _cfg.SatLow ||
+            gv >= _cfg.SatHigh || gv <= _cfg.SatLow ||
+            bv >= _cfg.SatHigh || bv <= _cfg.SatLow) {
             // Record which phase bucket was lost; classify() uses this for baseline correction.
             _satPhaseCount[idx]++;
             _satCount++;
