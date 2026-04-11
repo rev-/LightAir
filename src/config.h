@@ -155,6 +155,8 @@ struct EnlightConfig {
     int      afeOn;
     uint8_t  taskCore;
     uint32_t afeStartupUs;  // busy-wait after AFE power-on before first DMA cycle
+    uint16_t satHigh;
+    uint16_t satLow;
 };
 
 namespace EnlightDefaults {
@@ -179,6 +181,8 @@ namespace EnlightDefaults {
     // AFE needs ~3 sine periods to settle after power-on.
     // 3 × (1 / 1667 Hz) ≈ 1800 µs; 2000 µs gives a small margin.
     constexpr uint32_t AFE_STARTUP_MICROS = 2000;
+    constexpr uint16_t SAT_HIGH = 4085;
+    constexpr uint16_t SAT_LOW  = 10;
 }
 
 // ---------------------------------------------------------------
