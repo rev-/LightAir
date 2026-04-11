@@ -429,8 +429,8 @@ EnlightResult Enlight::classify() {
 
     if (_rawsum <= (long long)_cal.limpow) return {EnlightStatus::LOW_POW, 0};
 
-    const float farSum  = (float)(llabs(rout)  + llabs(gout)  + llabs(bout));
-    const float nearSum = (float)(llabs(_rnear) + llabs(_gnear) + llabs(_bnear));
+    const float farSum  = (float)((rout)  + (gout)  + (bout));
+    const float nearSum = (float)((_rnear) + (_gnear) + (_bnear));
     if (farSum > 0.0f && (nearSum / farSum) > _cal.nearRatioMax) {
         ESP_LOGD(TAG, "NEAR ratio=%.3f", (double)(nearSum / farSum));
         return classifyNear();
