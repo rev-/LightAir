@@ -83,22 +83,14 @@ bool enlight_calib_load(EnlightCalib& cal) {
         NVS_GET_FLOAT(h, CAL_KEY_NEAR_RATIO_MAX, cal.nearRatioMax, 1e9f);
         NVS_GET_U32  (h, CAL_KEY_MAX_NEAR_WHITE, cal.maxNearWhite, 0);
         NVS_GET_U32  (h, CAL_KEY_MAX_FAR_WHITE,  cal.maxFarWhite,  0);
-        char key[16];
-        for (int p = 0; p < CALIB_MAX_PLAYERS; p++)
-            for (int k = 0; k < 4; k++) {
-                snprintf(key, sizeof(key), CAL_KEY_HITBOX_FMT, p, k);
-                NVS_GET_FLOAT(h, key, cal.hitBox[p][k], -10.0f);
-            }
         nvs_close(h);
     } else {
         cal = {};
-        cal.limpow = UINT32_MAX;
+        cal.limpow = 0;
         cal.rfact = cal.bfact = 1.0f;
         cal.nearRatioMax = 1e9f;
         cal.maxNearWhite = 0;
         cal.maxFarWhite  = 0;
-        for (int p = 0; p < CALIB_MAX_PLAYERS; p++)
-            for (int k = 0; k < 4; k++) cal.hitBox[p][k] = -10.0f;
         ESP_LOGW(TAG, "Calibration namespace missing -- using sentinels");
     }
     return true;
@@ -121,12 +113,6 @@ bool enlight_calib_save(const EnlightCalib& cal) {
     nvs_set_blob(h, CAL_KEY_NEAR_RATIO_MAX, &cal.nearRatioMax, sizeof(float));
     nvs_set_u32 (h, CAL_KEY_MAX_NEAR_WHITE, cal.maxNearWhite);
     nvs_set_u32 (h, CAL_KEY_MAX_FAR_WHITE,  cal.maxFarWhite);
-    char key[16];
-    for (int p = 0; p < CALIB_MAX_PLAYERS; p++)
-        for (int k = 0; k < 4; k++) {
-            snprintf(key, sizeof(key), CAL_KEY_HITBOX_FMT, p, k);
-            nvs_set_blob(h, key, &cal.hitBox[p][k], sizeof(float));
-        }
     esp_err_t e = nvs_commit(h); nvs_close(h);
     return e == ESP_OK;
 }

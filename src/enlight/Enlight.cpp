@@ -9,8 +9,6 @@
 #include "esp_timer.h"
 
 static const char* TAG = "Enlight";
-static constexpr uint16_t SAT_HIGH = 4085;
-static constexpr uint16_t SAT_LOW  = 10;
 
 Enlight::Enlight(const EnlightConfig& cfg, const EnlightCalib& cal) : _cfg(cfg), _cal(cal) {}
 Enlight::~Enlight() {
@@ -137,7 +135,7 @@ void Enlight::buildGrid() {
     memset(&_grid, 0, sizeof(_grid));
     float xb[GRID_MAX_THRESH], yb[GRID_MAX_THRESH]; int nx=0,ny=0;
     for (int p=1;p<CALIB_MAX_PLAYERS;p++) {
-        const float* b=_cal.hitBox[p]; if(b[0]<=-5.0f) continue;
+        const float* b=colorBox::colorBox[p]; if(b[0]<=-5.0f) continue;
         if(nx+2<=GRID_MAX_THRESH){xb[nx++]=b[1];xb[nx++]=b[0];}
         if(ny+2<=GRID_MAX_THRESH){yb[ny++]=b[3];yb[ny++]=b[2];}
     }
@@ -146,7 +144,7 @@ void Enlight::buildGrid() {
     memcpy(_grid.xThresh,xb,nx*sizeof(float));
     memcpy(_grid.yThresh,yb,ny*sizeof(float));
     for (int p=1;p<CALIB_MAX_PLAYERS;p++) {
-        const float* b=_cal.hitBox[p]; if(b[0]<=-5.0f) continue;
+        const float* b=colorBox::colorBox[p]; if(b[0]<=-5.0f) continue;
         _grid.table[upper_bound_f(_grid.xThresh,nx,(b[0]+b[1])*0.5f)]
                    [upper_bound_f(_grid.yThresh,ny,(b[2]+b[3])*0.5f)] = (uint8_t)p;
     }
@@ -323,9 +321,9 @@ void Enlight::processAdcCycle() {
         const int32_t  ks  = _sintab[idx];
         const int32_t  kc  = _sintab[(idx + _cosOffset) % _goertzPeriod];
 
-        if (rv >= SAT_HIGH || rv <= SAT_LOW ||
-            gv >= SAT_HIGH || gv <= SAT_LOW ||
-            bv >= SAT_HIGH || bv <= SAT_LOW) {
+        if (rv >= _cfg.SatHigh || rv <= _cfg.SatLow ||
+            gv >= _cfg.SatHigh || gv <= _cfg.SatLow ||
+            bv >= _cfg.SatHigh || bv <= _cfg.SatLow) {
             // Record which phase bucket was lost; classify() uses this for baseline correction.
             _satPhaseCount[idx]++;
             _satCount++;
@@ -429,8 +427,8 @@ EnlightResult Enlight::classify() {
 
     if (_rawsum <= (long long)_cal.limpow) return {EnlightStatus::LOW_POW, 0};
 
-    const float farSum  = (float)(llabs(rout)  + llabs(gout)  + llabs(bout));
-    const float nearSum = (float)(llabs(_rnear) + llabs(_gnear) + llabs(_bnear));
+    const float farSum  = (float)((rout)  + (gout)  + (bout));
+    const float nearSum = (float)((_rnear) + (_gnear) + (_bnear));
     if (farSum > 0.0f && (nearSum / farSum) > _cal.nearRatioMax) {
         ESP_LOGD(TAG, "NEAR ratio=%.3f", (double)(nearSum / farSum));
         return classifyNear();

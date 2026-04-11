@@ -155,6 +155,8 @@ struct EnlightConfig {
     int      afeOn;
     uint8_t  taskCore;
     uint32_t afeStartupUs;  // busy-wait after AFE power-on before first DMA cycle
+    uint16_t satHigh;
+    uint16_t satLow;
 };
 
 namespace EnlightDefaults {
@@ -172,13 +174,15 @@ namespace EnlightDefaults {
     constexpr int      LED_SDI_OUT   = PLAYER_LED_SDI_OUT;
     constexpr uint32_t LED_CLOCK_HZ  = 16000000;
     constexpr uint32_t LED_FREQ_HZ   = 1667;
-    constexpr float    PDM_AMP_OFFSET = 0.0f;
+    constexpr float    PDM_AMP_OFFSET = 0.1f;
     constexpr int      AFE_ON           = PLAYER_AFE_ON;
     constexpr uint8_t  TASK_CORE        = 0;
     constexpr uint16_t MS_PER_REP       = 8;    // hardware constant: ms per enlight.run() repetition
     // AFE needs ~3 sine periods to settle after power-on.
     // 3 × (1 / 1667 Hz) ≈ 1800 µs; 2000 µs gives a small margin.
     constexpr uint32_t AFE_STARTUP_MICROS = 2000;
+    constexpr uint16_t SAT_HIGH = 4085;
+    constexpr uint16_t SAT_LOW  = 10;
 }
 
 // ---------------------------------------------------------------
@@ -366,6 +370,28 @@ namespace PlayerColors {
         { 128, 128, 128 },  // 15-Unknown
         { 128, 128, 128 },  // 16-Unknown
     };
+}
+
+namespace colorBox {
+    constexpr float colorBox[PlayerDefs::MAX_PLAYER_ID][4] = {
+        { 0, 0, 0, 0 },              //0
+        { 0.4, 0.25, 0.58, 0.42 },   //1 Clear
+        { 0.1, 0.0, 0.78, 0.62 },    //2 Green
+        { 0.65, 0.5, 1, 0.9 },       //3 Yellow
+        { 0.1, 0, 0.32, 0.15 },      //4 Blue
+        { 0.77, 0.62, 0.84, 0.70 },  //5 Orange
+        { 0.95, 0.87, 1, 0.0 },      //6 Red
+        { 0.5, 0.3, 0.82, 0.7 },     //7 Lime
+        { 0.6, 0.4, 0.24, 0.10 },    //8 Magenta
+        { 0.4, 0.28, 0.36, 0.24 },   //9 Purple
+        { -10, -10, -10, -10 },      //10
+        { -10, -10, -10, -10 },      //11
+        { -10, -10, -10, -10 },      //12
+        { -10, -10, -10, -10 },      //13
+        { -10, -10, -10, -10 },      //14
+        { -10, -10, -10, -10 },      //15
+        { -10, -10, -10, -10 },      //16
+        };
 }
 
 #endif // CONFIG_H
