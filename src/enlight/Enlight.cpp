@@ -137,7 +137,7 @@ void Enlight::buildGrid() {
     memset(&_grid, 0, sizeof(_grid));
     float xb[GRID_MAX_THRESH], yb[GRID_MAX_THRESH]; int nx=0,ny=0;
     for (int p=1;p<CALIB_MAX_PLAYERS;p++) {
-        const float* b=_cal.hitBox[p]; if(b[0]<=-5.0f) continue;
+        const float* b=colorBox::colorBox[p]; if(b[0]<=-5.0f) continue;
         if(nx+2<=GRID_MAX_THRESH){xb[nx++]=b[1];xb[nx++]=b[0];}
         if(ny+2<=GRID_MAX_THRESH){yb[ny++]=b[3];yb[ny++]=b[2];}
     }
@@ -146,7 +146,7 @@ void Enlight::buildGrid() {
     memcpy(_grid.xThresh,xb,nx*sizeof(float));
     memcpy(_grid.yThresh,yb,ny*sizeof(float));
     for (int p=1;p<CALIB_MAX_PLAYERS;p++) {
-        const float* b=_cal.hitBox[p]; if(b[0]<=-5.0f) continue;
+        const float* b=colorBox::colorBox[p]; if(b[0]<=-5.0f) continue;
         _grid.table[upper_bound_f(_grid.xThresh,nx,(b[0]+b[1])*0.5f)]
                    [upper_bound_f(_grid.yThresh,ny,(b[2]+b[3])*0.5f)] = (uint8_t)p;
     }
