@@ -76,6 +76,8 @@ static const EnlightConfig enlightCfg = {
     /* afeOn         */ PLAYER_AFE_ON,
     /* taskCore      */ EnlightDefaults::TASK_CORE,
     /* afeStartupUs  */ EnlightDefaults::AFE_STARTUP_MICROS,
+    /* satHigh       */ EnlightDefaults::SAT_HIGH,
+    /* satLow        */ EnlightDefaults::SAT_LOW,
 };
 
 // ---- Display ----
