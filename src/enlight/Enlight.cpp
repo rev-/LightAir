@@ -321,9 +321,9 @@ void Enlight::processAdcCycle() {
         const int32_t  ks  = _sintab[idx];
         const int32_t  kc  = _sintab[(idx + _cosOffset) % _goertzPeriod];
 
-        if (rv >= _cfg.SatHigh || rv <= _cfg.SatLow ||
-            gv >= _cfg.SatHigh || gv <= _cfg.SatLow ||
-            bv >= _cfg.SatHigh || bv <= _cfg.SatLow) {
+        if (rv >= _cfg.satHigh || rv <= _cfg.satLow ||
+            gv >= _cfg.satHigh || gv <= _cfg.satLow ||
+            bv >= _cfg.satHigh || bv <= _cfg.satLow) {
             // Record which phase bucket was lost; classify() uses this for baseline correction.
             _satPhaseCount[idx]++;
             _satCount++;
