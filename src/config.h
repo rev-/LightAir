@@ -174,7 +174,7 @@ namespace EnlightDefaults {
     constexpr int      LED_SDI_OUT   = PLAYER_LED_SDI_OUT;
     constexpr uint32_t LED_CLOCK_HZ  = 16000000;
     constexpr uint32_t LED_FREQ_HZ   = 1667;
-    constexpr float    PDM_AMP_OFFSET = 0.0f;
+    constexpr float    PDM_AMP_OFFSET = 0.1f;
     constexpr int      AFE_ON           = PLAYER_AFE_ON;
     constexpr uint8_t  TASK_CORE        = 0;
     constexpr uint16_t MS_PER_REP       = 8;    // hardware constant: ms per enlight.run() repetition
