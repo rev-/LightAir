@@ -29,7 +29,7 @@ static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 
 static constexpr float    PDM_AMPLITUDE = 0.95f;
-static constexpr int32_t  SIN_MAG       = 512;
+static constexpr int32_t  SIN_MAG       = 2048;
 static constexpr int      GRID_MAX_THRESH = CALIB_MAX_PLAYERS * 2;
 
 // Result type
