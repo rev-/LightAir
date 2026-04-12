@@ -555,7 +555,8 @@ void loop() {
     bool trigFired = false;
     for (uint8_t i = 0; i < rpt.buttonCount; i++) {
         if (rpt.buttons[i].id    == InputDefaults::TRIG_1_ID &&
-            rpt.buttons[i].state == ButtonState::RELEASED) {
+            (rpt.buttons[i].state == ButtonState::PRESSED ||
+             rpt.buttons[i].state == ButtonState::HELD)) {
             trigFired = true;
         }
     }
