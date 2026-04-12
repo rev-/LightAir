@@ -301,10 +301,8 @@ static void updateRunDisplay(bool waitingClient) {
 // Classify (outr, outang) color pair against player color boxes
 // Returns player ID (1-16) if match found, -1 if no match
 static int classifyColorBox(float outr, float outang) {
-    using namespace colorBox;
-
     for (uint8_t i = 1; i < PlayerDefs::MAX_PLAYER_ID; i++) {
-        const float* box = colorBox[i];
+        const float* box = colorBox::colorBox[i];
         // Check sentinel: inactive boxes have outr_min = -10
         if (box[1] < 0) continue;
 
