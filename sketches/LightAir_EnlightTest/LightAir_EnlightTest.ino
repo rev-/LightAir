@@ -339,11 +339,20 @@ static void takeMeasurement() {
         const int32_t*  sintab = enlight->rawSintab();
         const uint32_t  gp     = enlight->goertzPeriod();
 
-        // Get raw accumulated correlator sums
-        EnlightRawMeasure raw = enlight->rawMeasure();
-        long long rout = raw.rout;
-        long long gout = raw.gout;
-        long long bout = raw.bout;
+        uint32_t startTs = millis();
+
+        // Compute correlator sums by processing the ADC samples
+        long long rout = 0, gout = 0, bout = 0;
+        for (uint32_t t = 0; t < trips; t++) {
+            const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+            const uint16_t rv = adcSample(buf, base);
+            const uint16_t gv = adcSample(buf, base + 1);
+            const uint16_t bv = adcSample(buf, base + 2);
+            const int32_t sinVal = sintab ? sintab[t % gp] : 0;
+            rout += (long long)rv * sinVal;
+            gout += (long long)gv * sinVal;
+            bout += (long long)bv * sinVal;
+        }
 
         // Compute elaborated values by subtracting baseline calibration
         long long r = rout - (long long)enlightCalib.rcal * ENLIGHT_REPS;
@@ -356,15 +365,15 @@ static void takeMeasurement() {
         double outang = 0.0;
         if (sum != 0.0) {
             outr = (r * enlightCalib.rfact) / sum;
-            if (outr < 1.0) {
+            if (outr < 1.0 && outr > 0.0) {
                 outang = g / (1.0 - outr);
             } else {
-                outang = 1.0;
+                outang = 0.0;
             }
         }
 
         snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu,%lld,%lld,%lld,%.6f,%.6f\n",
-                 (unsigned long)ts, (unsigned long)trips, rout, gout, bout, outr, outang);
+                 (unsigned long)startTs, (unsigned long)trips, rout, gout, bout, outr, outang);
         tcpClient.print(line);
 
         for (uint32_t t = 0; t < trips; t++) {
@@ -381,7 +390,8 @@ static void takeMeasurement() {
             tcpClient.print(line);
         }
 
-        snprintf(line, sizeof(line), "RAW_END,%lu\n", (unsigned long)ts);
+        uint32_t endTs = millis();
+        snprintf(line, sizeof(line), "RAW_END,%lu\n", (unsigned long)endTs);
         tcpClient.print(line);
     } else {
         // rawMeasure() must be called before the next run(); grab it now.
@@ -465,7 +475,7 @@ void loop() {
             if (gDataMode == DataMode::RAW) {
                 tcpClient.print(
                     "# RAW_BEGIN,timestamp_ms,sample_count,rout(far-R),gout(far-G),bout(far-B),outr(norm),outang\n"
-                    "# SAMPLE,timestamp_ms,triple_idx,r(12bit),g(12bit),b(12bit),saturated\n"
+                    "# SAMPLE,timestamp_ms,triple_idx,r(12bit),g(12bit),b(12bit),saturated,sinVal\n"
                     "# RAW_END,timestamp_ms\n");
             } else {
                 tcpClient.print(
