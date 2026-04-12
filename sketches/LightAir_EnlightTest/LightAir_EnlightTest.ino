@@ -25,7 +25,7 @@
 //   On connect :  # mode=<RAW|ELAB> trig=<MANUAL|AUTO[Ns]>
 //
 //   RAW block :
-//     RAW_BEGIN,<ms>,<sample_count>,<rout>,<gout>,<bout>,<outr>,<outang>
+//     RAW_BEGIN,<ms>,<sample_count>,<rout>,<gout>,<bout>,<outr>,<outang>,<class>
 //     SAMPLE,<ms>,<idx>,<r>,<g>,<b>,<sat>
 //       ... (sample_count lines) ...
 //     RAW_END,<ms>
@@ -35,6 +35,7 @@
 //     <idx> counts RGB triples (0-based), not raw conversions.
 //     <rout>/<gout>/<bout> are accumulated correlator sums (far-field).
 //     <outr>/<outang> are elaborated values (normalized color space).
+//     <class> is player ID (1-16) or -1 (NO_HIT).
 //
 //   ELAB line :  ELAB,<ms>,<status>,<id>,<rout>,<gout>,<bout>,
 //                     <rnear>,<gnear>,<bnear>
@@ -295,6 +296,29 @@ static void updateRunDisplay(bool waitingClient) {
 }
 
 // ================================================================
+// Color box classification helper
+// ================================================================
+// Classify (outr, outang) color pair against player color boxes
+// Returns player ID (1-16) if match found, -1 if no match
+static int classifyColorBox(float outr, float outang) {
+    using namespace colorBox;
+
+    for (uint8_t i = 1; i < PlayerDefs::MAX_PLAYER_ID; i++) {
+        const float* box = colorBox[i];
+        // Check sentinel: inactive boxes have outr_min = -10
+        if (box[1] < 0) continue;
+
+        // Check if (outr, outang) falls within this player's color box
+        // Format: [outr_max, outr_min, outang_max, outang_min]
+        if (outr >= box[1] && outr <= box[0] &&
+            outang >= box[3] && outang <= box[2]) {
+            return i;
+        }
+    }
+    return -1;  // No match found
+}
+
+// ================================================================
 // Enlight measurement + TCP transmission
 // ================================================================
 static const char* statusStr(EnlightStatus s) {
@@ -373,8 +397,11 @@ static void takeMeasurement() {
             }
         }
 
-        snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu,%lld,%lld,%lld,%.6f,%.6f\n",
-                 (unsigned long)startTs, (unsigned long)trips, rout, gout, bout, outr, outang);
+        // Classify the (outr, outang) color pair
+        int playerClass = classifyColorBox((float)outr, (float)outang);
+
+        snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu,%lld,%lld,%lld,%.6f,%.6f,%d\n",
+                 (unsigned long)startTs, (unsigned long)trips, rout, gout, bout, outr, outang, playerClass);
         tcpClient.print(line);
 
         for (uint32_t t = 0; t < trips; t++) {
@@ -475,7 +502,7 @@ void loop() {
             // Column labels so each field is self-documenting.
             if (gDataMode == DataMode::RAW) {
                 tcpClient.print(
-                    "# RAW_BEGIN,timestamp_ms,sample_count,rout(far-R),gout(far-G),bout(far-B),outr(norm),outang\n"
+                    "# RAW_BEGIN,timestamp_ms,sample_count,rout(far-R),gout(far-G),bout(far-B),outr(norm),outang,class\n"
                     "# SAMPLE,timestamp_ms,triple_idx,r(12bit),g(12bit),b(12bit),saturated,sinVal\n"
                     "# RAW_END,timestamp_ms\n");
             } else {
