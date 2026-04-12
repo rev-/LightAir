@@ -365,8 +365,9 @@ static void takeMeasurement() {
         double outang = 0.0;
         if (sum != 0.0) {
             outr = (r * enlightCalib.rfact) / sum;
+            double outg_norm = g / sum;
             if (outr < 1.0 && outr > 0.0) {
-                outang = g / (1.0 - outr);
+                outang = outg_norm / (1.0 - outr);
             } else {
                 outang = 0.0;
             }
