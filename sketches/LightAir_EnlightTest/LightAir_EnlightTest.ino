@@ -25,7 +25,7 @@
 //   On connect :  # mode=<RAW|ELAB> trig=<MANUAL|AUTO[Ns]>
 //
 //   RAW block :
-//     RAW_BEGIN,<ms>,<sample_count>
+//     RAW_BEGIN,<ms>,<sample_count>,<rout>,<gout>,<bout>,<outr>,<outang>
 //     SAMPLE,<ms>,<idx>,<r>,<g>,<b>,<sat>
 //       ... (sample_count lines) ...
 //     RAW_END,<ms>
@@ -33,6 +33,8 @@
 //     <r>/<g>/<b> are raw 12-bit ADC values (0–4095).
 //     <sat> is 1 if any channel >= 4085 or <= 10, else 0.
 //     <idx> counts RGB triples (0-based), not raw conversions.
+//     <rout>/<gout>/<bout> are accumulated correlator sums (far-field).
+//     <outr>/<outang> are elaborated values (normalized color space).
 //
 //   ELAB line :  ELAB,<ms>,<status>,<id>,<rout>,<gout>,<bout>,
 //                     <rnear>,<gnear>,<bnear>
@@ -337,8 +339,32 @@ static void takeMeasurement() {
         const int32_t*  sintab = enlight->rawSintab();
         const uint32_t  gp     = enlight->goertzPeriod();
 
-        snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu\n",
-                 (unsigned long)ts, (unsigned long)trips);
+        // Get raw accumulated correlator sums
+        EnlightRawMeasure raw = enlight->rawMeasure();
+        long long rout = raw.rout;
+        long long gout = raw.gout;
+        long long bout = raw.bout;
+
+        // Compute elaborated values by subtracting baseline calibration
+        long long r = rout - (long long)enlightCalib.rcal * ENLIGHT_REPS;
+        long long g = gout - (long long)enlightCalib.gcal * ENLIGHT_REPS;
+        long long b = bout - (long long)enlightCalib.bcal * ENLIGHT_REPS;
+
+        // Compute outr and outang using calibration factors
+        double sum = r * enlightCalib.rfact + g + b * enlightCalib.bfact;
+        double outr = 0.0;
+        double outang = 0.0;
+        if (sum != 0.0) {
+            outr = (r * enlightCalib.rfact) / sum;
+            if (outr < 1.0) {
+                outang = g / (1.0 - outr);
+            } else {
+                outang = 1.0;
+            }
+        }
+
+        snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu,%lld,%lld,%lld,%.6f,%.6f\n",
+                 (unsigned long)ts, (unsigned long)trips, rout, gout, bout, outr, outang);
         tcpClient.print(line);
 
         for (uint32_t t = 0; t < trips; t++) {
@@ -438,7 +464,7 @@ void loop() {
             // Column labels so each field is self-documenting.
             if (gDataMode == DataMode::RAW) {
                 tcpClient.print(
-                    "# RAW_BEGIN,timestamp_ms,sample_count\n"
+                    "# RAW_BEGIN,timestamp_ms,sample_count,rout(far-R),gout(far-G),bout(far-B),outr(norm),outang\n"
                     "# SAMPLE,timestamp_ms,triple_idx,r(12bit),g(12bit),b(12bit),saturated\n"
                     "# RAW_END,timestamp_ms\n");
             } else {
