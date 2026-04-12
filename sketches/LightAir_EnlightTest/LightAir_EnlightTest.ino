@@ -354,7 +354,7 @@ static void takeMeasurement() {
 
     if (!tcpClient || !tcpClient.connected()) return;
 
-    char line[96];
+    char line[512];
     if (gDataMode == DataMode::RAW) {
         // Stream individual 12-bit ADC samples from the last DMA cycle.
         // Only the last cycle is retained; ENLIGHT_REPS=1 is recommended.
