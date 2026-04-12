@@ -424,12 +424,35 @@ static void takeMeasurement() {
     } else {
         // rawMeasure() must be called before the next run(); grab it now.
         EnlightRawMeasure raw = enlight->rawMeasure();
+
+        // Compute elaborated values (normalized color space)
+        // Subtract baseline calibration (scaled by number of DMA cycles)
+        // In ELABORATED mode, estimate cycles from ENLIGHT_REPS
+        long long r = raw.rout - (long long)enlightCalib.rcal * ENLIGHT_REPS;
+        long long g = raw.gout - (long long)enlightCalib.gcal * ENLIGHT_REPS;
+        long long b = raw.bout - (long long)enlightCalib.bcal * ENLIGHT_REPS;
+
+        // Compute outr and outang using calibration factors
+        double sum = r * enlightCalib.rfact + g + b * enlightCalib.bfact;
+        double outr = 0.0;
+        double outang = 0.0;
+        if (sum != 0.0) {
+            outr = (r * enlightCalib.rfact) / sum;
+            double outg_norm = g / sum;
+            if (outr < 1.0 && outr > 0.0) {
+                outang = outg_norm / (1.0 - outr);
+            } else {
+                outang = 0.0;
+            }
+        }
+
         snprintf(line, sizeof(line),
-            "ELAB,%lu,%s,%u,%lld,%lld,%lld,%lld,%lld,%lld,%lu\n",
+            "ELAB,%lu,%s,%u,%lld,%lld,%lld,%lld,%lld,%lld,%.6f,%.6f,%lu\n",
             (unsigned long)ts,
             statusStr(res.status), res.id,
             raw.rout,  raw.gout,  raw.bout,
             raw.rnear, raw.gnear, raw.bnear,
+            outr, outang,
             (unsigned long)raw.satCount);
         tcpClient.print(line);
     }
@@ -513,6 +536,7 @@ void loop() {
                     "status,matched_id,"
                     "rout(far-R),gout(far-G),bout(far-B),"
                     "rnear(near-R),gnear(near-G),bnear(near-B),"
+                    "outr(norm),outang,"
                     "satCount\n");
             }
         } else {
