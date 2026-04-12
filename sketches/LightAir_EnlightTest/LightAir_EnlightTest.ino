@@ -423,11 +423,12 @@ static void takeMeasurement() {
         // rawMeasure() must be called before the next run(); grab it now.
         EnlightRawMeasure raw = enlight->rawMeasure();
         snprintf(line, sizeof(line),
-            "ELAB,%lu,%s,%u,%lld,%lld,%lld,%lld,%lld,%lld\n",
+            "ELAB,%lu,%s,%u,%lld,%lld,%lld,%lld,%lld,%lld,%lu\n",
             (unsigned long)ts,
             statusStr(res.status), res.id,
             raw.rout,  raw.gout,  raw.bout,
-            raw.rnear, raw.gnear, raw.bnear);
+            raw.rnear, raw.gnear, raw.bnear,
+            (unsigned long)raw.satCount);
         tcpClient.print(line);
     }
 
@@ -509,7 +510,8 @@ void loop() {
                     "timestamp_ms,"
                     "status,matched_id,"
                     "rout(far-R),gout(far-G),bout(far-B),"
-                    "rnear(near-R),gnear(near-G),bnear(near-B)\n");
+                    "rnear(near-R),gnear(near-G),bnear(near-B),"
+                    "satCount\n");
             }
         } else {
             if (millis() - lastDispMs > 500) {
