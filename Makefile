@@ -2,7 +2,7 @@ INCLUDES=-I{build.source.path}/src
 FLAGS=-Wall -Wextra
 SKETCH_NAME=LightAir
 # Leave blank for default profile
-PROFILE=
+PROFILE?=
 
 SRCS = $(wildcard *.ino) $(wildcard src/**/*.cpp) $(wildcard src/**/*.h) $(wildcard src/**/*.c)
 

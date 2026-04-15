@@ -6,5 +6,16 @@ profiles:
     libraries:
       - ESP8266 and ESP32 OLED driver for SSD1306 displays (4.6.2)
       - FastLED (3.10.3)
+      - ArduinoLog (1.1.1)
+    programmer: esptool
+  ESP32-S3-WROOM-1-WOKWI:
+    notes: targets wowki esp32 s3 simulator.
+    fqbn: esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=8M,PartitionScheme=default_8MB,DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default
+    platforms:
+      - platform: esp32:esp32 (2.0.17)
+    libraries:
+      - ESP8266 and ESP32 OLED driver for SSD1306 displays (4.6.2)
+      - FastLED (3.10.3)
+      - ArduinoLog (1.1.1)
     programmer: esptool
 default_profile: ESP32-S3-WROOM-1-N8R8

@@ -20,6 +20,14 @@ You can then upload the `LightAir.ino.bin` to the board using the Arduino IDE or
 arduino-cli upload --input-file ./build/debug/LightAir.ino.bin -p /dev/ttyACM0 -b esp32:esp32:esp32s3
 ```
 
+### Build for WOKWI simulator
+
+You can produce a binary targeting [WOWKI](https://wokwi.com/projects/new/esp32-s3) by using the corresponding profile:
+```sh
+PROFILE=ESP32-S3-WROOM-1-WOKWI make -B build/debug/LightAir.ino.bin
+```
+Then you can upload the binary by opening a new project on WOWKI and pressing F1 -> "Upload Firmware and Start Simulator" and selecting the produced binary.
+
 ## Design guidelines
 ### Nonviolent semantics
 While a tag game is normally associated to a war simulation, LightAir wants to drop this label. We want to make clear a ray of light **is** a ray of light, not a metaphor for an ammunition or other means to offend people. This choice shows in many parts of the code, for example by the use of terms like LIT, SHONE, ENLIGHT instead of the common counterparts used in other tag games. Anyway, these terms have clear meanings and keep them throughout the code.
