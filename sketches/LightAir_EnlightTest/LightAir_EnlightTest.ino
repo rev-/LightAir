@@ -25,7 +25,7 @@
 //   On connect :  # mode=<RAW|ELAB> trig=<MANUAL|AUTO[Ns]>
 //
 //   RAW block :
-//     RAW_BEGIN,<ms>,<sample_count>,<rout>,<gout>,<bout>,<outr>,<outang>
+//     RAW_BEGIN,<ms>,<sample_count>,<rout>,<gout>,<bout>,<outr>,<outang>,<class>
 //     SAMPLE,<ms>,<idx>,<r>,<g>,<b>,<sat>
 //       ... (sample_count lines) ...
 //     RAW_END,<ms>
@@ -35,6 +35,7 @@
 //     <idx> counts RGB triples (0-based), not raw conversions.
 //     <rout>/<gout>/<bout> are accumulated correlator sums (far-field).
 //     <outr>/<outang> are elaborated values (normalized color space).
+//     <class> is player ID (1-16) or -1 (NO_HIT).
 //
 //   ELAB line :  ELAB,<ms>,<status>,<id>,<rout>,<gout>,<bout>,
 //                     <rnear>,<gnear>,<bnear>
@@ -95,6 +96,8 @@ static const EnlightConfig enlightCfg = {
     /* afeOn         */ EnlightDefaults::AFE_ON,
     /* taskCore      */ EnlightDefaults::TASK_CORE,
     /* afeStartupUs  */ EnlightDefaults::AFE_STARTUP_MICROS,
+    /* satHigh       */ 4085,  // Saturation threshold (high)
+    /* satLow        */ 10,    // Saturation threshold (low)
 };
 
 static WiFiServer tcpServer(TCP_PORT);
@@ -295,6 +298,27 @@ static void updateRunDisplay(bool waitingClient) {
 }
 
 // ================================================================
+// Color box classification helper
+// ================================================================
+// Classify (outr, outang) color pair against player color boxes
+// Returns player ID (1-16) if match found, -1 if no match
+static int classifyColorBox(float outr, float outang) {
+    for (uint8_t i = 1; i < PlayerDefs::MAX_PLAYER_ID; i++) {
+        const float* box = colorBox::colorBox[i];
+        // Check sentinel: inactive boxes have outr_min = -10
+        if (box[1] < 0) continue;
+
+        // Check if (outr, outang) falls within this player's color box
+        // Format: [outr_max, outr_min, outang_max, outang_min]
+        if (outr >= box[1] && outr <= box[0] &&
+            outang >= box[3] && outang <= box[2]) {
+            return i;
+        }
+    }
+    return -1;  // No match found
+}
+
+// ================================================================
 // Enlight measurement + TCP transmission
 // ================================================================
 static const char* statusStr(EnlightStatus s) {
@@ -330,7 +354,7 @@ static void takeMeasurement() {
 
     if (!tcpClient || !tcpClient.connected()) return;
 
-    char line[96];
+    char line[512];
     if (gDataMode == DataMode::RAW) {
         // Stream individual 12-bit ADC samples from the last DMA cycle.
         // Only the last cycle is retained; ENLIGHT_REPS=1 is recommended.
@@ -339,11 +363,20 @@ static void takeMeasurement() {
         const int32_t*  sintab = enlight->rawSintab();
         const uint32_t  gp     = enlight->goertzPeriod();
 
-        // Get raw accumulated correlator sums
-        EnlightRawMeasure raw = enlight->rawMeasure();
-        long long rout = raw.rout;
-        long long gout = raw.gout;
-        long long bout = raw.bout;
+        uint32_t startTs = millis();
+
+        // Compute correlator sums by processing the ADC samples
+        long long rout = 0, gout = 0, bout = 0;
+        for (uint32_t t = 0; t < trips; t++) {
+            const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+            const uint16_t rv = adcSample(buf, base);
+            const uint16_t gv = adcSample(buf, base + 1);
+            const uint16_t bv = adcSample(buf, base + 2);
+            const int32_t sinVal = sintab ? sintab[t % gp] : 0;
+            rout += (long long)rv * sinVal;
+            gout += (long long)gv * sinVal;
+            bout += (long long)bv * sinVal;
+        }
 
         // Compute elaborated values by subtracting baseline calibration
         long long r = rout - (long long)enlightCalib.rcal * ENLIGHT_REPS;
@@ -356,15 +389,19 @@ static void takeMeasurement() {
         double outang = 0.0;
         if (sum != 0.0) {
             outr = (r * enlightCalib.rfact) / sum;
-            if (outr < 1.0) {
-                outang = g / (1.0 - outr);
+            double outg_norm = g / sum;
+            if (outr < 1.0 && outr > 0.0) {
+                outang = outg_norm / (1.0 - outr);
             } else {
-                outang = 1.0;
+                outang = 0.0;
             }
         }
 
-        snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu,%lld,%lld,%lld,%.6f,%.6f\n",
-                 (unsigned long)ts, (unsigned long)trips, rout, gout, bout, outr, outang);
+        // Classify the (outr, outang) color pair
+        int playerClass = classifyColorBox((float)outr, (float)outang);
+
+        snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu,%lld,%lld,%lld,%.6f,%.6f,%d\n",
+                 (unsigned long)startTs, (unsigned long)trips, rout, gout, bout, outr, outang, playerClass);
         tcpClient.print(line);
 
         for (uint32_t t = 0; t < trips; t++) {
@@ -381,17 +418,42 @@ static void takeMeasurement() {
             tcpClient.print(line);
         }
 
-        snprintf(line, sizeof(line), "RAW_END,%lu\n", (unsigned long)ts);
+        uint32_t endTs = millis();
+        snprintf(line, sizeof(line), "RAW_END,%lu\n", (unsigned long)endTs);
         tcpClient.print(line);
     } else {
         // rawMeasure() must be called before the next run(); grab it now.
         EnlightRawMeasure raw = enlight->rawMeasure();
+
+        // Compute elaborated values (normalized color space)
+        // Subtract baseline calibration (scaled by number of DMA cycles)
+        // In ELABORATED mode, estimate cycles from ENLIGHT_REPS
+        long long r = raw.rout - (long long)enlightCalib.rcal * ENLIGHT_REPS;
+        long long g = raw.gout - (long long)enlightCalib.gcal * ENLIGHT_REPS;
+        long long b = raw.bout - (long long)enlightCalib.bcal * ENLIGHT_REPS;
+
+        // Compute outr and outang using calibration factors
+        double sum = r * enlightCalib.rfact + g + b * enlightCalib.bfact;
+        double outr = 0.0;
+        double outang = 0.0;
+        if (sum != 0.0) {
+            outr = (r * enlightCalib.rfact) / sum;
+            double outg_norm = g / sum;
+            if (outr < 1.0 && outr > 0.0) {
+                outang = outg_norm / (1.0 - outr);
+            } else {
+                outang = 0.0;
+            }
+        }
+
         snprintf(line, sizeof(line),
-            "ELAB,%lu,%s,%u,%lld,%lld,%lld,%lld,%lld,%lld\n",
+            "ELAB,%lu,%s,%u,%lld,%lld,%lld,%lld,%lld,%lld,%.6f,%.6f,%lu\n",
             (unsigned long)ts,
             statusStr(res.status), res.id,
             raw.rout,  raw.gout,  raw.bout,
-            raw.rnear, raw.gnear, raw.bnear);
+            raw.rnear, raw.gnear, raw.bnear,
+            outr, outang,
+            (unsigned long)raw.satCount);
         tcpClient.print(line);
     }
 
@@ -464,8 +526,8 @@ void loop() {
             // Column labels so each field is self-documenting.
             if (gDataMode == DataMode::RAW) {
                 tcpClient.print(
-                    "# RAW_BEGIN,timestamp_ms,sample_count,rout(far-R),gout(far-G),bout(far-B),outr(norm),outang\n"
-                    "# SAMPLE,timestamp_ms,triple_idx,r(12bit),g(12bit),b(12bit),saturated\n"
+                    "# RAW_BEGIN,timestamp_ms,sample_count,rout(far-R),gout(far-G),bout(far-B),outr(norm),outang,class\n"
+                    "# SAMPLE,timestamp_ms,triple_idx,r(12bit),g(12bit),b(12bit),saturated,sinVal\n"
                     "# RAW_END,timestamp_ms\n");
             } else {
                 tcpClient.print(
@@ -473,7 +535,9 @@ void loop() {
                     "timestamp_ms,"
                     "status,matched_id,"
                     "rout(far-R),gout(far-G),bout(far-B),"
-                    "rnear(near-R),gnear(near-G),bnear(near-B)\n");
+                    "rnear(near-R),gnear(near-G),bnear(near-B),"
+                    "outr(norm),outang,"
+                    "satCount\n");
             }
         } else {
             if (millis() - lastDispMs > 500) {
@@ -491,7 +555,8 @@ void loop() {
     bool trigFired = false;
     for (uint8_t i = 0; i < rpt.buttonCount; i++) {
         if (rpt.buttons[i].id    == InputDefaults::TRIG_1_ID &&
-            rpt.buttons[i].state == ButtonState::RELEASED) {
+            (rpt.buttons[i].state == ButtonState::PRESSED ||
+             rpt.buttons[i].state == ButtonState::HELD)) {
             trigFired = true;
         }
     }
