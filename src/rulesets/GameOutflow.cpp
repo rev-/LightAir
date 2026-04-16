@@ -259,6 +259,11 @@ static void doInGame(const InputReport& inp, const RadioReport&,
 
     constexpr uint8_t REPS = 10;
 
+    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
+    EnlightResult r = enlightPtr->poll();
+    if (r.status == EnlightStatus::PLAYER_HIT)
+        out.radio.sendTo(r.id, MSG_LIT);
+
     for (uint8_t i = 0; i < inp.buttonCount; i++) {
         if (inp.buttons[i].id != InputDefaults::TRIG_1_ID) continue;
         ButtonState s = inp.buttons[i].state;
@@ -271,11 +276,6 @@ static void doInGame(const InputReport& inp, const RadioReport&,
             }
         }
     }
-
-    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT)
-        out.radio.sendTo(r.id, MSG_LIT);
 
     // Set depletion flag if energy reached zero (from either active or passive drain),
     // unless a fatal hit already set pendingShone (mutually exclusive).

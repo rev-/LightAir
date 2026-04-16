@@ -295,6 +295,13 @@ static void doInGame(const InputReport& inp, const RadioReport&,
                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
 
+    EnlightResult r = enlightPtr->poll();
+    if (r.status == EnlightStatus::PLAYER_HIT) {
+        // Only fire if target is an opponent (or friendly fire is enabled).
+        if (isOpponent(r.id) || friendlyFire)
+            out.radio.sendTo(r.id, MSG_LIT);
+    }
+
     constexpr uint8_t REPS = 4;
     bool triggerActive = false;
 
@@ -321,13 +328,6 @@ static void doInGame(const InputReport& inp, const RadioReport&,
             energy = startEnergy;
         else if ((millis() - releaseAt) / 1000 >= (uint32_t)rechargeSecs)
             energy = startEnergy;
-    }
-
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT) {
-        // Only fire if target is an opponent (or friendly fire is enabled).
-        if (isOpponent(r.id) || friendlyFire)
-            out.radio.sendTo(r.id, MSG_LIT);
     }
 }
 
