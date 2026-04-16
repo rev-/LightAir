@@ -123,7 +123,7 @@ static const DirectRadioRule directRadioRules[] = {
 
 static void onReplyTaken(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
-    out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Taken);
 }
 
 static void onReplyShone(const RadioPacket&, const RadioPacket&,
