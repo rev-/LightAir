@@ -217,6 +217,13 @@ static void doInGame(const InputReport& inp, const RadioReport&,
                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
 
+    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
+    // points++ is deferred to onReplyShone when the target confirms elimination.
+    EnlightResult r = enlightPtr->poll();
+    if (r.status == EnlightStatus::PLAYER_HIT)
+        out.radio.sendTo(r.id, MSG_LIT);
+    // NO_HIT / LOW_POW: missed shot — no radio message.
+
     constexpr uint8_t REPS = 4;
     bool triggerActive = false;
 
@@ -246,13 +253,6 @@ static void doInGame(const InputReport& inp, const RadioReport&,
         else if ((millis() - releaseAt)/1000 >= (uint32_t)rechargeSecs)
             energy = startEnergy;
     }
-
-    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
-    // points++ is deferred to onReplyShone when the target confirms elimination.
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT)
-        out.radio.sendTo(r.id, MSG_LIT);
-    // NO_HIT / LOW_POW: missed shot — no radio message.
 }
 
 static void doOutGame(const InputReport&, const RadioReport&,

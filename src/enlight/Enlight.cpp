@@ -237,7 +237,7 @@ bool Enlight::begin() {
  *   run()  +  poll()
  * ============================================================ */
 bool Enlight::run(uint32_t repetitions) {
-    if (_repsRemaining>0||repetitions==0) return false;
+    if (_active||repetitions==0) return false;
     _repsRemaining=repetitions;
     taskENTER_CRITICAL(&_mux);
     _complete=false;

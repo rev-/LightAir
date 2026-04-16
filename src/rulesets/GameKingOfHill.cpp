@@ -335,6 +335,12 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
     scanCpBeacons(radio, disp, out, true);
 
     // ---- Combat ----
+    // Poll Enlight; a confirmed hit sends MSG_LIT. No friendly-fire check needed
+    // since every player is their own team.
+    EnlightResult r = enlightPtr->poll();
+    if (r.status == EnlightStatus::PLAYER_HIT)
+        out.radio.sendTo(r.id, MSG_LIT);
+
     constexpr uint8_t REPS = 4;
     bool triggerActive = false;
 
@@ -361,12 +367,6 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
         else if ((millis() - releaseAt) / 1000 >= (uint32_t)rechargeSecs)
             energy = startEnergy;
     }
-
-    // Poll Enlight; a confirmed hit sends MSG_LIT. No friendly-fire check needed
-    // since every player is their own team.
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT)
-        out.radio.sendTo(r.id, MSG_LIT);
 }
 
 static void doOutGame(const InputReport&, const RadioReport& radio,

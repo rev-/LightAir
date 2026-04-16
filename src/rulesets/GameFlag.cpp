@@ -407,6 +407,12 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
     tickGameTime();
 
     // ---- Shooting / energy ----
+    EnlightResult r = enlightPtr->poll();
+    if (r.status == EnlightStatus::PLAYER_HIT) {
+        if (isOpponent(r.id) || friendlyFire)
+            out.radio.sendTo(r.id, MSG_LIT);
+    }
+
     constexpr uint8_t REPS = 4;
     bool triggerActive = false;
 
@@ -433,12 +439,6 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             energy = startEnergy;
         else if ((millis() - releaseAt) / 1000 >= (uint32_t)rechargeSecs)
             energy = startEnergy;
-    }
-
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT) {
-        if (isOpponent(r.id) || friendlyFire)
-            out.radio.sendTo(r.id, MSG_LIT);
     }
 
     // ---- Flag pickup ----
