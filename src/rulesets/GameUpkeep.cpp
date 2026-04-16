@@ -202,18 +202,6 @@ static void refreshScoreStr() {
     snprintf(teamScoreStr, sizeof(teamScoreStr), "%d/%d", myPts, enemyPts);
 }
 
-// ---- UIAction for friendly-fire feedback (UIEvent::Custom1) ----
-static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
-    /* durations    */ { 200, 0, 0, 0 },
-    /* stepCount    */ 1,
-    /* soundFreqs   */ { 200, 0, 0, 0 },
-    /* vibIntensity */ { 60,  0, 0, 0 },
-    /* rgbColors    */ { {255, 100, 0}, {0,0,0}, {0,0,0}, {0,0,0} },
-    /* lcdText      */ "Teammate!",
-    /* lcdTotalMs   */ 800,
-    /* priority     */ 3,
-};
-
 // ---- onBegin ----
 static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtrl* ui,
                     const LightAir_GameRunner& runner) {
@@ -246,8 +234,6 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
         baseO_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_O, i);
         baseX_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_X, i);
     }
-
-    if (ui) ui->defineCustomAction(LightAir_UICtrl::UIEvent::Custom1, kFriendlyFireAction);
 }
 
 // ---- DirectRadioRule conditions ----
@@ -296,7 +282,7 @@ static void onReplyShone(const RadioPacket&, const RadioPacket&,
 }
 static void onReplyFriend(const RadioPacket&, const RadioPacket&,
                           LightAir_DisplayCtrl&, GameOutput& out) {
-    out.ui.trigger(LightAir_UICtrl::UIEvent::Custom1);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Friend);
 }
 
 static const ReplyRadioRule replyRadioRules[] = {
