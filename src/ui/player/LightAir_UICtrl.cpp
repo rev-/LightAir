@@ -108,7 +108,6 @@ LightAir_UICtrl::LightAir_UICtrl(
 : _audio(&audio),
 _vib(&vib),
 _rgb(&rgb),
-_lcd(nullptr),
 _observer(nullptr),
 _heapSize(0),
 _sequenceCounter(0),
@@ -127,11 +126,6 @@ void LightAir_UICtrl::setObserver(
   LightAir_UIEventObserver* obs)
 {
   _observer = obs;
-}
-
-void LightAir_UICtrl::setLcd(LightAir_DisplayCtrl* lcd)
-{
-  _lcd = lcd;
 }
 
 void LightAir_UICtrl::trigger(UIEvent event)
@@ -350,9 +344,6 @@ void LightAir_UICtrl::startEvent(
       ev.action->stepCount);
   }
 
-  if (_lcd && ev.action->lcdText && ev.action->lcdText[0] != '\0')
-    _lcd->showMessage(ev.action->lcdText, ev.action->lcdTotalMs);
-
   executeStep();
 }
 
@@ -413,7 +404,6 @@ void LightAir_UICtrl::interruptAll()
   if (_audio) _audio->stop();
   if (_vib)   _vib->stop();
   if (_rgb)   _rgb->setColor(0,0,0);
-  if (_lcd)   _lcd->clearTray();
 
   _heapSize = 0;
   _isRunning = false;
