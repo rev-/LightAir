@@ -139,18 +139,23 @@ static const DirectRadioRule directRadioRules[] = {
 // ---- ReplyRadioRule handlers ----
 static void onReplyTaken(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
-    out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Taken);
 }
 static void onReplyShone(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
     energy += startEnergy;   // uncapped reward for eliminating another player
     out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
 }
+static void onReplyAlreadyDown(const RadioPacket&, const RadioPacket&,
+                         LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::AlreadyDown);
+}
 
 static const ReplyRadioRule replyRadioRules[] = {
     //  activeInStateMask               eventType                       subType       condition  onReply
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN, nullptr, onReplyTaken },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE, nullptr, onReplyShone },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE, nullptr, onReplyAlreadyDown },
 };
 
 // ---- Winner election rules ----
