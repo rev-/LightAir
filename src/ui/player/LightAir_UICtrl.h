@@ -45,8 +45,6 @@ public:
     uint16_t soundFreqs[4];
     uint8_t  vibIntensity[4];
     uint8_t  rgbColors[4][3];
-    const char* lcdText;
-    uint32_t lcdTotalMs;
     uint8_t  priority;
   };
 
@@ -60,7 +58,6 @@ public:
   void triggerEnlight(uint16_t ms);
 
   void setObserver(LightAir_UIEventObserver* obs);
-  void setLcd(LightAir_DisplayCtrl* lcd);
   void defineCustomAction(UIEvent slot,
                           const UIAction& action);
 
@@ -102,7 +99,6 @@ private:
   LightAir_Audio* _audio;
   LightAir_Vibration* _vib;
   LightAir_RGB* _rgb;
-  LightAir_DisplayCtrl* _lcd;
   LightAir_UIEventObserver* _observer;
 
   // Heap queue
