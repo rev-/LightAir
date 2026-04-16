@@ -18,6 +18,7 @@ public:
   enum class UIEvent : uint8_t {
     Enlight,
     Lit,
+    Taken,
     Friend,
     AlreadyDown,
     Down,
