@@ -185,8 +185,6 @@ static const LightAir_UICtrl::UIAction kFlagCarryBg = {
     /* soundFreqs   */ { 4500, 0, 0, 0 },
     /* vibIntensity */ { 25, 0, 0, 0 },
     /* rgbColors    */ { {0, 180, 255}, {0, 30, 80}, {0, 0, 0}, {0, 0, 0} },
-    /* lcdText      */ "",
-    /* lcdTotalMs   */ 0,
     /* priority     */ 1,
 };
 
@@ -195,7 +193,7 @@ static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
     { 200, 0, 0, 0 }, 1,
     { 200, 0, 0, 0 }, { 60, 0, 0, 0 },
     { {255, 100, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0} },
-    "Teammate!", 800, 3,
+    3,
 };
 
 // ---- Helpers ----
