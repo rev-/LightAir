@@ -144,6 +144,7 @@ static void onReplyTaken(const RadioPacket&, const RadioPacket&,
 static void onReplyShone(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
     energy += startEnergy;   // uncapped reward for eliminating another player
+    points += 1;
     out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
 }
 
