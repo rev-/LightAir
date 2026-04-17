@@ -287,8 +287,17 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
     printLegend("O:Join  X:Cancel", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 
+    recordSeen(_radio.playerId());  // always include self in the roster
+    uint32_t nextBroadcast = 0;
+
     // Find the game matching any incoming config typeId.
     while (true) {
+        // Broadcast MSG_ROSTER periodically so the DM can discover this device.
+        if (millis() >= nextBroadcast) {
+            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0);
+            nextBroadcast = millis() + GameDefaults::PRESTART_BROADCAST_MS;
+        }
+
         // Check input
         const InputReport& inp = _input.poll();
         for (uint8_t i = 0; i < inp.keyEventCount; i++) {
@@ -303,11 +312,17 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
             }
         }
 
-        // Check radio for config packets
+        // Check radio for config packets and roster announcements.
         const RadioReport& rad = _radio.poll();
         for (uint8_t e = 0; e < rad.count; e++) {
             const RadioEvent& ev = rad.events[e];
             if (ev.type != RadioEventType::MessageReceived) continue;
+
+            if (ev.packet.msgType == GameDefaults::MSG_ROSTER) {
+                recordSeen(ev.packet.senderId);
+                continue;
+            }
+
             if (ev.packet.msgType != _msgType) continue;
             // Try to match against registered games.
             for (uint8_t g = 0; g < _mgr.count(); g++) {

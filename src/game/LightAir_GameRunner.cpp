@@ -502,12 +502,10 @@ void LightAir_GameRunner::scoreAnnounce() const {
     _display->showMessage(msg, 0);  // → top row
 }
 
-// Freeze the display after winner announcement and arm the A+B exit.
-// Activating the empty binding set stops live MonitorVar polling;
-// only the static tray messages from scoreAnnounce() remain visible.
+// Arm the A+B exit after winner announcement.
+// The GAME_END binding set remains active so monitor vars stay visible
+// alongside the tray messages produced by scoreAnnounce().
 void LightAir_GameRunner::postScoreAnnounce() {
-    const uint8_t fh = DisplayDefaults::FONT_HEIGHT;
-    _display->activateBindingSet(_emptyBindingSetId);
     _display->showMessage("A+B: Restart");
     _endExitReady = true;
 }
