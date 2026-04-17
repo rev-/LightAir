@@ -81,6 +81,7 @@ enum ReplySubType : uint8_t {
     REPLY_SHONE  = 2,
     REPLY_DOWN   = 3,
     REPLY_FRIEND = 4,
+    REPLY_IMMUNE = 5,
 };
 
 // ---- CP team encoding (used in MSG_CP_BEACON payload[0] and cpState[]) ----
@@ -255,6 +256,9 @@ static bool litAndShoneAndValid(const RadioPacket& pkt) {
 static bool litButFriendly(const RadioPacket& pkt) {
     return pkt.team == myTeam && !friendlyFire;
 }
+static bool litButImmune(const RadioPacket& pkt) {
+    return (pkt.team != myTeam || friendlyFire) && !notImmune(pkt);
+}
 
 // ---- DirectRadioRule actions ----
 static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
@@ -281,6 +285,7 @@ static const DirectRadioRule directRadioRules[] = {
     { IN_GAME,  MSG_LIT,        litAndTakenAndValid, REPLY_TAKEN,  onLitTaken },
     { IN_GAME,  MSG_LIT,        litAndShoneAndValid, REPLY_SHONE,  onLitShone },
     { IN_GAME,  MSG_LIT,        litButFriendly,      REPLY_FRIEND, nullptr    },
+    { IN_GAME,  MSG_LIT,        litButImmune,        REPLY_IMMUNE, nullptr    },
     { OUT_GAME, MSG_LIT,        nullptr,             REPLY_DOWN,   nullptr    },
     { IN_GAME,  MSG_CP_SCORE,   nullptr,             0,            onCpScore  },
     { OUT_GAME, MSG_CP_SCORE,   nullptr,             0,            onCpScore  },
@@ -299,12 +304,17 @@ static void onReplyFriend(const RadioPacket&, const RadioPacket&,
                           LightAir_DisplayCtrl&, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::Friend);
 }
+static void onReplyImmune(const RadioPacket&, const RadioPacket&,
+                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
+}
 
 static const ReplyRadioRule replyRadioRules[] = {
     //  activeInStateMask               eventType                       subType        condition  onReply
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_FRIEND, nullptr, onReplyFriend },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election rules ----

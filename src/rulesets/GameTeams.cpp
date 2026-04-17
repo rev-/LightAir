@@ -68,6 +68,7 @@ enum ReplySubType : uint8_t {
     REPLY_SHONE  = 2,
     REPLY_DOWN   = 3,
     REPLY_FRIEND = 4,
+    REPLY_IMMUNE = 5,
 };
 
 // ---- RSSI proximity threshold ----
@@ -196,6 +197,9 @@ static bool litAndShoneAndValid(const RadioPacket& pkt) {
 static bool litButFriendly(const RadioPacket& pkt) {
     return pkt.team == myTeam && !friendlyFire;
 }
+static bool litButImmune(const RadioPacket& pkt) {
+    return (pkt.team != myTeam || friendlyFire) && !notImmune(pkt);
+}
 
 // ---- DirectRadioRule actions ----
 static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
@@ -213,10 +217,11 @@ static void onPointReport(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOut
 }
 
 static const DirectRadioRule directRadioRules[] = {
-    //  state     msgType            condition           replySubType  onReceive
+    //  state     msgType            condition           replySubType   onReceive
     { IN_GAME,  MSG_LIT,           litAndTakenAndValid, REPLY_TAKEN,  onLitTaken   },
     { IN_GAME,  MSG_LIT,           litAndShoneAndValid, REPLY_SHONE,  onLitShone   },
     { IN_GAME,  MSG_LIT,           litButFriendly,      REPLY_FRIEND, nullptr      },
+    { IN_GAME,  MSG_LIT,           litButImmune,        REPLY_IMMUNE, nullptr      },
     { OUT_GAME, MSG_LIT,           nullptr,             REPLY_DOWN,   nullptr      },
     { IN_GAME,  MSG_POINT_REPORT,  nullptr,             0,            onPointReport },
     { OUT_GAME, MSG_POINT_REPORT,  nullptr,             0,            onPointReport },
@@ -238,12 +243,17 @@ static void onReplyFriend(const RadioPacket&, const RadioPacket&,
                           LightAir_DisplayCtrl&, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::Friend);
 }
+static void onReplyImmune(const RadioPacket&, const RadioPacket&,
+                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
+}
 
 static const ReplyRadioRule replyRadioRules[] = {
     //  activeInStateMask               eventType                       subType        condition  onReply
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_FRIEND, nullptr, onReplyFriend },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election (used for individual score slot format; aggregation in onScoreAnnounce) ----
@@ -431,8 +441,8 @@ extern const LightAir_Game game_teams = {
     /* name                  */ "Teams",
     /* configVars            */ Teams::configVars,         /* configCount            */ 7,
     /* monitorVars           */ Teams::monitorVars,        /* monitorCount           */ 8,
-    /* directRadioRules      */ Teams::directRadioRules,   /* directRadioRuleCount   */ 6,
-    /* replyRadioRules       */ Teams::replyRadioRules,    /* replyRadioRuleCount    */ 3,
+    /* directRadioRules      */ Teams::directRadioRules,   /* directRadioRuleCount   */ 7,
+    /* replyRadioRules       */ Teams::replyRadioRules,    /* replyRadioRuleCount    */ 4,
     /* rules                 */ Teams::rules,              /* ruleCount              */ 6,
     /* behaviors             */ Teams::behaviors,          /* behaviorCount          */ 3,
     /* currentState          */ &Teams::gState,            /* initialState           */ Teams::IN_GAME,

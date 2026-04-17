@@ -56,7 +56,7 @@ enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 // ---- Radio message types and reply sub-types ----
 using RadioMsg::MSG_LIT;           // 0x10
 using RadioMsg::MSG_SCORE_COLLECT; // 0x12
-enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3 };
+enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3, REPLY_IMMUNE = 4 };
 
 static constexpr uint32_t HIT_IMMUNITY_MS = 3000;
 
@@ -116,8 +116,9 @@ static bool notImmune(const RadioPacket& pkt) {
         || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
 }
 
-static bool litAndTaken(const RadioPacket& pkt) { return lives > 1  && notImmune(pkt); }
-static bool litAndShone(const RadioPacket& pkt) { return lives <= 1 && notImmune(pkt); }
+static bool litAndTaken (const RadioPacket& pkt) { return lives > 1  && notImmune(pkt); }
+static bool litAndShone (const RadioPacket& pkt) { return lives <= 1 && notImmune(pkt); }
+static bool litButImmune(const RadioPacket& pkt) { return !notImmune(pkt); }
 
 static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
     lives--;
@@ -129,10 +130,11 @@ static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput
 }
 
 static const DirectRadioRule directRadioRules[] = {
-    //  state     msgType   condition      replySubType  onReceive
-    { IN_GAME,  MSG_LIT, litAndTaken,  REPLY_TAKEN, onLitTaken },
-    { IN_GAME,  MSG_LIT, litAndShone,  REPLY_SHONE, onLitShone },
-    { OUT_GAME, MSG_LIT, nullptr,      REPLY_DOWN,  nullptr    },
+    //  state     msgType   condition      replySubType   onReceive
+    { IN_GAME,  MSG_LIT, litAndTaken,  REPLY_TAKEN,  onLitTaken },
+    { IN_GAME,  MSG_LIT, litAndShone,  REPLY_SHONE,  onLitShone },
+    { IN_GAME,  MSG_LIT, litButImmune, REPLY_IMMUNE, nullptr    },
+    { OUT_GAME, MSG_LIT, nullptr,      REPLY_DOWN,   nullptr    },
 };
 
 // ---- ReplyRadioRules — reply and timeout handlers ----
@@ -142,6 +144,11 @@ static void onReplyTaken(const RadioPacket&, const RadioPacket&,
     out.ui.trigger(LightAir_UICtrl::UIEvent::Taken);
 }
 
+static void onReplyImmune(const RadioPacket&, const RadioPacket&,
+                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
+}
+
 static void onReplyShone(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
     points++;
@@ -149,9 +156,10 @@ static void onReplyShone(const RadioPacket&, const RadioPacket&,
 }
 
 static const ReplyRadioRule replyRadioRules[] = {
-    //  activeInStateMask               eventType                       subType       condition  onReply
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN, nullptr, onReplyTaken },
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE, nullptr, onReplyShone },
+    //  activeInStateMask               eventType                       subType        condition  onReply
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election rules ----
@@ -300,8 +308,8 @@ extern const LightAir_Game game_ffa = {
     /* name                  */ "Free for All",
     /* configVars            */ FFA::configVars,         /* configCount            */ 5,
     /* monitorVars           */ FFA::monitorVars,        /* monitorCount           */ 8,
-    /* directRadioRules      */ FFA::directRadioRules,   /* directRadioRuleCount   */ 3,
-    /* replyRadioRules       */ FFA::replyRadioRules,    /* replyRadioRuleCount    */ 2,
+    /* directRadioRules      */ FFA::directRadioRules,   /* directRadioRuleCount   */ 4,
+    /* replyRadioRules       */ FFA::replyRadioRules,    /* replyRadioRuleCount    */ 3,
     /* rules                 */ FFA::rules,              /* ruleCount              */ 4,
     /* behaviors             */ FFA::behaviors,          /* behaviorCount          */ 3,
     /* currentState          */ &FFA::gState,            /* initialState           */ FFA::IN_GAME,

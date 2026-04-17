@@ -85,6 +85,7 @@ enum ReplySubType : uint8_t {
     REPLY_SHONE  = 2,
     REPLY_DOWN   = 3,
     REPLY_FRIEND = 4,
+    REPLY_IMMUNE = 5,
 };
 
 // ---- Flag event sub-types ----
@@ -244,6 +245,9 @@ static bool litAndShoneAndValid(const RadioPacket& pkt) {
 static bool litButFriendly(const RadioPacket& pkt) {
     return pkt.team == myTeam && !friendlyFire;
 }
+static bool litButImmune(const RadioPacket& pkt) {
+    return (pkt.team != myTeam || friendlyFire) && !notImmune(pkt);
+}
 static bool flagEventTaken(const RadioPacket& pkt) {
     return pkt.payloadLen >= 2 && pkt.payload[0] == FEVENT_TAKEN;
 }
@@ -310,6 +314,7 @@ static const DirectRadioRule directRadioRules[] = {
     { IN_GAME,  MSG_LIT,        litAndTakenAndValid, REPLY_TAKEN,  onLitTaken         },
     { IN_GAME,  MSG_LIT,        litAndShoneAndValid, REPLY_SHONE,  onLitShone         },
     { IN_GAME,  MSG_LIT,        litButFriendly,      REPLY_FRIEND, nullptr            },
+    { IN_GAME,  MSG_LIT,        litButImmune,        REPLY_IMMUNE, nullptr            },
     { OUT_GAME, MSG_LIT,        nullptr,             REPLY_DOWN,   nullptr            },
     // — flag state synchronisation (IN_GAME) —
     { IN_GAME,  MSG_FLAG_EVENT, flagEventTaken,      0,            onFlagEventTaken   },
@@ -335,12 +340,17 @@ static void onReplyFriend(const RadioPacket&, const RadioPacket&,
                           LightAir_DisplayCtrl&, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::Friend);
 }
+static void onReplyImmune(const RadioPacket&, const RadioPacket&,
+                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
+}
 
 static const ReplyRadioRule replyRadioRules[] = {
     //  activeInStateMask               eventType                       subType        condition  onReply
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_FRIEND, nullptr, onReplyFriend },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election ----
@@ -586,8 +596,8 @@ extern const LightAir_Game game_flag = {
     /* name                  */ "Flag",
     /* configVars            */ Flag::configVars,          /* configCount            */ 7,
     /* monitorVars           */ Flag::monitorVars,         /* monitorCount           */ 8,
-    /* directRadioRules      */ Flag::directRadioRules,    /* directRadioRuleCount   */ 10,
-    /* replyRadioRules       */ Flag::replyRadioRules,     /* replyRadioRuleCount    */ 3,
+    /* directRadioRules      */ Flag::directRadioRules,    /* directRadioRuleCount   */ 11,
+    /* replyRadioRules       */ Flag::replyRadioRules,     /* replyRadioRuleCount    */ 4,
     /* rules                 */ Flag::rules,               /* ruleCount              */ 6,
     /* behaviors             */ Flag::behaviors,           /* behaviorCount          */ 3,
     /* currentState          */ &Flag::gState,             /* initialState           */ Flag::IN_GAME,

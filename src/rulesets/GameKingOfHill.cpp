@@ -77,7 +77,7 @@ using RadioMsg::MSG_CP_SCORE;       // 0x54
 using RadioMsg::MSG_BASE_BEACON;    // 0x56
 
 // ---- Reply sub-types for MSG_LIT ----
-enum ReplySubType : uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3 };
+enum ReplySubType : uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3, REPLY_IMMUNE = 4 };
 
 // ---- CP state sentinel ----
 static constexpr uint8_t CP_TEAM_NONE   = 0xFF;
@@ -199,8 +199,9 @@ static bool notImmune(const RadioPacket& pkt) {
         || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
 }
 
-static bool litAndTaken(const RadioPacket& pkt) { return lives > 1  && notImmune(pkt); }
-static bool litAndShone(const RadioPacket& pkt) { return lives <= 1 && notImmune(pkt); }
+static bool litAndTaken (const RadioPacket& pkt) { return lives > 1  && notImmune(pkt); }
+static bool litAndShone (const RadioPacket& pkt) { return lives <= 1 && notImmune(pkt); }
+static bool litButImmune(const RadioPacket& pkt) { return !notImmune(pkt); }
 
 // ---- DirectRadioRule actions ----
 static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
@@ -221,9 +222,10 @@ static void onCpScore(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&
 
 static const DirectRadioRule directRadioRules[] = {
     //  state     msgType         condition    replySubType  onReceive
-    { IN_GAME,  MSG_LIT,        litAndTaken, REPLY_TAKEN,  onLitTaken },
-    { IN_GAME,  MSG_LIT,        litAndShone, REPLY_SHONE,  onLitShone },
-    { OUT_GAME, MSG_LIT,        nullptr,     REPLY_DOWN,   nullptr    },
+    { IN_GAME,  MSG_LIT,        litAndTaken,  REPLY_TAKEN,  onLitTaken  },
+    { IN_GAME,  MSG_LIT,        litAndShone,  REPLY_SHONE,  onLitShone  },
+    { IN_GAME,  MSG_LIT,        litButImmune, REPLY_IMMUNE, nullptr     },
+    { OUT_GAME, MSG_LIT,        nullptr,      REPLY_DOWN,   nullptr     },
     { IN_GAME,  MSG_CP_SCORE,   nullptr,     0,            onCpScore  },
     { OUT_GAME, MSG_CP_SCORE,   nullptr,     0,            onCpScore  },
 };
@@ -237,11 +239,16 @@ static void onReplyShone(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
 }
+static void onReplyImmune(const RadioPacket&, const RadioPacket&,
+                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
+}
 
 static const ReplyRadioRule replyRadioRules[] = {
-    //  activeInStateMask               eventType                       subType       condition  onReply
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN, nullptr, onReplyTaken },
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE, nullptr, onReplyShone },
+    //  activeInStateMask               eventType                       subType        condition  onReply
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election rules ----
@@ -424,8 +431,8 @@ extern const LightAir_Game game_koh = {
     /* name                  */ "King of Hill",
     /* configVars            */ KoH::configVars,         /* configCount            */ 6,
     /* monitorVars           */ KoH::monitorVars,        /* monitorCount           */ 8,
-    /* directRadioRules      */ KoH::directRadioRules,   /* directRadioRuleCount   */ 5,
-    /* replyRadioRules       */ KoH::replyRadioRules,    /* replyRadioRuleCount    */ 2,
+    /* directRadioRules      */ KoH::directRadioRules,   /* directRadioRuleCount   */ 6,
+    /* replyRadioRules       */ KoH::replyRadioRules,    /* replyRadioRuleCount    */ 3,
     /* rules                 */ KoH::rules,              /* ruleCount              */ 6,
     /* behaviors             */ KoH::behaviors,          /* behaviorCount          */ 3,
     /* currentState          */ &KoH::gState,            /* initialState           */ KoH::IN_GAME,

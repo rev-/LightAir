@@ -1,4 +1,5 @@
 #include <LightAir.h>
+#include <string.h>
 #include "GameTypeIds.h"
 
 // ================================================================
@@ -62,10 +63,13 @@ using RadioMsg::MSG_SCORE_COLLECT; // 0x12
 
 // ---- Reply sub-types ----
 enum ReplySubType : uint8_t {
-    REPLY_TAKEN = 1,
-    REPLY_SHONE = 2,
-    REPLY_DOWN  = 3,
+    REPLY_TAKEN  = 1,
+    REPLY_SHONE  = 2,
+    REPLY_DOWN   = 3,
+    REPLY_IMMUNE = 4,
 };
+
+static constexpr uint32_t HIT_IMMUNITY_MS = 3000;
 
 // ---- Config variables ----
 static int startEnergy = 100;
@@ -90,6 +94,7 @@ static uint32_t respawnAt;
 
 static bool pendingShone;       // a fatal hit was received this cycle
 static bool pendingDepletion;   // passive drain zeroed energy this cycle
+static uint32_t litAt[PlayerDefs::MAX_PLAYER_ID];
 
 // ---- Config vars (startup menu) ----
 static const ConfigVar configVars[] = {
@@ -116,24 +121,34 @@ static const MonitorVar monitorVars[] = {
 };
 
 // ---- DirectRadioRule conditions ----
-static bool litAndTaken(const RadioPacket&) { return energy > hitDmg; }
-static bool litAndShone(const RadioPacket&) { return energy <= hitDmg; }
+static bool notImmune(const RadioPacket& pkt) {
+    return pkt.senderId >= PlayerDefs::MAX_PLAYER_ID
+        || litAt[pkt.senderId] == 0
+        || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
+}
+
+static bool litAndTaken (const RadioPacket& pkt) { return energy > hitDmg  && notImmune(pkt); }
+static bool litAndShone (const RadioPacket& pkt) { return energy <= hitDmg && notImmune(pkt); }
+static bool litButImmune(const RadioPacket& pkt) { return !notImmune(pkt); }
 
 // ---- DirectRadioRule actions ----
-static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) {
+static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
     energy -= hitDmg;
     if (energy < 0) energy = 0;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
 }
-static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) {
+static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
     energy       = 0;
     pendingShone = true;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
 }
 
 static const DirectRadioRule directRadioRules[] = {
-    //  state     msgType   condition    replySubType  onReceive
-    { IN_GAME,  MSG_LIT, litAndTaken, REPLY_TAKEN, onLitTaken },
-    { IN_GAME,  MSG_LIT, litAndShone, REPLY_SHONE, onLitShone },
-    { OUT_GAME, MSG_LIT, nullptr,     REPLY_DOWN,  nullptr    },
+    //  state     msgType   condition     replySubType   onReceive
+    { IN_GAME,  MSG_LIT, litAndTaken,  REPLY_TAKEN,  onLitTaken },
+    { IN_GAME,  MSG_LIT, litAndShone,  REPLY_SHONE,  onLitShone },
+    { IN_GAME,  MSG_LIT, litButImmune, REPLY_IMMUNE, nullptr    },
+    { OUT_GAME, MSG_LIT, nullptr,      REPLY_DOWN,   nullptr    },
 };
 
 // ---- ReplyRadioRule handlers ----
@@ -151,12 +166,17 @@ static void onReplyDown(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::AlreadyDown);
 }
+static void onReplyImmune(const RadioPacket&, const RadioPacket&,
+                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
+}
 
 static const ReplyRadioRule replyRadioRules[] = {
-    //  activeInStateMask               eventType                       subType       condition  onReply
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN, nullptr, onReplyTaken },
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE, nullptr, onReplyShone },
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_DOWN , nullptr, onReplyDown  },
+    //  activeInStateMask               eventType                       subType        condition  onReply
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_DOWN,   nullptr, onReplyDown   },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election rules ----
@@ -176,6 +196,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
     energySpent     = 0;
     pendingShone     = false;
     pendingDepletion = false;
+    memset(litAt, 0, sizeof(litAt));
     lastTickAt      = millis();
     lastDrainAt     = millis();
     drainIntervalMs = (drainRate > 0) ? (10000u / (uint32_t)drainRate) : 1000u;
@@ -238,6 +259,7 @@ static void onDepletion(LightAir_DisplayCtrl& disp, GameOutput& out) {
 }
 static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
     energy = startEnergy;
+    memset(litAt, 0, sizeof(litAt));
     lastDrainAt = millis();
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
@@ -315,8 +337,8 @@ extern const LightAir_Game game_outflow = {
     /* name                  */ "Outflow",
     /* configVars            */ Outflow::configVars,         /* configCount            */ 5,
     /* monitorVars           */ Outflow::monitorVars,        /* monitorCount           */ 8,
-    /* directRadioRules      */ Outflow::directRadioRules,   /* directRadioRuleCount   */ 3,
-    /* replyRadioRules       */ Outflow::replyRadioRules,    /* replyRadioRuleCount    */ 2,
+    /* directRadioRules      */ Outflow::directRadioRules,   /* directRadioRuleCount   */ 4,
+    /* replyRadioRules       */ Outflow::replyRadioRules,    /* replyRadioRuleCount    */ 4,
     /* rules                 */ Outflow::rules,              /* ruleCount              */ 5,
     /* behaviors             */ Outflow::behaviors,          /* behaviorCount          */ 3,
     /* currentState          */ &Outflow::gState,            /* initialState           */ Outflow::IN_GAME,
