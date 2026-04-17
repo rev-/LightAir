@@ -100,10 +100,18 @@ constexpr uint8_t MSG_CONFIG        = 0xA0;
 // Roster presence broadcast; players announce themselves during discovery.
 constexpr uint8_t MSG_ROSTER        = 0xA2;
 
+// Join confirmation sent by a non-DM when the player presses "O" to join.
+// No payload; senderId identifies the joining player.
+constexpr uint8_t MSG_JOIN              = 0xA4;
+
+// Countdown-start broadcast from DM to all joined players.
+// payload[0] = countdown_secs / 10 (multiply by 10 to recover; 0 = no delay).
+constexpr uint8_t MSG_START_COUNTDOWN   = 0xA6;
+
 // End-of-game signal; forces any device still in-game into scoringState.
 constexpr uint8_t MSG_END_GAME      = 0xAE;
 
-// Next available in 0xA0 block: 0xA4 (before 0xAE) or 0xB0 (after)
+// Next available in 0xA0 block: 0xA8 (before 0xAE) or 0xB0 (after)
 
 // ── 0xF0 block: totem protocol ───────────────────────────────────
 // All unactivated totems broadcast MSG_TOTEM_BEACON regardless of role.
@@ -243,8 +251,11 @@ namespace DisplayDefaults {
 // Game configuration
 // ---------------------------------------------------------------
 namespace GameDefaults {
-    constexpr uint8_t  MSG_CONFIG        = RadioMsg::MSG_CONFIG;
-    constexpr uint8_t  MSG_ROSTER        = RadioMsg::MSG_ROSTER;
+    constexpr uint8_t  MSG_CONFIG             = RadioMsg::MSG_CONFIG;
+    constexpr uint8_t  MSG_ROSTER             = RadioMsg::MSG_ROSTER;
+    constexpr uint8_t  MSG_JOIN               = RadioMsg::MSG_JOIN;
+    constexpr uint8_t  MSG_START_COUNTDOWN    = RadioMsg::MSG_START_COUNTDOWN;
+    constexpr uint8_t  COUNTDOWN_DEFAULT_S    = 20;   // default pre-game countdown in seconds
     constexpr uint32_t ROSTER_WINDOW_MS  = 3000; // ms to collect presence broadcasts during discovery
     constexpr uint32_t ROSTER_RETRY_MS        = 1000; // ms between own re-broadcasts during discovery
     constexpr uint32_t PRESTART_BROADCAST_MS  = 2000; // ms between MSG_ROSTER broadcasts on pre-start screen
