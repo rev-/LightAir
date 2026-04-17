@@ -81,14 +81,16 @@ enum ReplySubType : uint8_t {
     REPLY_SHONE  = 2,
     REPLY_DOWN   = 3,
     REPLY_FRIEND = 4,
+    REPLY_IMMUNE = 5,
 };
 
 // ---- CP team encoding (used in MSG_CP_BEACON payload[0] and cpState[]) ----
 static constexpr uint8_t CP_TEAM_NONE = 0xFF;  // teamless
 
 // ---- RSSI proximity thresholds ----
-static constexpr int8_t NEAR_CP_RSSI   = -65;  // ~3 m indoors for CP presence
-static constexpr int8_t NEAR_BASE_RSSI = -60;  // ~2 m indoors for BASE respawn
+static constexpr int8_t  NEAR_CP_RSSI    = -65;  // ~3 m indoors for CP presence
+static constexpr int8_t  NEAR_BASE_RSSI  = -60;  // ~2 m indoors for BASE respawn
+static constexpr uint32_t HIT_IMMUNITY_MS = 3000;
 
 // ---- Config variables ----
 static int startLives       = 3;
@@ -126,6 +128,7 @@ static uint8_t  teamMap[PlayerDefs::MAX_PLAYER_ID];  // per-player team index; f
 // Moved from doInGame static locals so they reset correctly on game restart.
 static bool     triggerWasActive = false;
 static uint32_t releaseAt        = 0;
+static uint32_t litAt[PlayerDefs::MAX_PLAYER_ID];
 
 // ---- Totem device-ID slots (populated in onBegin from runner) ----
 static uint8_t cpIds[6]     = {};
@@ -218,6 +221,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
     lastTickAt       = millis();
     triggerWasActive = false;
     releaseAt        = 0;
+    memset(litAt, 0, sizeof(litAt));
 
     for (uint8_t i = 0; i < 6; i++) cpState[i] = CP_TEAM_NONE;
     snprintf(teamScoreStr, sizeof(teamScoreStr), "0/0");
@@ -237,19 +241,34 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
 }
 
 // ---- DirectRadioRule conditions ----
+static bool notImmune(const RadioPacket& pkt) {
+    return pkt.senderId >= PlayerDefs::MAX_PLAYER_ID
+        || litAt[pkt.senderId] == 0
+        || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
+}
+
 static bool litAndTakenAndValid(const RadioPacket& pkt) {
-    return lives > 1 && (pkt.team != myTeam || friendlyFire);
+    return lives > 1 && (pkt.team != myTeam || friendlyFire) && notImmune(pkt);
 }
 static bool litAndShoneAndValid(const RadioPacket& pkt) {
-    return lives <= 1 && (pkt.team != myTeam || friendlyFire);
+    return lives <= 1 && (pkt.team != myTeam || friendlyFire) && notImmune(pkt);
 }
 static bool litButFriendly(const RadioPacket& pkt) {
     return pkt.team == myTeam && !friendlyFire;
 }
+static bool litButImmune(const RadioPacket& pkt) {
+    return (pkt.team != myTeam || friendlyFire) && !notImmune(pkt);
+}
 
 // ---- DirectRadioRule actions ----
-static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
-static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
+static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+}
+static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+}
 
 static void onCpScore(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
     if (cpIndex(pkt.senderId) < 0) return;   // ignore unknown senders
@@ -266,6 +285,7 @@ static const DirectRadioRule directRadioRules[] = {
     { IN_GAME,  MSG_LIT,        litAndTakenAndValid, REPLY_TAKEN,  onLitTaken },
     { IN_GAME,  MSG_LIT,        litAndShoneAndValid, REPLY_SHONE,  onLitShone },
     { IN_GAME,  MSG_LIT,        litButFriendly,      REPLY_FRIEND, nullptr    },
+    { IN_GAME,  MSG_LIT,        litButImmune,        REPLY_IMMUNE, nullptr    },
     { OUT_GAME, MSG_LIT,        nullptr,             REPLY_DOWN,   nullptr    },
     { IN_GAME,  MSG_CP_SCORE,   nullptr,             0,            onCpScore  },
     { OUT_GAME, MSG_CP_SCORE,   nullptr,             0,            onCpScore  },
@@ -284,12 +304,17 @@ static void onReplyFriend(const RadioPacket&, const RadioPacket&,
                           LightAir_DisplayCtrl&, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::Friend);
 }
+static void onReplyImmune(const RadioPacket&, const RadioPacket&,
+                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
+}
 
 static const ReplyRadioRule replyRadioRules[] = {
     //  activeInStateMask               eventType                       subType        condition  onReply
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_FRIEND, nullptr, onReplyFriend },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election rules ----
@@ -373,6 +398,7 @@ static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
     lives      = startLives;
     energy     = startEnergy;
     canRespawn = false;
+    memset(litAt, 0, sizeof(litAt));
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
 }
