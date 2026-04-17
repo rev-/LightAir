@@ -281,50 +281,62 @@ void LightAir_GameSetupMenu::runIdSettings() {
  * ========================================================= */
 
 MenuResult LightAir_GameSetupMenu::runWaiter() {
+    recordSeen(_radio.playerId());
+    uint32_t nextBroadcast = 0;
+    bool joined = false;
+
     _display.clear();
     _display.setColor(true);
-    _display.print(0, 0,      "Waiting for host");
+    _display.print(0, 0, "Waiting for host");
     printLegend("O:Join  X:Cancel", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 
-    recordSeen(_radio.playerId());  // always include self in the roster
-    uint32_t nextBroadcast = 0;
-
-    // Find the game matching any incoming config typeId.
     while (true) {
-        // Broadcast MSG_ROSTER periodically so the DM can discover this device.
+        // Periodic presence broadcast so DM and peers discover this device.
         if (millis() >= nextBroadcast) {
             _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0);
             nextBroadcast = millis() + GameDefaults::PRESTART_BROADCAST_MS;
         }
 
-        // Check input
+        // Input
         const InputReport& inp = _input.poll();
         for (uint8_t i = 0; i < inp.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = inp.keyEvents[i];
             if (ke.keypadId != _keypadId) continue;
             if (ke.state != KeyState::RELEASED && ke.state != KeyState::RELEASED_HELD) continue;
             if (ke.key == 'B') return MenuResult::Cancelled;
-            // A or TRIG1: if a game was already selected (from config receipt), confirm.
-            if ((ke.key == 'A') && _game) {
-                commitToRunner();
-                return MenuResult::Confirmed;
+            if (ke.key == 'A' && _game && !joined) {
+                joined = true;
+                _radio.broadcast(GameDefaults::MSG_JOIN, nullptr, 0);
+                _display.clear();
+                _display.setColor(true);
+                _display.print(0, 0,                             "Joined!");
+                _display.print(0, DisplayDefaults::FONT_HEIGHT,  "Waiting for DM");
+                printLegend("X:Cancel", DisplayDefaults::BOTTOM_LINE_Y);
+                _display.flush();
             }
         }
 
-        // Check radio for config packets and roster announcements.
+        // Radio
         const RadioReport& rad = _radio.poll();
         for (uint8_t e = 0; e < rad.count; e++) {
             const RadioEvent& ev = rad.events[e];
             if (ev.type != RadioEventType::MessageReceived) continue;
 
-            if (ev.packet.msgType == GameDefaults::MSG_ROSTER) {
+            if (ev.packet.msgType == GameDefaults::MSG_ROSTER ||
+                ev.packet.msgType == GameDefaults::MSG_JOIN) {
                 recordSeen(ev.packet.senderId);
                 continue;
             }
 
+            if (ev.packet.msgType == GameDefaults::MSG_START_COUNTDOWN && joined) {
+                uint8_t secs = (ev.packet.payloadLen >= 1) ? (uint8_t)(ev.packet.payload[0] * 10) : 0;
+                runCountdownSequence(secs);
+                commitToRunner();
+                return MenuResult::Confirmed;
+            }
+
             if (ev.packet.msgType != _msgType) continue;
-            // Try to match against registered games.
             for (uint8_t g = 0; g < _mgr.count(); g++) {
                 const LightAir_Game& candidate = _mgr.game(g);
                 uint8_t token = 0;
@@ -333,15 +345,16 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
                     _game    = &candidate;
                     _gameIdx = g;
                     if (token != 0) _radio.setSessionToken(token);
-                    // Show "Game ready" prompt.
-                    char buf[24];
-                    snprintf(buf, sizeof(buf), "%.16s", candidate.name);
-                    _display.clear();
-                    _display.setColor(true);
-                    _display.print(0, 0,                              "Game ready:");
-                    _display.print(0, DisplayDefaults::FONT_HEIGHT,   buf);
-                    printLegend("O:Join  X:Cancel", DisplayDefaults::BOTTOM_LINE_Y);
-                    _display.flush();
+                    if (!joined) {
+                        char buf[24];
+                        snprintf(buf, sizeof(buf), "%.16s", candidate.name);
+                        _display.clear();
+                        _display.setColor(true);
+                        _display.print(0, 0,                             "Game ready:");
+                        _display.print(0, DisplayDefaults::FONT_HEIGHT,  buf);
+                        printLegend("O:Join  X:Cancel", DisplayDefaults::BOTTOM_LINE_Y);
+                        _display.flush();
+                    }
                     break;
                 }
             }
@@ -781,14 +794,14 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
 MenuResult LightAir_GameSetupMenu::runPreStart() {
     shareConfig();
 
-    // Reset discovery state; include self from the start.
     _seenCount = 0;
     recordSeen(_radio.playerId());
+    _countdownSecs = GameDefaults::COUNTDOWN_DEFAULT_S;
 
-    uint8_t  vScroll = 0, hScroll = 0;
+    uint8_t  vScroll = 0;
     uint32_t nextBroadcast = 0;
 
-    renderSummary(vScroll, hScroll);
+    renderSummary(vScroll);
 
     while (true) {
         // Broadcast MSG_ROSTER periodically so other devices discover us.
@@ -797,19 +810,19 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
             nextBroadcast = millis() + GameDefaults::PRESTART_BROADCAST_MS;
         }
 
-        // Collect incoming MSG_ROSTER replies; refresh summary when count grows.
+        // Collect MSG_ROSTER and MSG_JOIN; refresh summary when player count grows.
         const RadioReport& rep = _radio.poll();
         uint8_t prevCount = _seenCount;
         for (uint8_t i = 0; i < rep.count; i++) {
             const RadioEvent& ev = rep.events[i];
             if (ev.type != RadioEventType::MessageReceived) continue;
-            if (ev.packet.msgType != GameDefaults::MSG_ROSTER) continue;
+            if (ev.packet.msgType != GameDefaults::MSG_ROSTER &&
+                ev.packet.msgType != GameDefaults::MSG_JOIN) continue;
             recordSeen(ev.packet.senderId);
         }
         if (_seenCount != prevCount)
-            renderSummary(vScroll, hScroll);
+            renderSummary(vScroll);
 
-        // Non-blocking key poll.
         const InputReport& inp = _input.poll();
         for (uint8_t i = 0; i < inp.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = inp.keyEvents[i];
@@ -817,22 +830,26 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
             if (ke.state != KeyState::RELEASED &&
                 ke.state != KeyState::RELEASED_HELD) continue;
             switch (ke.key) {
-                case 'A':
+                case 'A': {
+                    uint8_t payload = _countdownSecs / 10;
+                    _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, &payload, 1);
+                    runCountdownSequence(_countdownSecs);
                     commitToRunner();
                     return MenuResult::Confirmed;
+                }
                 case 'B':
                     return MenuResult::Cancelled;
                 case '^':
-                    if (vScroll > 0) { vScroll--; renderSummary(vScroll, hScroll); }
+                    if (vScroll > 0) { vScroll--; renderSummary(vScroll); }
                     break;
                 case 'V':
-                    vScroll++; renderSummary(vScroll, hScroll);
+                    vScroll++; renderSummary(vScroll);
                     break;
                 case '<':
-                    if (hScroll > 0) { hScroll--; renderSummary(vScroll, hScroll); }
+                    if (_countdownSecs >= 10) { _countdownSecs -= 10; renderSummary(vScroll); }
                     break;
                 case '>':
-                    hScroll++; renderSummary(vScroll, hScroll);
+                    if (_countdownSecs <= 290) { _countdownSecs += 10; renderSummary(vScroll); }
                     break;
             }
         }
@@ -873,7 +890,7 @@ bool LightAir_GameSetupMenu::wasSeen(uint8_t id) const {
     return false;
 }
 
-void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
+void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll) {
     _display.clear();
     _display.setColor(true);
 
@@ -902,8 +919,7 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
         _display.print(0, 0, buf);
     }
 
-    // Rows 1–2: totem entries (from _totemAssignment, non----- slots)
-    // Build the flat totem entry list.
+    // Rows 1–2: totem entries (from _totemAssignment, non-NONE slots)
     struct TotemEntry { uint8_t slot; uint8_t val; };
     TotemEntry entries[TotemDefs::MAX_TOTEMS];
     uint8_t    entryCount = 0;
@@ -913,7 +929,6 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
         entries[entryCount++] = { s, v };
     }
 
-    // Show 2 rows of totem entries with vertical scroll.
     for (uint8_t row = 0; row < 2; row++) {
         uint8_t ei = vScroll + row;
         if (ei >= entryCount) break;
@@ -922,18 +937,12 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
         uint8_t id = TotemDefs::idFromIndex(te.slot);
         bool seen  = wasSeen(id);
 
-        // Build full line then horizontal-scroll.
         char full[48];
         uint8_t off = 0;
-
-        // Role label
         const char* label = totemRoleLabel(te.val);
         off += snprintf(full + off, sizeof(full) - off, "%s: %s %s",
-                        label,
-                        TotemDefs::totemShort[te.slot],
-                        seen ? "\x7F" : "X");  // ✓ (0x7F or similar) vs X
+                        label, TotemDefs::totemShort[te.slot], seen ? "\x7F" : "X");
 
-        // Team annotation based on roleId
         uint8_t team = 0xFF;
         switch (te.val) {
             case TotemRoleId::BASE_O: case TotemRoleId::FLAG_O: team = 0; break;
@@ -942,12 +951,16 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll, uint8_t hScroll) {
         if (team != 0xFF)
             off += snprintf(full + off, sizeof(full) - off, " T%u", team);
 
-        // Horizontal scroll: clip to 18 chars
-        constexpr uint8_t ROW_CHARS = 18;
-        uint8_t start = (hScroll < strlen(full)) ? hScroll : 0;
-        char rowBuf[ROW_CHARS + 2];
-        snprintf(rowBuf, sizeof(rowBuf), "%s", full + start);
+        char rowBuf[20];
+        snprintf(rowBuf, sizeof(rowBuf), "%s", full);
         _display.print(0, DisplayDefaults::FONT_HEIGHT * (row + 1), rowBuf);
+    }
+
+    // Second-last line: countdown, adjustable with < >.
+    {
+        char buf[20];
+        snprintf(buf, sizeof(buf), "<> Cdwn: %us", _countdownSecs);
+        _display.print(0, DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT, buf);
     }
 
     printLegend("O:Start  X:Back", DisplayDefaults::BOTTOM_LINE_Y);
@@ -987,6 +1000,25 @@ void LightAir_GameSetupMenu::commitToRunner() {
         _runner.addToRoster(id);
         _runner.addTotem(id, roleId);
     }
+}
+
+/* =========================================================
+ *   COUNTDOWN SEQUENCE
+ * ========================================================= */
+
+void LightAir_GameSetupMenu::runCountdownSequence(uint8_t secs) {
+    if (secs > 0) {
+        uint32_t endTime = millis() + (uint32_t)secs * 1000;
+        while (millis() < endTime) {
+            uint32_t remaining = (endTime - millis() + 999) / 1000;
+            char buf[24];
+            snprintf(buf, sizeof(buf), "Starting in %us", (unsigned)remaining);
+            showMessage2("Get ready!", buf, "", "");
+            delay(200);
+        }
+    }
+    showMessage2("GO!", "", "", "");
+    delay(500);
 }
 
 /* =========================================================
