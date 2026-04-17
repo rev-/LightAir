@@ -95,8 +95,9 @@ enum FlagEventType : uint8_t {
 };
 
 // ---- Proximity thresholds ----
-static constexpr int8_t NEAR_RSSI_THRESHOLD = -60;  // ~2 m: base proximity (respawn + scoring)
-static constexpr int8_t FLAG_RSSI_THRESHOLD  = -65;  // ~3-4 m: flag pickup zone
+static constexpr int8_t  NEAR_RSSI_THRESHOLD = -60;  // ~2 m: base proximity (respawn + scoring)
+static constexpr int8_t  FLAG_RSSI_THRESHOLD  = -65;  // ~3-4 m: flag pickup zone
+static constexpr uint32_t HIT_IMMUNITY_MS     = 3000;
 
 // ---- Config variables ----
 static int startLives   = 3;
@@ -123,6 +124,7 @@ static uint32_t respawnAt;
 static bool     canRespawn;
 static bool     triggerWasActive = false;
 static uint32_t releaseAt        = 0;
+static uint32_t litAt[PlayerDefs::MAX_PLAYER_ID];
 
 static bool     hasEnemyFlag;
 static uint8_t  enemyFlagCarrierId;  // 0xFF = flag available at its totem
@@ -215,6 +217,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
     lastTickAt         = millis();
     triggerWasActive   = false;
     releaseAt          = 0;
+    memset(litAt, 0, sizeof(litAt));
     uiCtrl             = ui;
 
     myTeam = runner.teamOf(radio.playerId());
@@ -226,11 +229,17 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
 }
 
 // ---- DirectRadioRule conditions ----
+static bool notImmune(const RadioPacket& pkt) {
+    return pkt.senderId >= PlayerDefs::MAX_PLAYER_ID
+        || litAt[pkt.senderId] == 0
+        || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
+}
+
 static bool litAndTakenAndValid(const RadioPacket& pkt) {
-    return lives > 1 && (pkt.team != myTeam || friendlyFire);
+    return lives > 1 && (pkt.team != myTeam || friendlyFire) && notImmune(pkt);
 }
 static bool litAndShoneAndValid(const RadioPacket& pkt) {
-    return lives <= 1 && (pkt.team != myTeam || friendlyFire);
+    return lives <= 1 && (pkt.team != myTeam || friendlyFire) && notImmune(pkt);
 }
 static bool litButFriendly(const RadioPacket& pkt) {
     return pkt.team == myTeam && !friendlyFire;
@@ -246,8 +255,14 @@ static bool flagEventScored(const RadioPacket& pkt) {
 }
 
 // ---- DirectRadioRule actions ----
-static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
-static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
+static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+}
+static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+}
 
 static void onFlagEventTaken(const RadioPacket& pkt,
                               LightAir_DisplayCtrl&, GameOutput& out) {
@@ -378,6 +393,7 @@ static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
     lives      = startLives;
     energy     = startEnergy;
     canRespawn = false;
+    memset(litAt, 0, sizeof(litAt));
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
 }

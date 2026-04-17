@@ -73,7 +73,8 @@ enum ReplySubType : uint8_t {
 // ---- RSSI proximity threshold ----
 // Packets from a BASE with RSSI below this value are ignored for respawn.
 // -60 dBm corresponds to approximately 2 m indoors at 2.4 GHz.
-static constexpr int8_t NEAR_RSSI_THRESHOLD = -60;
+static constexpr int8_t  NEAR_RSSI_THRESHOLD = -60;
+static constexpr uint32_t HIT_IMMUNITY_MS    = 3000;
 
 // ---- Config variables ----
 static int startLives   = 3;
@@ -99,6 +100,7 @@ static uint32_t respawnAt;    // millis() before which BASE beacons are ignored
 static bool     canRespawn;   // set true by doOutGame when timer + RSSI condition met
 static bool     triggerWasActive = false;
 static uint32_t releaseAt        = 0;
+static uint32_t litAt[PlayerDefs::MAX_PLAYER_ID];
 static uint8_t  myTeam;       // 0=O, 1=X; loaded from runner in onBegin
 static uint8_t  teamMap[PlayerDefs::MAX_PLAYER_ID];  // per-player team index; filled from config blob
 
@@ -168,6 +170,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
     lastTickAt       = millis();
     triggerWasActive = false;
     releaseAt        = 0;
+    memset(litAt, 0, sizeof(litAt));
 
     myTeam = runner.teamOf(radio.playerId());
 
@@ -178,19 +181,31 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
 }
 
 // ---- DirectRadioRule conditions ----
+static bool notImmune(const RadioPacket& pkt) {
+    return pkt.senderId >= PlayerDefs::MAX_PLAYER_ID
+        || litAt[pkt.senderId] == 0
+        || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
+}
+
 static bool litAndTakenAndValid(const RadioPacket& pkt) {
-    return lives > 1 && (pkt.team != myTeam || friendlyFire);
+    return lives > 1 && (pkt.team != myTeam || friendlyFire) && notImmune(pkt);
 }
 static bool litAndShoneAndValid(const RadioPacket& pkt) {
-    return lives <= 1 && (pkt.team != myTeam || friendlyFire);
+    return lives <= 1 && (pkt.team != myTeam || friendlyFire) && notImmune(pkt);
 }
 static bool litButFriendly(const RadioPacket& pkt) {
     return pkt.team == myTeam && !friendlyFire;
 }
 
 // ---- DirectRadioRule actions ----
-static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
-static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
+static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+}
+static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+}
 
 static void onPointReport(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
     if (isMyTeammate(pkt.senderId))
@@ -272,6 +287,7 @@ static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
     lives      = startLives;
     energy     = startEnergy;
     canRespawn = false;
+    memset(litAt, 0, sizeof(litAt));
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
 }

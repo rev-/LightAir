@@ -1,4 +1,5 @@
 #include <LightAir.h>
+#include <string.h>
 #include "GameTypeIds.h"
 
 // ================================================================
@@ -57,6 +58,8 @@ using RadioMsg::MSG_LIT;           // 0x10
 using RadioMsg::MSG_SCORE_COLLECT; // 0x12
 enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3 };
 
+static constexpr uint32_t HIT_IMMUNITY_MS = 3000;
+
 // ---- Config variables ----
 // default value, if not changed in startup menu
 static int startLives   = 3;     // lives at start / after respawn
@@ -78,6 +81,7 @@ static uint32_t  respawnAt;   // millis() when respawn fires
 static uint32_t  lastTickAt;  // millis() of last per-second decrement
 static bool      triggerWasActive = false;
 static uint32_t  releaseAt        = 0;
+static uint32_t  litAt[PlayerDefs::MAX_PLAYER_ID];
 
 // ---- Config vars (startup menu) ----
 // all vars must be int, 
@@ -106,11 +110,23 @@ static const MonitorVar monitorVars[] = {
 
 // ---- DirectRadioRules — incoming message handlers ----
 
-static bool litAndTaken (const RadioPacket&) { return lives > 1;  }
-static bool litAndShone (const RadioPacket&) { return lives <= 1; }
+static bool notImmune(const RadioPacket& pkt) {
+    return pkt.senderId >= PlayerDefs::MAX_PLAYER_ID
+        || litAt[pkt.senderId] == 0
+        || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
+}
 
-static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
-static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
+static bool litAndTaken(const RadioPacket& pkt) { return lives > 1  && notImmune(pkt); }
+static bool litAndShone(const RadioPacket& pkt) { return lives <= 1 && notImmune(pkt); }
+
+static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+}
+static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+}
 
 static const DirectRadioRule directRadioRules[] = {
     //  state     msgType   condition      replySubType  onReceive
@@ -156,6 +172,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
     lastTickAt       = millis();
     triggerWasActive = false;
     releaseAt        = 0;
+    memset(litAt, 0, sizeof(litAt));
 }
 
 // ---- Shared per-second ticker (call from every active-state behavior) ----
@@ -193,6 +210,7 @@ static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
 static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
     lives  = startLives;
     energy = startEnergy;
+    memset(litAt, 0, sizeof(litAt));
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
 }
