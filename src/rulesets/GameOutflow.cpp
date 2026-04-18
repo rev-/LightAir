@@ -141,16 +141,29 @@ static void onReplyTaken(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::Taken);
 }
-static void onReplyShone(const RadioPacket&, const RadioPacket&,
-                         LightAir_DisplayCtrl&, GameOutput& out) {
-    energy += startEnergy;   // uncapped reward for eliminating another player
+
+static void onReplyShone(const RadioPacket& reply, const RadioPacket&,
+                         LightAir_DisplayCtrl& disp, GameOutput& out) {
+    energy += startEnergy;
     points += 1;
+    char buf[12];
+    const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
+                       ? PlayerDefs::playerShort[reply.senderId] : "???";
+    snprintf(buf, sizeof(buf), "%s LIT", name);
+    disp.showMessage(buf, 2000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
 }
-static void onReplyDown(const RadioPacket&, const RadioPacket&,
-                         LightAir_DisplayCtrl&, GameOutput& out) {
-    out.ui.trigger(LightAir_UICtrl::UIEvent::AlreadyDown);
+
+static void onReplyDown(const RadioPacket& reply, const RadioPacket&,
+                         LightAir_DisplayCtrl& disp, GameOutput& out) {
+    char buf[12];
+    const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
+                       ? PlayerDefs::playerShort[reply.senderId] : "???";
+    snprintf(buf, sizeof(buf), "%s is OUT", name);
+    disp.showMessage(buf, 2000);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
 }
+
 static const ReplyRadioRule replyRadioRules[] = {
     //  activeInStateMask               eventType                       subType       condition  onReply
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN, nullptr, onReplyTaken },
@@ -261,7 +274,7 @@ static void doInGame(const InputReport& inp, const RadioReport&,
     tickGameTime();
     tickDrain();
 
-    constexpr uint8_t REPS = 10;
+    constexpr uint8_t REPS = 20;
 
     // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
     EnlightResult r = enlightPtr->poll();
