@@ -8,7 +8,8 @@ LightAir_DisplayCtrl::LightAir_DisplayCtrl(LightAir_Display& display)
 : _display(display),
   _setCount(0),
   _selectedSet(0),
-  _activeSet(0)
+  _activeSet(0),
+  _pendingClear(false)
 {
     for (uint8_t i = 0; i < DisplayDefaults::TRAY_MAX_MESSAGES; i++) {
         _tray[i].active = false;
@@ -41,7 +42,7 @@ void LightAir_DisplayCtrl::activateBindingSet(uint8_t setId) {
     if (setId < _setCount) {
         _activeSet = setId;
         _sets[setId].locked = true;
-        _display.clear();
+        _pendingClear = true;
     }
 }
 
@@ -139,8 +140,24 @@ void LightAir_DisplayCtrl::clearTray() {
  * ========================================================= */
 
 void LightAir_DisplayCtrl::update() {
-    BindingSet& set = _sets[_activeSet];
+    if (_pendingClear) {
+        _display.clear();
+        // Force every binding in the new active set to redraw from scratch.
+        BindingSet& s = _sets[_activeSet];
+        for (uint8_t i = 0; i < s.count; i++) {
+            if (s.bindings[i].type == TYPE_STRING)
+                s.bindings[i].lastText[0] = '\0';
+            else
+                s.bindings[i].lastValue = INT32_MIN;
+        }
+        // Any tray message already queued must be redrawn on the fresh buffer.
+        for (uint8_t i = 0; i < DisplayDefaults::TRAY_MAX_MESSAGES; i++) {
+            if (_tray[i].active) _tray[i].dirty = true;
+        }
+        _pendingClear = false;
+    }
 
+    BindingSet& set = _sets[_activeSet];
     for (uint8_t i = 0; i < set.count; i++) {
         renderBinding(set.bindings[i]);
     }
