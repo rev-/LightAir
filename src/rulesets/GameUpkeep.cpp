@@ -431,7 +431,6 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             out.radio.sendTo(r.id, MSG_LIT);
     }
 
-    constexpr uint8_t REPS = 4;
     bool triggerActive = false;
 
     for (uint8_t i = 0; i < inp.buttonCount; i++) {
@@ -442,8 +441,8 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             if (energy > 0) {
                 energy--;
                 energySpent++;
-                enlightPtr->run(REPS);
-                out.ui.triggerEnlight(REPS * EnlightDefaults::MS_PER_REP);
+                enlightPtr->run();
+                out.ui.triggerEnlight(enlightPtr->cycleTime());
             }
         }
     }

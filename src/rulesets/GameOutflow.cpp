@@ -274,8 +274,6 @@ static void doInGame(const InputReport& inp, const RadioReport&,
     tickGameTime();
     tickDrain();
 
-    constexpr uint8_t REPS = 20;
-
     // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
     EnlightResult r = enlightPtr->poll();
     if (r.status == EnlightStatus::PLAYER_HIT)
@@ -288,8 +286,8 @@ static void doInGame(const InputReport& inp, const RadioReport&,
             if (energy > 0) {
                 energy--;
                 energySpent++;
-                enlightPtr->run(REPS);
-                out.ui.triggerEnlight(REPS * EnlightDefaults::MS_PER_REP);
+                enlightPtr->run();
+                out.ui.triggerEnlight(enlightPtr->cycleTime());
             }
         }
     }

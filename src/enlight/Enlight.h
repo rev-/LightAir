@@ -88,15 +88,16 @@ public:
     bool isActive() const { return _active; }
 
     // Set cooldown time, in milliseconds
-    void setCooldown(uint32_t ms) { _cooldown = ms; }
+    void setCooldown(int64_t ms) { _cooldown = ms * 1000; }
 
     // Set repetitions  = number of DMA cycles before classify.
     // 1 cycle = _periodsPerCycle sine periods (13 at V6R2 defaults = 7.8 ms).
     void setRepetitions(uint32_t reps) { _repetitions = reps; }
+    uint32_t cycleTime() const { return _repetitions*EnlightDefaults::MS_PER_REP; }
 
     // Non-blocking start
     // Returns false if already running.
-    bool run(uint32_t repetitions);
+    bool run();
 
     // Poll for result. Call from state machine on every tick.
     //
@@ -151,8 +152,8 @@ private:
     uint32_t    _adcConvsPerCycle = 0;
 
     //Cooldown
-    uint32_t    _cooldown          = 0;
-    uint32_t    _cooldownStart     = 0;
+    int64_t    _cooldown           = 0;
+    int64_t    _cooldownStart      = 0;
 
     //Repetitions
     uint32_t    _repetitions        = 10;
@@ -199,10 +200,11 @@ private:
     GridClassifier  _grid;
 
     // Result -- written by dmaTask (core 0), read-cleared by poll() (any core).
-    portMUX_TYPE    _mux          = portMUX_INITIALIZER_UNLOCKED;
-    EnlightResult   _latestResult = {};
-    volatile bool   _complete     = false;
-    bool            _active       = false;  // set by run(), cleared by poll() after result consumed
+    portMUX_TYPE    _mux                = portMUX_INITIALIZER_UNLOCKED;
+    EnlightResult   _latestResult       = {};
+    volatile bool   _complete           = false;
+    bool            _active             = false;  // set by run(), cleared by poll() after result consumed
+    bool            _resultDelivered    = false;
 
     uint32_t        _repsRemaining = 0;
     bool            _firstCycle    = false;  // true on the first DMA cycle after AFE power-on

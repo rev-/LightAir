@@ -236,9 +236,9 @@ bool Enlight::begin() {
 /* ============================================================
  *   run()  +  poll()
  * ============================================================ */
-bool Enlight::run(uint32_t repetitions = _repetitions) {
-    if (_active||repetitions==0) return false;
-    _repsRemaining=repetitions;
+bool Enlight::run() {
+    if (_active) return false;
+    _repsRemaining=_repetitions;
     taskENTER_CRITICAL(&_mux);
     _complete=false;
     _latestResult={};
@@ -246,6 +246,7 @@ bool Enlight::run(uint32_t repetitions = _repetitions) {
     _rout=_gout=_bout=_rnear=_gnear=_bnear=_rawsum=0;
     _arrayiter=_satCount=0;
     if (_satPhaseCount) memset(_satPhaseCount, 0, _goertzPeriod * sizeof(uint16_t));
+    _resultDelivered = false;
     _active=true;
     _firstCycle=true;
     gpio_set_level((gpio_num_t)_cfg.afeOn,1);
@@ -260,15 +261,27 @@ EnlightRawMeasure Enlight::rawMeasure() const {
 EnlightResult Enlight::poll() {
     if (!_active) return {EnlightStatus::IDLE,0};
     if (!_complete) return {EnlightStatus::RUNNING,0};
-    if (millis()-_cooldownStart < _cooldown) return {EnlightStatus::COOLDOWN,0};
-    EnlightResult r;
-    taskENTER_CRITICAL(&_mux);
-    r=_latestResult;
-    _latestResult={};
-    taskEXIT_CRITICAL(&_mux);
+
+    if (!_resultDelivered) {
+        EnlightResult r;
+        taskENTER_CRITICAL(&_mux);
+        r=_latestResult;
+        _latestResult={};
+        taskEXIT_CRITICAL(&_mux);
+        if (_cooldown == 0) {
+            _active=false;
+        } else {
+            _resultDelivered=true;
+            _cooldownStart=esp_timer_get_time();
+        }
+        return r;
+    }
+
+    if (esp_timer_get_time()-_cooldownStart < _cooldown) return {EnlightStatus::COOLDOWN,0};
+
     _active=false;
-    _cooldownStart = millis();
-    return r;
+    _resultDelivered=false;
+    return {EnlightStatus::IDLE,0};
 }
 
 /* ============================================================

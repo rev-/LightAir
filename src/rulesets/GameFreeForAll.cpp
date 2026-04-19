@@ -250,7 +250,6 @@ static void doInGame(const InputReport& inp, const RadioReport&,
         out.radio.sendTo(r.id, MSG_LIT);
     // NO_HIT / LOW_POW: missed shot — no radio message.
 
-    constexpr uint8_t REPS = 4;
     bool triggerActive = false;
 
     for (uint8_t i = 0; i < inp.buttonCount; i++) {
@@ -261,8 +260,8 @@ static void doInGame(const InputReport& inp, const RadioReport&,
             if (energy > 0) {
                 energy--;
                 energySpent++;
-                enlightPtr->run(REPS);
-                out.ui.triggerEnlight(REPS * EnlightDefaults::MS_PER_REP);
+                enlightPtr->run();
+                out.ui.triggerEnlight(enlightPtr->cycleTime());
             }
         }
     }
