@@ -34,10 +34,6 @@
 // Used to distinguish reflective targets from diffusing surfaces.
 #define CAL_KEY_MAX_NEAR_WHITE  "max_near_w"   // Max Near White (uint32)
 #define CAL_KEY_MAX_FAR_WHITE   "max_far_w"    // Max Far White  (uint32)
-// Far hit-boxes in (outr, outang) space.
-// [0]=outr_max [1]=outr_min [2]=outang_max [3]=outang_min
-// Key "hb_N_K": N=player(1-based), K=corner 0..3. Sentinel -10 = inactive.
-#define CAL_KEY_HITBOX_FMT      "hb_%d_%d"
 #define CALIB_MAX_PLAYERS       16
 
 // ---------------------------------------------------------------
@@ -65,7 +61,6 @@ struct EnlightCalib {
     uint32_t    phaseOff;                     // sintab phase offset (LED excitation delay, in samples)
     float       rfact, bfact;
     float       nearRatioMax;
-    float       hitBox[CALIB_MAX_PLAYERS][4]; // sentinel -10 = inactive
     // Step 3 — white diffusing surface calibration
     uint32_t    maxNearWhite; // Max Near White: peak near-channel power over white-wall sweep
     uint32_t    maxFarWhite;  // Max Far White:  peak far-channel  power over white-wall sweep

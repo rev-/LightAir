@@ -185,7 +185,7 @@ namespace EnlightDefaults {
     constexpr float    PDM_AMP_OFFSET = 0.1f;
     constexpr int      AFE_ON           = PLAYER_AFE_ON;
     constexpr uint8_t  TASK_CORE        = 0;
-    constexpr uint16_t MS_PER_REP       = 8;    // hardware constant: ms per enlight.run() repetition
+    constexpr uint16_t MS_PER_REP       = 8;    // tested ms per enlight.run() repetition
     // AFE needs ~3 sine periods to settle after power-on.
     // 3 × (1 / 1667 Hz) ≈ 1800 µs; 2000 µs gives a small margin.
     constexpr uint32_t AFE_STARTUP_MICROS = 2000;

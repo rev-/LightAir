@@ -41,6 +41,7 @@ enum class EnlightStatus : uint8_t {
     PLAYER_HIT  = 4,  // far target; id = player index (1-based)
     NEAR        = 5,  // near object; id = near-target colour id
                       //   (near hit-box grid not yet defined; id = 0 for now)
+    COOLDOWN    = 6,  // cooldown period after a hit
 };
 
 struct EnlightResult {
@@ -86,8 +87,14 @@ public:
     // Non-destructive: does not clear the result. Use this for loop conditions.
     bool isActive() const { return _active; }
 
-    // Non-blocking start. repetitions = number of DMA cycles before classify.
+    // Set cooldown time, in milliseconds
+    void setCooldown(uint32_t ms) { _cooldown = ms; }
+
+    // Set repetitions  = number of DMA cycles before classify.
     // 1 cycle = _periodsPerCycle sine periods (13 at V6R2 defaults = 7.8 ms).
+    void setRepetitions(uint32_t reps) { _repetitions = reps; }
+
+    // Non-blocking start
     // Returns false if already running.
     bool run(uint32_t repetitions);
 
@@ -142,6 +149,13 @@ private:
     float       _actualFreqHz    = 0.0f;
     uint32_t    _periodsPerCycle  = 0;
     uint32_t    _adcConvsPerCycle = 0;
+
+    //Cooldown
+    uint32_t    _cooldown          = 0;
+    uint32_t    _cooldownStart     = 0;
+
+    //Repetitions
+    uint32_t    _repetitions        = 10;
 
     // Correlator kernel. Cosine = sintab[(idx+_cosOffset)%_goertzPeriod]; no second array.
     int32_t*    _sintab    = nullptr;

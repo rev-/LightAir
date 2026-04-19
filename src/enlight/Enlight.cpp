@@ -236,7 +236,7 @@ bool Enlight::begin() {
 /* ============================================================
  *   run()  +  poll()
  * ============================================================ */
-bool Enlight::run(uint32_t repetitions) {
+bool Enlight::run(uint32_t repetitions = _repetitions) {
     if (_active||repetitions==0) return false;
     _repsRemaining=repetitions;
     taskENTER_CRITICAL(&_mux);
@@ -260,12 +260,14 @@ EnlightRawMeasure Enlight::rawMeasure() const {
 EnlightResult Enlight::poll() {
     if (!_active) return {EnlightStatus::IDLE,0};
     if (!_complete) return {EnlightStatus::RUNNING,0};
+    if (millis()-_cooldownStart < _cooldown) return {EnlightStatus::COOLDOWN,0};
     EnlightResult r;
     taskENTER_CRITICAL(&_mux);
     r=_latestResult;
     _latestResult={};
     taskEXIT_CRITICAL(&_mux);
     _active=false;
+    _cooldownStart = millis();
     return r;
 }
 
