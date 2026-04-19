@@ -191,6 +191,9 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
     lastTickAt      = millis();
     lastDrainAt     = millis();
     drainIntervalMs = (drainRate > 0) ? (10000u / (uint32_t)drainRate) : 1000u;
+
+    enlightPtr->setCooldown(20);
+    enlightPtr->setRepetitions(20);
 }
 
 // ---- Shared per-second game-time ticker ----

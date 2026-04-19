@@ -321,7 +321,7 @@ void EnlightCalibRoutine::step4() {
  * ============================================================ */
 
 bool EnlightCalibRoutine::runOne(EnlightRawMeasure& out) {
-    _e.run(REPS);
+    _e.run();
     while (_e.poll().status == EnlightStatus::RUNNING)
         delay(1);
     out = _e.rawMeasure();
