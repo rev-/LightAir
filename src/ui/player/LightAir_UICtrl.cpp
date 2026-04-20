@@ -16,6 +16,9 @@ LightAir_UICtrl::_actionTable[(uint8_t)UIEvent::Count] = {
   // Taken
   { {75,0,0,0}, 1, {4000,0,0,0}, {200,0,0,0}, { {0,255,0},{0,0,0},{0,0,0},{0,0,0} }, 2 },
 
+  // GotLit — 2-step descending orange; receiver absorbed a hit but survived
+  { {100,100,0,0}, 2, {2800,1800,0,0}, {230,150,0,0}, { {255,100,0},{160,40,0},{0,0,0},{0,0,0} }, 2 },
+
   // Immune — 2-step descending tones; blue signals active shield
   { {150,150,0,0}, 2, {1800,1200,0,0}, {180,120,0,0}, { {0,128,255},{0,0,128},{0,0,0},{0,0,0} }, 2 },
 

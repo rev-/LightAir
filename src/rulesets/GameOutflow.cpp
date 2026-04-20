@@ -120,9 +120,10 @@ static bool litAndTaken(const RadioPacket&) { return energy > hitDmg; }
 static bool litAndShone(const RadioPacket&) { return energy <= hitDmg; }
 
 // ---- DirectRadioRule actions ----
-static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) {
+static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput& out) {
     energy -= hitDmg;
     if (energy < 0) energy = 0;
+    out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
 static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) {
     energy       = 0;

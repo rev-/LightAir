@@ -19,6 +19,7 @@ public:
     Enlight,
     Lit,
     Taken,
+    GotLit,
     Immune,
     Friend,
     AlreadyDown,

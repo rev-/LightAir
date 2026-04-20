@@ -204,9 +204,10 @@ static bool litAndShone (const RadioPacket& pkt) { return lives <= 1 && notImmun
 static bool litButImmune(const RadioPacket& pkt) { return !notImmune(pkt); }
 
 // ---- DirectRadioRule actions ----
-static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput& out) {
     lives--;
     if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+    out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
 static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
     lives--;
