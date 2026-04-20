@@ -120,7 +120,7 @@ static bool litAndTaken(const RadioPacket&) { return energy > hitDmg; }
 static bool litAndShone(const RadioPacket&) { return energy <= hitDmg; }
 
 // ---- DirectRadioRule actions ----
-static void onLitTaken(const RadioPacket& reply, LightAir_DisplayCtrl&, GameOutput& out) {
+static void onLitTaken(const RadioPacket& reply, LightAir_DisplayCtrl& disp, GameOutput& out) {
     energy -= hitDmg;
     if (energy < 0) energy = 0;
     const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
@@ -130,7 +130,7 @@ static void onLitTaken(const RadioPacket& reply, LightAir_DisplayCtrl&, GameOutp
     disp.showMessage(buf, 2000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
-static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) {
+static void onLitShone(const RadioPacket& reply, LightAir_DisplayCtrl& disp, GameOutput&) {
     energy       = 0;
     pendingShone = true;
     const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
@@ -249,7 +249,7 @@ static bool readyToRespawn(const InputReport&, const RadioReport&) {
 }
 
 // ---- Transition actions ----
-static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
+static void onShone(LightAir_DisplayCtrl&, GameOutput&) {
     shoneTimes++;
     pendingShone = false;
     respawnAt    = millis() + (uint32_t)respawnSecs * 1000;
