@@ -130,7 +130,7 @@ static void onLitTaken(const RadioPacket& reply, LightAir_DisplayCtrl& disp, Gam
     disp.showMessage(buf, 2000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
-static void onLitShone(const RadioPacket& reply, LightAir_DisplayCtrl& disp, GameOutput&) {
+static void onLitShone(const RadioPacket& reply, LightAir_DisplayCtrl& disp, GameOutput& out) {
     energy       = 0;
     pendingShone = true;
     const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
