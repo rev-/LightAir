@@ -123,6 +123,8 @@ static bool litAndShone(const RadioPacket&) { return energy <= hitDmg; }
 static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput& out) {
     energy -= hitDmg;
     if (energy < 0) energy = 0;
+    snprintf(buf, sizeof(buf), "Lit by %s", name);
+    disp.showMessage(buf, 2000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
 static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) {
@@ -241,7 +243,8 @@ static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
     shoneTimes++;
     pendingShone = false;
     respawnAt    = millis() + (uint32_t)respawnSecs * 1000;
-    disp.showMessage("Shone!", 2000);
+    snprintf(buf, sizeof(buf), "Shone by %s", name);
+    disp.showMessage(buf, 2000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Down);
 }
 static void onDepletion(LightAir_DisplayCtrl& disp, GameOutput& out) {
