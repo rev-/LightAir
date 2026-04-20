@@ -112,6 +112,9 @@ private:
     uint8_t _seenIds[MAX_DISC] = {};
     uint8_t _seenCount = 0;
 
+    // Pre-start countdown (seconds); set at entry of runPreStart, read by renderSummary.
+    uint8_t _countdownSecs = GameDefaults::COUNTDOWN_DEFAULT_S;
+
     // ---- Home / Settings ----
     void runSettingsMenu();
     void runIdSettings();
@@ -151,7 +154,8 @@ private:
     void     shareConfig();
     void     recordSeen(uint8_t id);
     bool     wasSeen(uint8_t id) const;
-    void     renderSummary(uint8_t vScroll, uint8_t hScroll);
+    void     renderSummary(uint8_t vScroll);
+    void     runCountdownSequence(uint8_t secs);
     void     commitToRunner();
 
     // ---- Shared ----

@@ -41,6 +41,7 @@ enum class EnlightStatus : uint8_t {
     PLAYER_HIT  = 4,  // far target; id = player index (1-based)
     NEAR        = 5,  // near object; id = near-target colour id
                       //   (near hit-box grid not yet defined; id = 0 for now)
+    COOLDOWN    = 6,  // cooldown period after a hit
 };
 
 struct EnlightResult {
@@ -86,10 +87,17 @@ public:
     // Non-destructive: does not clear the result. Use this for loop conditions.
     bool isActive() const { return _active; }
 
-    // Non-blocking start. repetitions = number of DMA cycles before classify.
+    // Set cooldown time, in milliseconds
+    void setCooldown(int64_t ms) { _cooldown = ms * 1000; }
+
+    // Set repetitions  = number of DMA cycles before classify.
     // 1 cycle = _periodsPerCycle sine periods (13 at V6R2 defaults = 7.8 ms).
+    void setRepetitions(uint32_t reps) { _repetitions = reps; }
+    uint32_t cycleTime() const { return _repetitions*EnlightDefaults::MS_PER_REP; }
+
+    // Non-blocking start
     // Returns false if already running.
-    bool run(uint32_t repetitions);
+    bool run();
 
     // Poll for result. Call from state machine on every tick.
     //
@@ -143,6 +151,13 @@ private:
     uint32_t    _periodsPerCycle  = 0;
     uint32_t    _adcConvsPerCycle = 0;
 
+    //Cooldown
+    int64_t    _cooldown           = 0;
+    int64_t    _cooldownStart      = 0;
+
+    //Repetitions
+    uint32_t    _repetitions        = 10;
+
     // Correlator kernel. Cosine = sintab[(idx+_cosOffset)%_goertzPeriod]; no second array.
     int32_t*    _sintab    = nullptr;
     uint32_t    _cosOffset = 0;
@@ -185,10 +200,11 @@ private:
     GridClassifier  _grid;
 
     // Result -- written by dmaTask (core 0), read-cleared by poll() (any core).
-    portMUX_TYPE    _mux          = portMUX_INITIALIZER_UNLOCKED;
-    EnlightResult   _latestResult = {};
-    volatile bool   _complete     = false;
-    bool            _active       = false;  // set by run(), cleared by poll() after result consumed
+    portMUX_TYPE    _mux                = portMUX_INITIALIZER_UNLOCKED;
+    EnlightResult   _latestResult       = {};
+    volatile bool   _complete           = false;
+    bool            _active             = false;  // set by run(), cleared by poll() after result consumed
+    bool            _resultDelivered    = false;
 
     uint32_t        _repsRemaining = 0;
     bool            _firstCycle    = false;  // true on the first DMA cycle after AFE power-on

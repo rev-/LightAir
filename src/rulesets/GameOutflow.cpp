@@ -120,13 +120,26 @@ static bool litAndTaken(const RadioPacket&) { return energy > hitDmg; }
 static bool litAndShone(const RadioPacket&) { return energy <= hitDmg; }
 
 // ---- DirectRadioRule actions ----
-static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) {
+static void onLitTaken(const RadioPacket& reply, LightAir_DisplayCtrl& disp, GameOutput& out) {
     energy -= hitDmg;
     if (energy < 0) energy = 0;
+    const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
+                   ? PlayerDefs::playerShort[reply.senderId] : "???";
+    char buf[20];
+    snprintf(buf, sizeof(buf), "Lit by %s", name);
+    disp.showMessage(buf, 2000);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
-static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) {
+static void onLitShone(const RadioPacket& reply, LightAir_DisplayCtrl& disp, GameOutput& out) {
     energy       = 0;
     pendingShone = true;
+    const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
+           ? PlayerDefs::playerShort[reply.senderId] : "???";
+    char buf[20];
+    snprintf(buf, sizeof(buf), "Shone by %s", name);
+    disp.showMessage(buf, 2000);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Down);
+    
 }
 
 static const DirectRadioRule directRadioRules[] = {
@@ -139,11 +152,28 @@ static const DirectRadioRule directRadioRules[] = {
 // ---- ReplyRadioRule handlers ----
 static void onReplyTaken(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Taken);
+}
+
+static void onReplyShone(const RadioPacket& reply, const RadioPacket&,
+                         LightAir_DisplayCtrl& disp, GameOutput& out) {
+    energy += startEnergy;
+    points += 1;
+    const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
+               ? PlayerDefs::playerShort[reply.senderId] : "???";
+    char buf[20];
+    snprintf(buf, sizeof(buf), "%s LIT", name);
+    disp.showMessage(buf, 2000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
 }
-static void onReplyShone(const RadioPacket&, const RadioPacket&,
-                         LightAir_DisplayCtrl&, GameOutput& out) {
-    energy += startEnergy;   // uncapped reward for eliminating another player
+
+static void onReplyDown(const RadioPacket& reply, const RadioPacket&,
+                         LightAir_DisplayCtrl& disp, GameOutput& out) {
+    char buf[20];
+    const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
+                       ? PlayerDefs::playerShort[reply.senderId] : "???";
+    snprintf(buf, sizeof(buf), "%s is OUT", name);
+    disp.showMessage(buf, 2000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
 }
 
@@ -151,6 +181,7 @@ static const ReplyRadioRule replyRadioRules[] = {
     //  activeInStateMask               eventType                       subType       condition  onReply
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN, nullptr, onReplyTaken },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE, nullptr, onReplyShone },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_DOWN,  nullptr, onReplyDown  },
 };
 
 // ---- Winner election rules ----
@@ -173,6 +204,9 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
     lastTickAt      = millis();
     lastDrainAt     = millis();
     drainIntervalMs = (drainRate > 0) ? (10000u / (uint32_t)drainRate) : 1000u;
+
+    enlightPtr->setCooldown(20);
+    enlightPtr->setRepetitions(20);
 }
 
 // ---- Shared per-second game-time ticker ----
@@ -215,12 +249,10 @@ static bool readyToRespawn(const InputReport&, const RadioReport&) {
 }
 
 // ---- Transition actions ----
-static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
+static void onShone(LightAir_DisplayCtrl&, GameOutput&) {
     shoneTimes++;
     pendingShone = false;
     respawnAt    = millis() + (uint32_t)respawnSecs * 1000;
-    disp.showMessage("Shone!", 2000);
-    out.ui.trigger(LightAir_UICtrl::UIEvent::Down);
 }
 static void onDepletion(LightAir_DisplayCtrl& disp, GameOutput& out) {
     depletions++;
@@ -256,25 +288,22 @@ static void doInGame(const InputReport& inp, const RadioReport&,
     tickGameTime();
     tickDrain();
 
-    constexpr uint8_t REPS = 10;
+    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
+    EnlightResult r = enlightPtr->poll();
+    if (r.status == EnlightStatus::PLAYER_HIT)
+        out.radio.sendTo(r.id, MSG_LIT);
 
     for (uint8_t i = 0; i < inp.buttonCount; i++) {
         if (inp.buttons[i].id != InputDefaults::TRIG_1_ID) continue;
         ButtonState s = inp.buttons[i].state;
         if (s == ButtonState::PRESSED || s == ButtonState::HELD) {
-            if (energy > 0) {
+            if ((energy > 0) && (enlightPtr->run())) {
                 energy--;
                 energySpent++;
-                enlightPtr->run(REPS);
-                out.ui.triggerEnlight(REPS * EnlightDefaults::MS_PER_REP);
+                out.ui.triggerEnlight(enlightPtr->cycleTime());
             }
         }
     }
-
-    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT)
-        out.radio.sendTo(r.id, MSG_LIT);
 
     // Set depletion flag if energy reached zero (from either active or passive drain),
     // unless a fatal hit already set pendingShone (mutually exclusive).
@@ -310,7 +339,7 @@ extern const LightAir_Game game_outflow = {
     /* configVars            */ Outflow::configVars,         /* configCount            */ 5,
     /* monitorVars           */ Outflow::monitorVars,        /* monitorCount           */ 8,
     /* directRadioRules      */ Outflow::directRadioRules,   /* directRadioRuleCount   */ 3,
-    /* replyRadioRules       */ Outflow::replyRadioRules,    /* replyRadioRuleCount    */ 2,
+    /* replyRadioRules       */ Outflow::replyRadioRules,    /* replyRadioRuleCount    */ 3,
     /* rules                 */ Outflow::rules,              /* ruleCount              */ 5,
     /* behaviors             */ Outflow::behaviors,          /* behaviorCount          */ 3,
     /* currentState          */ &Outflow::gState,            /* initialState           */ Outflow::IN_GAME,

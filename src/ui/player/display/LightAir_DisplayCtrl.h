@@ -126,6 +126,7 @@ private:
     };
 
     TrayMessage _tray[DisplayDefaults::TRAY_MAX_MESSAGES];
+    bool _pendingClear;
 };
 
 #endif

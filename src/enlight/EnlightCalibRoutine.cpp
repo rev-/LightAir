@@ -160,15 +160,15 @@ void EnlightCalibRoutine::step2() {
 
     const uint32_t mid = n / 2;
 
-    // Persist medians as baselines (negative values clamped to 0).
+    // Persist medians as per-cycle baselines (normalized by REPS, negative values clamped to 0).
     EnlightCalib cal;
     enlight_calib_load(cal);
-    cal.rcal     = (uint32_t)(sRF[mid] > 0 ? sRF[mid] : 0);
-    cal.gcal     = (uint32_t)(sGF[mid] > 0 ? sGF[mid] : 0);
-    cal.bcal     = (uint32_t)(sBF[mid] > 0 ? sBF[mid] : 0);
-    cal.rcalNear = (uint32_t)(sRN[mid] > 0 ? sRN[mid] : 0);
-    cal.gcalNear = (uint32_t)(sGN[mid] > 0 ? sGN[mid] : 0);
-    cal.bcalNear = (uint32_t)(sBN[mid] > 0 ? sBN[mid] : 0);
+    cal.rcal     = (uint32_t)(sRF[mid] > 0 ? sRF[mid] / REPS : 0);
+    cal.gcal     = (uint32_t)(sGF[mid] > 0 ? sGF[mid] / REPS : 0);
+    cal.bcal     = (uint32_t)(sBF[mid] > 0 ? sBF[mid] / REPS : 0);
+    cal.rcalNear = (uint32_t)(sRN[mid] > 0 ? sRN[mid] / REPS : 0);
+    cal.gcalNear = (uint32_t)(sGN[mid] > 0 ? sGN[mid] / REPS : 0);
+    cal.bcalNear = (uint32_t)(sBN[mid] > 0 ? sBN[mid] / REPS : 0);
     enlight_calib_save(cal);
 
     // Compute averages and stdevs for display.
@@ -321,7 +321,7 @@ void EnlightCalibRoutine::step4() {
  * ============================================================ */
 
 bool EnlightCalibRoutine::runOne(EnlightRawMeasure& out) {
-    _e.run(REPS);
+    _e.run();
     while (_e.poll().status == EnlightStatus::RUNNING)
         delay(1);
     out = _e.rawMeasure();

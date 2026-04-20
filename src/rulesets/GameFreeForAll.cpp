@@ -1,4 +1,5 @@
 #include <LightAir.h>
+#include <string.h>
 #include "GameTypeIds.h"
 
 // ================================================================
@@ -55,7 +56,9 @@ enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 // ---- Radio message types and reply sub-types ----
 using RadioMsg::MSG_LIT;           // 0x10
 using RadioMsg::MSG_SCORE_COLLECT; // 0x12
-enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3 };
+enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3, REPLY_IMMUNE = 4 };
+
+static constexpr uint32_t HIT_IMMUNITY_MS = 3000;
 
 // ---- Config variables ----
 // default value, if not changed in startup menu
@@ -78,6 +81,7 @@ static uint32_t  respawnAt;   // millis() when respawn fires
 static uint32_t  lastTickAt;  // millis() of last per-second decrement
 static bool      triggerWasActive = false;
 static uint32_t  releaseAt        = 0;
+static uint32_t  litAt[PlayerDefs::MAX_PLAYER_ID];
 
 // ---- Config vars (startup menu) ----
 // all vars must be int, 
@@ -106,24 +110,44 @@ static const MonitorVar monitorVars[] = {
 
 // ---- DirectRadioRules — incoming message handlers ----
 
-static bool litAndTaken (const RadioPacket&) { return lives > 1;  }
-static bool litAndShone (const RadioPacket&) { return lives <= 1; }
+static bool notImmune(const RadioPacket& pkt) {
+    return pkt.senderId >= PlayerDefs::MAX_PLAYER_ID
+        || litAt[pkt.senderId] == 0
+        || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
+}
 
-static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
-static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
+static bool litAndTaken (const RadioPacket& pkt) { return lives > 1  && notImmune(pkt); }
+static bool litAndShone (const RadioPacket& pkt) { return lives <= 1 && notImmune(pkt); }
+static bool litButImmune(const RadioPacket& pkt) { return !notImmune(pkt); }
+
+static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput& out) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+    out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
+}
+static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+}
 
 static const DirectRadioRule directRadioRules[] = {
-    //  state     msgType   condition      replySubType  onReceive
-    { IN_GAME,  MSG_LIT, litAndTaken,  REPLY_TAKEN, onLitTaken },
-    { IN_GAME,  MSG_LIT, litAndShone,  REPLY_SHONE, onLitShone },
-    { OUT_GAME, MSG_LIT, nullptr,      REPLY_DOWN,  nullptr    },
+    //  state     msgType   condition      replySubType   onReceive
+    { IN_GAME,  MSG_LIT, litAndTaken,  REPLY_TAKEN,  onLitTaken },
+    { IN_GAME,  MSG_LIT, litAndShone,  REPLY_SHONE,  onLitShone },
+    { IN_GAME,  MSG_LIT, litButImmune, REPLY_IMMUNE, nullptr    },
+    { OUT_GAME, MSG_LIT, nullptr,      REPLY_DOWN,   nullptr    },
 };
 
 // ---- ReplyRadioRules — reply and timeout handlers ----
 
 static void onReplyTaken(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
-    out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Taken);
+}
+
+static void onReplyImmune(const RadioPacket&, const RadioPacket&,
+                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
 }
 
 static void onReplyShone(const RadioPacket&, const RadioPacket&,
@@ -133,9 +157,10 @@ static void onReplyShone(const RadioPacket&, const RadioPacket&,
 }
 
 static const ReplyRadioRule replyRadioRules[] = {
-    //  activeInStateMask               eventType                       subType       condition  onReply
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN, nullptr, onReplyTaken },
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE, nullptr, onReplyShone },
+    //  activeInStateMask               eventType                       subType        condition  onReply
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election rules ----
@@ -156,6 +181,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
     lastTickAt       = millis();
     triggerWasActive = false;
     releaseAt        = 0;
+    memset(litAt, 0, sizeof(litAt));
 }
 
 // ---- Shared per-second ticker (call from every active-state behavior) ----
@@ -193,6 +219,7 @@ static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
 static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
     lives  = startLives;
     energy = startEnergy;
+    memset(litAt, 0, sizeof(litAt));
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
 }
@@ -217,19 +244,23 @@ static void doInGame(const InputReport& inp, const RadioReport&,
                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
 
-    constexpr uint8_t REPS = 4;
+    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
+    // points++ is deferred to onReplyShone when the target confirms elimination.
+    EnlightResult r = enlightPtr->poll();
+    if (r.status == EnlightStatus::PLAYER_HIT)
+        out.radio.sendTo(r.id, MSG_LIT);
+    // NO_HIT / LOW_POW: missed shot — no radio message.
+
     bool triggerActive = false;
 
     for (uint8_t i = 0; i < inp.buttonCount; i++) {
         if (inp.buttons[i].id != InputDefaults::TRIG_1_ID) continue;
         ButtonState s = inp.buttons[i].state;
         if (s == ButtonState::PRESSED || s == ButtonState::HELD) {
-            triggerActive = true;
-            if (energy > 0) {
+            if ((energy > 0) && (enlightPtr->run())) {
                 energy--;
                 energySpent++;
-                enlightPtr->run(REPS);
-                out.ui.triggerEnlight(REPS * EnlightDefaults::MS_PER_REP);
+                out.ui.triggerEnlight(enlightPtr->cycleTime());
             }
         }
     }
@@ -246,13 +277,6 @@ static void doInGame(const InputReport& inp, const RadioReport&,
         else if ((millis() - releaseAt)/1000 >= (uint32_t)rechargeSecs)
             energy = startEnergy;
     }
-
-    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
-    // points++ is deferred to onReplyShone when the target confirms elimination.
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT)
-        out.radio.sendTo(r.id, MSG_LIT);
-    // NO_HIT / LOW_POW: missed shot — no radio message.
 }
 
 static void doOutGame(const InputReport&, const RadioReport&,
@@ -282,8 +306,8 @@ extern const LightAir_Game game_ffa = {
     /* name                  */ "Free for All",
     /* configVars            */ FFA::configVars,         /* configCount            */ 5,
     /* monitorVars           */ FFA::monitorVars,        /* monitorCount           */ 8,
-    /* directRadioRules      */ FFA::directRadioRules,   /* directRadioRuleCount   */ 3,
-    /* replyRadioRules       */ FFA::replyRadioRules,    /* replyRadioRuleCount    */ 2,
+    /* directRadioRules      */ FFA::directRadioRules,   /* directRadioRuleCount   */ 4,
+    /* replyRadioRules       */ FFA::replyRadioRules,    /* replyRadioRuleCount    */ 3,
     /* rules                 */ FFA::rules,              /* ruleCount              */ 4,
     /* behaviors             */ FFA::behaviors,          /* behaviorCount          */ 3,
     /* currentState          */ &FFA::gState,            /* initialState           */ FFA::IN_GAME,

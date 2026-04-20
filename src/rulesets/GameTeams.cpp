@@ -68,12 +68,14 @@ enum ReplySubType : uint8_t {
     REPLY_SHONE  = 2,
     REPLY_DOWN   = 3,
     REPLY_FRIEND = 4,
+    REPLY_IMMUNE = 5,
 };
 
 // ---- RSSI proximity threshold ----
 // Packets from a BASE with RSSI below this value are ignored for respawn.
 // -60 dBm corresponds to approximately 2 m indoors at 2.4 GHz.
-static constexpr int8_t NEAR_RSSI_THRESHOLD = -60;
+static constexpr int8_t  NEAR_RSSI_THRESHOLD = -60;
+static constexpr uint32_t HIT_IMMUNITY_MS    = 3000;
 
 // ---- Config variables ----
 static int startLives   = 3;
@@ -99,6 +101,7 @@ static uint32_t respawnAt;    // millis() before which BASE beacons are ignored
 static bool     canRespawn;   // set true by doOutGame when timer + RSSI condition met
 static bool     triggerWasActive = false;
 static uint32_t releaseAt        = 0;
+static uint32_t litAt[PlayerDefs::MAX_PLAYER_ID];
 static uint8_t  myTeam;       // 0=O, 1=X; loaded from runner in onBegin
 static uint8_t  teamMap[PlayerDefs::MAX_PLAYER_ID];  // per-player team index; filled from config blob
 
@@ -153,18 +156,6 @@ static bool isMyTeammate(uint8_t senderId) {
     return teamMap[senderId] == myTeam;
 }
 
-// ---- UIAction for friendly-fire feedback (UIEvent::Custom1) ----
-static const LightAir_UICtrl::UIAction kFriendlyFireAction = {
-    /* durations     */ { 200, 0, 0, 0 },
-    /* stepCount     */ 1,
-    /* soundFreqs    */ { 200, 0, 0, 0 },
-    /* vibIntensity  */ { 60,  0, 0, 0 },
-    /* rgbColors     */ { {255, 100, 0}, {0,0,0}, {0,0,0}, {0,0,0} },
-    /* lcdText       */ "Teammate!",
-    /* lcdTotalMs    */ 800,
-    /* priority      */ 3,
-};
-
 // ---- onBegin ----
 static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtrl* ui,
                     const LightAir_GameRunner& runner) {
@@ -180,6 +171,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
     lastTickAt       = millis();
     triggerWasActive = false;
     releaseAt        = 0;
+    memset(litAt, 0, sizeof(litAt));
 
     myTeam = runner.teamOf(radio.playerId());
 
@@ -187,24 +179,38 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
         baseO_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_O, i);
         baseX_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_X, i);
     }
-
-    if (ui) ui->defineCustomAction(LightAir_UICtrl::UIEvent::Custom1, kFriendlyFireAction);
 }
 
 // ---- DirectRadioRule conditions ----
+static bool notImmune(const RadioPacket& pkt) {
+    return pkt.senderId >= PlayerDefs::MAX_PLAYER_ID
+        || litAt[pkt.senderId] == 0
+        || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
+}
+
 static bool litAndTakenAndValid(const RadioPacket& pkt) {
-    return lives > 1 && (pkt.team != myTeam || friendlyFire);
+    return lives > 1 && (pkt.team != myTeam || friendlyFire) && notImmune(pkt);
 }
 static bool litAndShoneAndValid(const RadioPacket& pkt) {
-    return lives <= 1 && (pkt.team != myTeam || friendlyFire);
+    return lives <= 1 && (pkt.team != myTeam || friendlyFire) && notImmune(pkt);
 }
 static bool litButFriendly(const RadioPacket& pkt) {
     return pkt.team == myTeam && !friendlyFire;
 }
+static bool litButImmune(const RadioPacket& pkt) {
+    return (pkt.team != myTeam || friendlyFire) && !notImmune(pkt);
+}
 
 // ---- DirectRadioRule actions ----
-static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
-static void onLitShone(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput&) { lives--; }
+static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput& out) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+    out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
+}
+static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    lives--;
+    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+}
 
 static void onPointReport(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
     if (isMyTeammate(pkt.senderId))
@@ -212,10 +218,11 @@ static void onPointReport(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOut
 }
 
 static const DirectRadioRule directRadioRules[] = {
-    //  state     msgType            condition           replySubType  onReceive
+    //  state     msgType            condition           replySubType   onReceive
     { IN_GAME,  MSG_LIT,           litAndTakenAndValid, REPLY_TAKEN,  onLitTaken   },
     { IN_GAME,  MSG_LIT,           litAndShoneAndValid, REPLY_SHONE,  onLitShone   },
     { IN_GAME,  MSG_LIT,           litButFriendly,      REPLY_FRIEND, nullptr      },
+    { IN_GAME,  MSG_LIT,           litButImmune,        REPLY_IMMUNE, nullptr      },
     { OUT_GAME, MSG_LIT,           nullptr,             REPLY_DOWN,   nullptr      },
     { IN_GAME,  MSG_POINT_REPORT,  nullptr,             0,            onPointReport },
     { OUT_GAME, MSG_POINT_REPORT,  nullptr,             0,            onPointReport },
@@ -224,7 +231,7 @@ static const DirectRadioRule directRadioRules[] = {
 // ---- ReplyRadioRule handlers ----
 static void onReplyTaken(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
-    out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Taken);
 }
 static void onReplyShone(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
@@ -235,7 +242,11 @@ static void onReplyShone(const RadioPacket&, const RadioPacket&,
 }
 static void onReplyFriend(const RadioPacket&, const RadioPacket&,
                           LightAir_DisplayCtrl&, GameOutput& out) {
-    out.ui.trigger(LightAir_UICtrl::UIEvent::Custom1);
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Friend);
+}
+static void onReplyImmune(const RadioPacket&, const RadioPacket&,
+                          LightAir_DisplayCtrl&, GameOutput& out) {
+    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
 }
 
 static const ReplyRadioRule replyRadioRules[] = {
@@ -243,6 +254,7 @@ static const ReplyRadioRule replyRadioRules[] = {
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_FRIEND, nullptr, onReplyFriend },
+    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election (used for individual score slot format; aggregation in onScoreAnnounce) ----
@@ -286,6 +298,7 @@ static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
     lives      = startLives;
     energy     = startEnergy;
     canRespawn = false;
+    memset(litAt, 0, sizeof(litAt));
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
 }
@@ -309,7 +322,13 @@ static void doInGame(const InputReport& inp, const RadioReport&,
                      LightAir_DisplayCtrl&, GameOutput& out) {
     tickGameTime();
 
-    constexpr uint8_t REPS = 4;
+    EnlightResult r = enlightPtr->poll();
+    if (r.status == EnlightStatus::PLAYER_HIT) {
+        // Only fire if target is an opponent (or friendly fire is enabled).
+        if (isOpponent(r.id) || friendlyFire)
+            out.radio.sendTo(r.id, MSG_LIT);
+    }
+
     bool triggerActive = false;
 
     for (uint8_t i = 0; i < inp.buttonCount; i++) {
@@ -320,8 +339,8 @@ static void doInGame(const InputReport& inp, const RadioReport&,
             if (energy > 0) {
                 energy--;
                 energySpent++;
-                enlightPtr->run(REPS);
-                out.ui.triggerEnlight(REPS * EnlightDefaults::MS_PER_REP);
+                enlightPtr->run();
+                out.ui.triggerEnlight(enlightPtr->cycleTime());
             }
         }
     }
@@ -335,13 +354,6 @@ static void doInGame(const InputReport& inp, const RadioReport&,
             energy = startEnergy;
         else if ((millis() - releaseAt) / 1000 >= (uint32_t)rechargeSecs)
             energy = startEnergy;
-    }
-
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT) {
-        // Only fire if target is an opponent (or friendly fire is enabled).
-        if (isOpponent(r.id) || friendlyFire)
-            out.radio.sendTo(r.id, MSG_LIT);
     }
 }
 
@@ -429,8 +441,8 @@ extern const LightAir_Game game_teams = {
     /* name                  */ "Teams",
     /* configVars            */ Teams::configVars,         /* configCount            */ 7,
     /* monitorVars           */ Teams::monitorVars,        /* monitorCount           */ 8,
-    /* directRadioRules      */ Teams::directRadioRules,   /* directRadioRuleCount   */ 6,
-    /* replyRadioRules       */ Teams::replyRadioRules,    /* replyRadioRuleCount    */ 3,
+    /* directRadioRules      */ Teams::directRadioRules,   /* directRadioRuleCount   */ 7,
+    /* replyRadioRules       */ Teams::replyRadioRules,    /* replyRadioRuleCount    */ 4,
     /* rules                 */ Teams::rules,              /* ruleCount              */ 6,
     /* behaviors             */ Teams::behaviors,          /* behaviorCount          */ 3,
     /* currentState          */ &Teams::gState,            /* initialState           */ Teams::IN_GAME,
