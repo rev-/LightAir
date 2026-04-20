@@ -123,6 +123,7 @@ static bool litAndShone(const RadioPacket&) { return energy <= hitDmg; }
 static void onLitTaken(const RadioPacket&, LightAir_DisplayCtrl&, GameOutput& out) {
     energy -= hitDmg;
     if (energy < 0) energy = 0;
+    char buf[20];
     snprintf(buf, sizeof(buf), "Lit by %s", name);
     disp.showMessage(buf, 2000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
@@ -149,7 +150,7 @@ static void onReplyShone(const RadioPacket& reply, const RadioPacket&,
                          LightAir_DisplayCtrl& disp, GameOutput& out) {
     energy += startEnergy;
     points += 1;
-    char buf[12];
+    char buf[20];
     const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
                        ? PlayerDefs::playerShort[reply.senderId] : "???";
     snprintf(buf, sizeof(buf), "%s LIT", name);
@@ -159,7 +160,7 @@ static void onReplyShone(const RadioPacket& reply, const RadioPacket&,
 
 static void onReplyDown(const RadioPacket& reply, const RadioPacket&,
                          LightAir_DisplayCtrl& disp, GameOutput& out) {
-    char buf[12];
+    char buf[20];
     const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
                        ? PlayerDefs::playerShort[reply.senderId] : "???";
     snprintf(buf, sizeof(buf), "%s is OUT", name);
@@ -243,6 +244,7 @@ static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
     shoneTimes++;
     pendingShone = false;
     respawnAt    = millis() + (uint32_t)respawnSecs * 1000;
+    char buf[20];
     snprintf(buf, sizeof(buf), "Shone by %s", name);
     disp.showMessage(buf, 2000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Down);
