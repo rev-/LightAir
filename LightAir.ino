@@ -18,8 +18,14 @@
 // Pin definitions are in src/player_pins.h and src/totem_pins.h.
 // ================================================================
 
+#include <Arduino.h>
+#include <ArduinoLog.h>
 #include <LightAir.h>
-#include "../src/enlight/EnlightCalibRoutine.h"
+#ifndef LOG_LEVEL
+#define LOG_LEVEL LOG_LEVEL_INFO
+#endif 
+
+#include <enlight/EnlightCalibRoutine.h>
 
 // ----------------------------------------------------------------
 // Enlight global pointer
@@ -109,15 +115,28 @@ static LightAir_GameRunner  runner;
 static DeviceHardware hw;
 
 // ----------------------------------------------------------------
-void setup() {
-    Serial.begin(115200);
 
+
+#ifdef TEST_UNIT
+#include <test/LightAir_test.h>"
+
+void _setup() {
+    // write as needed  
+}
+
+#include <AUnit.h>
+void loop() {
+    aunit::TestRunner::run();
+}
+
+#else
+void _setup() {
     // Load device identity from NVS.
     PlayerConfig cfg;
     player_config_load(cfg);
     hw = cfg.hardware;
 
-    Serial.printf("LightAir id=%u hw=%s\n",
+    Log.infoln("LightAir id=%u hw=%s\n",
                   cfg.id,
                   hw == DeviceHardware::TOTEM ? "TOTEM" : "PLAYER");
 
@@ -137,11 +156,11 @@ void setup() {
         totemUi.begin();
 
         if (!driver->begin()) {
-            Serial.println("Totem radio init FAILED — halting");
+            Log.infoln("Totem radio init FAILED — halting");
             while (true) delay(1000);
         }
 
-        Serial.println("Totem ready.");
+        Log.infoln("Totem ready.");
 
     } else {
         // ------------------------------------------------------------
@@ -176,7 +195,7 @@ void setup() {
         radio = new LightAir_Radio(transport, cfg.id,
                                    RadioToken::UNSET, 0, 0, radioCfg);
         if (!radio->begin()) {
-            Serial.println("Radio init FAILED — halting");
+            Log.infoln("Radio init FAILED — halting");
             while (true) delay(1000);
         }
 
@@ -188,22 +207,36 @@ void setup() {
                                     *radio);
         menu.setCalibRoutine(*calibRoutine);
         if (menu.run() != MenuResult::Confirmed) {
-            Serial.println("Setup menu cancelled — rebooting");
+            Log.infoln("Setup menu cancelled — rebooting");
             ESP.restart();
         }
 
         // Start game
         runner.begin(menu.selectedGame(), displayCtrl, input, *radio, &playerUi);
 
-        Serial.println("Player ready.");
+        Log.infoln("Player ready.");
     }
 }
 
-// ----------------------------------------------------------------
 void loop() {
     if (hw == DeviceHardware::TOTEM) {
         driver->loop();
     } else {
         runner.update();
     }
+}
+#endif
+
+void _setup_logging(){
+    
+    Serial.begin(115200);
+    Log.begin(LOG_LEVEL, &Serial);
+
+    Log.infoln("Log initialized with level %d", LOG_LEVEL);
+}
+
+void setup() {
+
+    _setup_logging();
+    _setup();
 }

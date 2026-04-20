@@ -11,7 +11,7 @@ It has to be compiled for ESP32-S3 and is written to be flashed using Arduino ID
 In order to compile you need `make` and `arduino-cli` installed.
 
 ```sh
- make build/debug/LightAir.ino.bin
+make build/debug/LightAir.ino.bin
 ```
 
 You can then upload the `LightAir.ino.bin` to the board using the Arduino IDE or Arduino CLI. For example:
@@ -20,13 +20,22 @@ You can then upload the `LightAir.ino.bin` to the board using the Arduino IDE or
 arduino-cli upload --input-file ./build/debug/LightAir.ino.bin -p /dev/ttyACM0 -b esp32:esp32:esp32s3
 ```
 
+### Unit testing
+In the folder `src/test` there are several `.h` files, each one containing one or more unit test that can be run on the board. To add a test, define a new one using [AUnit](https://github.com/bxparks/AUnit) API, then include the corresponding file in the `src/test/LightAir_test.h` header.
+
+To build the tests, run the following command:
+```sh
+make build/test/unit/LightAir.ino.bin
+```
+After uploading the sketch, the test output will be printed on the serial monitor.
+
 ### Build for WOKWI simulator
 
 You can produce a binary targeting [WOWKI](https://wokwi.com/projects/new/esp32-s3) by using the corresponding profile:
 ```sh
-PROFILE=ESP32-S3-WROOM-1-WOKWI make -B build/debug/LightAir.ino.bin
+PROFILE=ESP32-S3-WROOM-1-WOKWI make build/debug/LightAir.ino.bin
 ```
-Then you can upload the binary by opening a new project on WOWKI and pressing F1 -> "Upload Firmware and Start Simulator" and selecting the produced binary.
+Then you can upload the binary by opening a new project on WOWKI and pressing F1 -> "Upload Firmware and Start Simulator" and selecting the desired binary.
 
 ## Design guidelines
 ### Nonviolent semantics
