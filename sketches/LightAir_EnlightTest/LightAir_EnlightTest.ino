@@ -339,7 +339,7 @@ static inline uint16_t adcSample(const uint8_t* buf, uint32_t convIdx) {
 }
 
 static void takeMeasurement() {
-    enlight->run(ENLIGHT_REPS);
+    enlight->run();
 
     // Poll to completion (timeout 2 s; each DMA cycle ≈ 7.8 ms).
     EnlightResult res = {};
