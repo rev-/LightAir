@@ -319,46 +319,40 @@ void LightAir_GameRunner::update() {
 void LightAir_GameRunner::scoreUpdate(const InputReport& inputs,
                                        const RadioReport& radio,
                                        GameOutput& output) {
-    const bool     scoringEnabled = _game->winnerVars &&
-                                    _game->winnerVarCount > 0 &&
-                                    _game->scoringState != 255 &&
-                                    _rosterCount > 0;
-    const uint8_t  slotSize       = scoringEnabled ? _game->winnerVarCount * 4 : 0;
-    const uint32_t expectedMask   = _rosterCount < 32
-                                    ? (1u << _rosterCount) - 1u
-                                    : 0xFFFFFFFFu;
+    const uint8_t  slotSize     = _game->winnerVarCount * 4;
+    const uint32_t expectedMask = _rosterCount < 32
+                                  ? (1u << _rosterCount) - 1u
+                                  : 0xFFFFFFFFu;
 
     // Accumulate per-player score messages.
-    if (scoringEnabled) {
-        for (uint8_t e = 0; e < radio.count; e++) {
-            const RadioEvent& ev = radio.events[e];
-            if (ev.type != RadioEventType::MessageReceived) continue;
-            if (ev.packet.msgType != _game->scoreMsgType)  continue;
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType != _game->scoreMsgType)  continue;
 
-            uint8_t expectedLen = 4 + _rosterCount * slotSize;
-            if (ev.packet.payloadLen < expectedLen) continue;
+        uint8_t expectedLen = 4 + _rosterCount * slotSize;
+        if (ev.packet.payloadLen < expectedLen) continue;
 
-            uint32_t recvMask = 0;
-            memcpy(&recvMask, ev.packet.payload, 4);
-            uint32_t newBits = recvMask & ~_scoreAccumMask;
+        uint32_t recvMask = 0;
+        memcpy(&recvMask, ev.packet.payload, 4);
+        uint32_t newBits = recvMask & ~_scoreAccumMask;
 
-            if (newBits) {
-                for (uint8_t r = 0; r < _rosterCount; r++) {
-                    if (!(newBits & (1u << r))) continue;
-                    memcpy(_scoreSlots[r],
-                           ev.packet.payload + 4 + r * slotSize,
-                           slotSize);
-                }
-                _scoreAccumMask |= newBits;
-                scoreBroadcastFused(output);
-                _scoreSentAt = millis();
+        if (newBits) {
+            for (uint8_t r = 0; r < _rosterCount; r++) {
+                if (!(newBits & (1u << r))) continue;
+                memcpy(_scoreSlots[r],
+                       ev.packet.payload + 4 + r * slotSize,
+                       slotSize);
             }
+            _scoreAccumMask |= newBits;
+            scoreBroadcastFused(output);
+            _scoreSentAt = millis();
+        }
 
-            if (_scoreAccumMask == expectedMask && !_scoreResultShown) {
-                scoreAnnounce();
-                _scoreResultShown = true;
-                postScoreAnnounce();
-            }
+        if (_scoreAccumMask == expectedMask && !_scoreResultShown) {
+            scoreAnnounce();
+            _scoreResultShown = true;
+            postScoreAnnounce();
         }
     }
 
@@ -392,7 +386,7 @@ void LightAir_GameRunner::scoreUpdate(const InputReport& inputs,
     }
 
     // Timed retry — re-broadcast fused scores while waiting for all devices.
-    if (scoringEnabled && !_scoreResultShown &&
+    if (!_scoreResultShown &&
         _scoreSentAt != 0 &&
         millis() - _scoreSentAt >= GameDefaults::SCORE_RETRY_MS) {
         scoreBroadcastFused(output);
