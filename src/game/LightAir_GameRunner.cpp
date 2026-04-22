@@ -74,14 +74,12 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
  * ========================================================= */
 
 void LightAir_GameRunner::clearRoster() {
-    _rosterCount = 0;
+    _expectedPlayerMask = 0;
 }
 
 void LightAir_GameRunner::addToRoster(uint8_t id) {
-    if (_rosterCount >= GameDefaults::MAX_PARTICIPANTS) return;
-    for (uint8_t i = 0; i < _rosterCount; i++)
-        if (_roster[i] == id) return;  // ignore duplicate
-    _roster[_rosterCount++] = id;
+    if (id == 0 || id >= PlayerDefs::MAX_PLAYER_ID) return;  // totem IDs and reserved silently ignored
+    _expectedPlayerMask |= (1u << id);
 }
 
 /* =========================================================
@@ -137,15 +135,13 @@ void LightAir_GameRunner::update() {
     // ---- Step 2: LOGIC ----
     GameOutput output;
 
-    // ---- Score collection helpers (derived constants) ----
-    const bool   scoringEnabled = _game->winnerVars &&
-                                  _game->winnerVarCount > 0 &&
-                                  _game->scoringState != 255 &&
-                                  _rosterCount > 0;
-    const uint8_t  slotSize     = scoringEnabled ? _game->winnerVarCount * 4 : 0;
-    const uint32_t expectedMask = _rosterCount < 32
-                                  ? (1u << _rosterCount) - 1u
-                                  : 0xFFFFFFFFu;
+    if (_scoreActive) {
+        scoreUpdate(inputs, radio, output);
+        _display->update();
+        flushOutput(output);
+        while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
+        return;
+    }
 
     // Step 2a: Infrastructure intercepts — handle before DirectRadioRules.
     // Marked events are skipped by the DirectRadioRules loop below.
@@ -157,50 +153,20 @@ void LightAir_GameRunner::update() {
         if (ev.type != RadioEventType::MessageReceived) continue;
         if (ev.packet.msgType != GameDefaults::MSG_END_GAME) continue;
         infraHandled[e] = true;
-        if (scoringEnabled && *_game->currentState != _game->scoringState) {
+        if (*_game->currentState != _game->scoringState) {
+            uint8_t prev = *_game->currentState;
             *_game->currentState = _game->scoringState;
             activateStateDisplay(_game->scoringState);
-            output.ui.trigger(LightAir_UICtrl::UIEvent::EndGame);
-        }
-    }
-
-    // Score messages: accumulate per-player scores while in scoringState.
-    if (scoringEnabled && _scoreActive) {
-        for (uint8_t e = 0; e < radio.count; e++) {
-            const RadioEvent& ev = radio.events[e];
-            if (ev.type != RadioEventType::MessageReceived) continue;
-            if (ev.packet.msgType != _game->scoreMsgType)  continue;
-
-            infraHandled[e] = true;
-
-            // Validate payload size.
-            uint8_t expectedLen = 4 + _rosterCount * slotSize;
-            if (ev.packet.payloadLen < expectedLen) continue;
-
-            // Extract mask and new slot data.
-            uint32_t recvMask = 0;
-            memcpy(&recvMask, ev.packet.payload, 4);
-            uint32_t newBits = recvMask & ~_scoreAccumMask;
-
-            if (newBits) {
-                for (uint8_t r = 0; r < _rosterCount; r++) {
-                    if (!(newBits & (1u << r))) continue;
-                    memcpy(_scoreSlots[r],
-                           ev.packet.payload + 4 + r * slotSize,
-                           slotSize);
+            bool fired = false;
+            for (uint8_t i = 0; i < _game->ruleCount; i++) {
+                const StateRule& r = _game->rules[i];
+                if (r.fromState == prev && r.toState == _game->scoringState) {
+                    if (r.onTransition) r.onTransition(*_display, output);
+                    fired = true;
+                    break;
                 }
-                _scoreAccumMask |= newBits;
-
-                // Re-broadcast fused payload to propagate new knowledge.
-                scoreBroadcastFused(output);
-                _scoreSentAt = millis();
             }
-
-            if (_scoreAccumMask == expectedMask && !_scoreResultShown) {
-                scoreAnnounce();
-                _scoreResultShown = true;
-                postScoreAnnounce();
-            }
+            if (!fired) output.ui.trigger(LightAir_UICtrl::UIEvent::EndGame);
         }
     }
 
@@ -238,7 +204,7 @@ void LightAir_GameRunner::update() {
     }
 
     // Step 2b: DirectRadioRules — handle all incoming MessageReceived events.
-    // Events intercepted above (MSG_END_GAME, score messages) are skipped.
+    // Events intercepted above (MSG_END_GAME, MSG_TOTEM_BEACON) are skipped.
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type != RadioEventType::MessageReceived) continue;
@@ -294,38 +260,30 @@ void LightAir_GameRunner::update() {
     }
 
     // After Step 2d: detect scoringState entry and kick off score collection.
-    if (scoringEnabled) {
-        uint8_t cur = *_game->currentState;
-        if (cur == _game->scoringState && !_scoreActive) {
-            _scoreActive      = true;
-            _scoreResultShown = false;
-            _scoreAccumMask   = 0;
-            _scoreSentAt      = 0;
-            memset(_scoreSlots, 0, sizeof(_scoreSlots));
+    if (*_game->currentState == _game->scoringState && !_scoreActive) {
+        _scoreActive      = true;
+        _scoreResultShown = false;
+        _scorePresent     = 0;
+        _scoreSentAt      = 0;
+        _scoreEntryAt     = millis();
+        memset(_scoreSlots, 0, sizeof(_scoreSlots));
 
-            // Record own scores immediately.
-            uint8_t ownIdx = _rosterCount;  // sentinel: not found
-            uint8_t myId   = _radio->playerId();
-            for (uint8_t r = 0; r < _rosterCount; r++) {
-                if (_roster[r] == myId) { ownIdx = r; break; }
-            }
-            if (ownIdx < _rosterCount) {
-                scoreFillSlot(_scoreSlots[ownIdx]);
-                _scoreAccumMask |= (1u << ownIdx);
-            }
+        // Record own scores immediately.
+        uint8_t myId = _radio->playerId();
+        if (_expectedPlayerMask & (1u << myId)) {
+            scoreFillSlot(_scoreSlots[myId]);
+            _scorePresent |= (1u << myId);
+        }
 
-            // Flood MSG_END_GAME so devices still in a non-scoring state transition.
-            output.radio.broadcast(GameDefaults::MSG_END_GAME, nullptr, 0, 2);
-            scoreBroadcastFused(output);
-            _scoreSentAt = millis();
+        // Flood MSG_END_GAME so devices still in a non-scoring state transition.
+        output.radio.broadcast(GameDefaults::MSG_END_GAME, nullptr, 0, 2);
+        scoreBroadcastFused(output);
+        _scoreSentAt = millis();
 
-            if (_scoreAccumMask == expectedMask) {
-                scoreAnnounce();
-                _scoreResultShown = true;
-                postScoreAnnounce();
-            }
-        } else if (cur != _game->scoringState) {
-            _scoreActive = false;
+        if (_scorePresent == _expectedPlayerMask) {
+            _scoreResultShown = true;
+            postScoreAnnounce();
+            scoreAnnounce();
         }
     }
 
@@ -337,17 +295,97 @@ void LightAir_GameRunner::update() {
         break;
     }
 
-    // After Step 2e: timed retry — re-broadcast fused scores while waiting.
-    if (scoringEnabled && _scoreActive && !_scoreResultShown &&
+    // ---- Step 3: OUTPUT ----
+    _display->update();
+    flushOutput(output);
+
+    // Enforce fixed loop duration.
+    while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
+}
+
+/* =========================================================
+ *   SCORE UPDATE — ongoing scoring phase (runs when _scoreActive)
+ * ========================================================= */
+
+void LightAir_GameRunner::scoreUpdate(const InputReport& inputs,
+                                       const RadioReport& radio,
+                                       GameOutput& output) {
+    const uint8_t slotSize = _game->winnerVarCount * 4;
+    const uint8_t recSize  = 1 + slotSize;  // id byte + score data
+
+    // Accumulate per-player score messages.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType != _game->scoreMsgType)  continue;
+        if (ev.packet.payloadLen == 0 || ev.packet.payloadLen % recSize != 0) continue;
+
+        bool changed = false;
+        for (uint8_t off = 0; off + recSize <= ev.packet.payloadLen; off += recSize) {
+            uint8_t id = ev.packet.payload[off];
+            if (id == 0 || id >= PlayerDefs::MAX_PLAYER_ID) continue;
+            if (!(_expectedPlayerMask & (1u << id))) continue;
+            if (_scorePresent & (1u << id)) continue;
+            memcpy(_scoreSlots[id], ev.packet.payload + off + 1, slotSize);
+            _scorePresent |= (1u << id);
+            changed = true;
+        }
+        if (changed) {
+            scoreBroadcastFused(output);
+            _scoreSentAt = millis();
+        }
+
+        if (_scorePresent == _expectedPlayerMask && !_scoreResultShown) {
+            _scoreResultShown = true;
+            postScoreAnnounce();
+            scoreAnnounce();
+        }
+    }
+
+    // MSG_TOTEM_BEACON: no DirectRadioRules run in scoring phase; reply directly.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type           != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType != RadioMsg::MSG_TOTEM_BEACON)      continue;
+
+        uint8_t id = ev.packet.senderId;
+        if (!TotemDefs::isTotemId(id)) continue;
+
+        for (uint8_t t = 0; t < _totemCount; t++) {
+            if (_totems[t].id != id) continue;
+            uint8_t roleId = _totems[t].roleId;
+            uint8_t buf[2] = { roleId, 0 };
+            uint8_t bufLen = 1;
+            if (_game->totemRequirements) {
+                for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
+                    const LightAir_TotemRequirement& req = _game->totemRequirements[r];
+                    if (req.roleId == roleId && req.configSecs != nullptr) {
+                        buf[1] = (uint8_t)*req.configSecs;
+                        bufLen = 2;
+                        break;
+                    }
+                }
+            }
+            output.radio.replyWithPayload(ev.packet, buf, bufLen);
+            break;
+        }
+    }
+
+    // Timed retry — re-broadcast fused scores while waiting for all devices.
+    if (!_scoreResultShown &&
         _scoreSentAt != 0 &&
         millis() - _scoreSentAt >= GameDefaults::SCORE_RETRY_MS) {
         scoreBroadcastFused(output);
         _scoreSentAt = millis();
     }
 
-    // ---- Step 3: OUTPUT ----
-    _display->update();
-    flushOutput(output);
+    // Timeout — show winner with whatever scores were collected if a device never responds.
+    if (!_scoreResultShown && _scoreEntryAt != 0 &&
+        millis() - _scoreEntryAt >= GameDefaults::SCORE_TIMEOUT_MS) {
+        _scoreResultShown = true;
+        postScoreAnnounce();
+        scoreAnnounce();
+    }
 
     // A+B chord on end-game screen triggers reboot.
     if (_endExitReady) {
@@ -365,9 +403,6 @@ void LightAir_GameRunner::update() {
             esp_restart();
         }
     }
-
-    // Enforce fixed loop duration.
-    while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
 }
 
 /* =========================================================
@@ -404,19 +439,21 @@ bool LightAir_GameRunner::scoreSlotsEqual(const uint8_t* a, const uint8_t* b) co
     return memcmp(a, b, _game->winnerVarCount * 4) == 0;
 }
 
-// Build fused payload (mask + all slots) and queue it as a broadcast.
+// Build self-describing payload ([id][data…] records) and queue as a broadcast.
 void LightAir_GameRunner::scoreBroadcastFused(GameOutput& output) const {
     uint8_t slotSize = _game->winnerVarCount * 4;
-    uint8_t totalLen = 4 + _rosterCount * slotSize;
-    if (totalLen > GameDefaults::RADIO_OUT_PAYLOAD) return;  // payload too large — skip
-
-    uint8_t buf[GameDefaults::RADIO_OUT_PAYLOAD] = {};
-    memcpy(buf, &_scoreAccumMask, 4);
-    for (uint8_t r = 0; r < _rosterCount; r++) {
-        if (_scoreAccumMask & (1u << r))
-            memcpy(buf + 4 + r * slotSize, _scoreSlots[r], slotSize);
+    uint8_t recSize  = 1 + slotSize;
+    uint8_t buf[GameDefaults::RADIO_OUT_PAYLOAD];
+    uint8_t off = 0;
+    for (uint8_t id = 1; id < PlayerDefs::MAX_PLAYER_ID; id++) {
+        if (!(_scorePresent & (1u << id))) continue;
+        if (off + recSize > GameDefaults::RADIO_OUT_PAYLOAD) break;
+        buf[off] = id;
+        memcpy(buf + off + 1, _scoreSlots[id], slotSize);
+        off += recSize;
     }
-    output.radio.broadcast(_game->scoreMsgType, buf, totalLen);
+    if (off > 0)
+        output.radio.broadcast(_game->scoreMsgType, buf, off);
 }
 
 // Find the winner from accumulated slots and call showMessage() on the display.
@@ -429,77 +466,69 @@ void LightAir_GameRunner::scoreAnnounce() const {
     // Delegate to game-specific announce if provided.
     if (_game->onScoreAnnounce) {
         ScoreTable table;
-        table.rosterCount   = _rosterCount;
-        table.roster        = _roster;
-        table.accumMask     = _scoreAccumMask;
-        table.slots         = _scoreSlots;
+        table.accumMask      = _scorePresent;
+        table.slots          = _scoreSlots;
         table.winnerVarCount = _game->winnerVarCount;
-        table.winnerVars    = _game->winnerVars;
-        table.teamMap       = _teamMap;
-        table.myPlayerId    = _radio->playerId();
+        table.winnerVars     = _game->winnerVars;
+        table.teamMap        = _teamMap;
+        table.myPlayerId     = _radio->playerId();
         _game->onScoreAnnounce(table, *_display);
         return;
     }
 
     // Default: individual-player ranking.
-    uint8_t bestIdx = 0;
-    bool    tied    = false;
+    uint8_t bestId = 0;
+    bool    tied   = false;
 
-    for (uint8_t r = 1; r < _rosterCount; r++) {
-        if (!(_scoreAccumMask & (1u << r))) continue;
-        const uint8_t* slotR    = _scoreSlots[r];
-        const uint8_t* slotBest = _scoreSlots[bestIdx];
-        if (scoreSlotBeats(slotR, slotBest)) {
-            bestIdx = r;
-            tied    = false;
-        } else if (scoreSlotsEqual(slotR, slotBest)) {
+    for (uint8_t id = 1; id < PlayerDefs::MAX_PLAYER_ID; id++) {
+        if (!(_scorePresent & (1u << id))) continue;
+        if (bestId == 0) {
+            bestId = id;
+        } else if (scoreSlotBeats(_scoreSlots[id], _scoreSlots[bestId])) {
+            bestId = id;
+            tied   = false;
+        } else if (scoreSlotsEqual(_scoreSlots[id], _scoreSlots[bestId])) {
             tied = true;
         }
     }
 
     // --- Winner / tie message ---
     char msg[32];
-    if (!tied) {
-        snprintf(msg, sizeof(msg), "%s WINS!",
-                 PlayerDefs::playerShort[_roster[bestIdx]]);
+    if (bestId == 0) {
+        snprintf(msg, sizeof(msg), "No scores!");
+    } else if (!tied) {
+        snprintf(msg, sizeof(msg), "%s WINS!", PlayerDefs::playerShort[bestId]);
     } else {
         // Collect tied participant short-names, space-separated.
-        const uint8_t* slotBest = _scoreSlots[bestIdx];
         char    names[24] = {};
         uint8_t off       = 0;
-        for (uint8_t r = 0; r < _rosterCount && off < 20; r++) {
-            if (!(_scoreAccumMask & (1u << r))) continue;
-            if (scoreSlotsEqual(_scoreSlots[r], slotBest)) {
+        for (uint8_t id = 1; id < PlayerDefs::MAX_PLAYER_ID && off < 20; id++) {
+            if (!(_scorePresent & (1u << id))) continue;
+            if (scoreSlotsEqual(_scoreSlots[id], _scoreSlots[bestId])) {
                 if (off) names[off++] = ' ';
-                memcpy(names + off, PlayerDefs::playerShort[_roster[r]], 3);
+                memcpy(names + off, PlayerDefs::playerShort[id], 3);
                 off += 3;
             }
         }
         snprintf(msg, sizeof(msg), "TIE: %s", names);
     }
 
-    // --- Own position (shown below winner; tray pushes newest msg to top) ---
-    // Show position first so it ends up on the bottom row when winner is pushed on top.
-    uint8_t myId   = _radio->playerId();
-    uint8_t mySlot = 0xFF;
-    for (uint8_t r = 0; r < _rosterCount; r++)
-        if (_roster[r] == myId) { mySlot = r; break; }
-
-    if (mySlot != 0xFF && (_scoreAccumMask & (1u << mySlot))) {
+    // --- Own position ---
+    uint8_t myId = _radio->playerId();
+    if (_scorePresent & (1u << myId)) {
         uint8_t rank = 1;
-        for (uint8_t r = 0; r < _rosterCount; r++) {
-            if (r == mySlot) continue;
-            if (!(_scoreAccumMask & (1u << r))) continue;
-            if (scoreSlotBeats(_scoreSlots[r], _scoreSlots[mySlot])) rank++;
+        for (uint8_t id = 1; id < PlayerDefs::MAX_PLAYER_ID; id++) {
+            if (id == myId || !(_scorePresent & (1u << id))) continue;
+            if (scoreSlotBeats(_scoreSlots[id], _scoreSlots[myId])) rank++;
         }
         const char* sfx = (rank == 1) ? "st" : (rank == 2) ? "nd"
                         : (rank == 3) ? "rd" : "th";
         char pos[24];
         snprintf(pos, sizeof(pos), "You arrived %u%s", rank, sfx);
-        _display->showMessage(pos, 0);   // → bottom row after winner pushed on top
+        _display->showMessage(pos, 0);
     }
 
-    _display->showMessage(msg, 0);  // → top row
+    _display->showMessage(msg, 0);
 }
 
 // Arm the A+B exit after winner announcement.
