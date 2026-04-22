@@ -145,15 +145,6 @@ void LightAir_GameRunner::update() {
         return;
     }
 
-    // ---- Score collection helpers (derived constants) ----
-    const bool     scoringEnabled = _game->winnerVars &&
-                                    _game->winnerVarCount > 0 &&
-                                    _game->scoringState != 255 &&
-                                    _rosterCount > 0;
-    const uint32_t expectedMask   = _rosterCount < 32
-                                    ? (1u << _rosterCount) - 1u
-                                    : 0xFFFFFFFFu;
-
     // Step 2a: Infrastructure intercepts — handle before DirectRadioRules.
     // Marked events are skipped by the DirectRadioRules loop below.
     bool infraHandled[RADIO_MAX_PENDING] = {};
@@ -164,7 +155,7 @@ void LightAir_GameRunner::update() {
         if (ev.type != RadioEventType::MessageReceived) continue;
         if (ev.packet.msgType != GameDefaults::MSG_END_GAME) continue;
         infraHandled[e] = true;
-        if (scoringEnabled && *_game->currentState != _game->scoringState) {
+        if (*_game->currentState != _game->scoringState) {
             *_game->currentState = _game->scoringState;
             activateStateDisplay(_game->scoringState);
             output.ui.trigger(LightAir_UICtrl::UIEvent::EndGame);
@@ -261,38 +252,34 @@ void LightAir_GameRunner::update() {
     }
 
     // After Step 2d: detect scoringState entry and kick off score collection.
-    if (scoringEnabled) {
-        uint8_t cur = *_game->currentState;
-        if (cur == _game->scoringState && !_scoreActive) {
-            _scoreActive      = true;
-            _scoreResultShown = false;
-            _scoreAccumMask   = 0;
-            _scoreSentAt      = 0;
-            memset(_scoreSlots, 0, sizeof(_scoreSlots));
+    if (*_game->currentState == _game->scoringState && !_scoreActive) {
+        _scoreActive      = true;
+        _scoreResultShown = false;
+        _scoreAccumMask   = 0;
+        _scoreSentAt      = 0;
+        memset(_scoreSlots, 0, sizeof(_scoreSlots));
 
-            // Record own scores immediately.
-            uint8_t ownIdx = _rosterCount;  // sentinel: not found
-            uint8_t myId   = _radio->playerId();
-            for (uint8_t r = 0; r < _rosterCount; r++) {
-                if (_roster[r] == myId) { ownIdx = r; break; }
-            }
-            if (ownIdx < _rosterCount) {
-                scoreFillSlot(_scoreSlots[ownIdx]);
-                _scoreAccumMask |= (1u << ownIdx);
-            }
+        // Record own scores immediately.
+        uint8_t ownIdx = _rosterCount;  // sentinel: not found
+        uint8_t myId   = _radio->playerId();
+        for (uint8_t r = 0; r < _rosterCount; r++) {
+            if (_roster[r] == myId) { ownIdx = r; break; }
+        }
+        if (ownIdx < _rosterCount) {
+            scoreFillSlot(_scoreSlots[ownIdx]);
+            _scoreAccumMask |= (1u << ownIdx);
+        }
 
-            // Flood MSG_END_GAME so devices still in a non-scoring state transition.
-            output.radio.broadcast(GameDefaults::MSG_END_GAME, nullptr, 0, 2);
-            scoreBroadcastFused(output);
-            _scoreSentAt = millis();
+        // Flood MSG_END_GAME so devices still in a non-scoring state transition.
+        output.radio.broadcast(GameDefaults::MSG_END_GAME, nullptr, 0, 2);
+        scoreBroadcastFused(output);
+        _scoreSentAt = millis();
 
-            if (_scoreAccumMask == expectedMask) {
-                scoreAnnounce();
-                _scoreResultShown = true;
-                postScoreAnnounce();
-            }
-        } else if (cur != _game->scoringState) {
-            _scoreActive = false;
+        uint32_t expectedMask = _rosterCount < 32 ? (1u << _rosterCount) - 1u : 0xFFFFFFFFu;
+        if (_scoreAccumMask == expectedMask) {
+            scoreAnnounce();
+            _scoreResultShown = true;
+            postScoreAnnounce();
         }
     }
 
