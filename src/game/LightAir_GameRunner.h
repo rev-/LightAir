@@ -133,6 +133,7 @@ private:
     // ---- Helpers ----
     void activateStateDisplay(uint8_t state);
     void flushOutput(const GameOutput& out);
+    void scoreUpdate(const InputReport&, const RadioReport&, GameOutput&);
 
     // Score collection helpers (all defined in .cpp)
     void postScoreAnnounce();

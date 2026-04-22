@@ -137,15 +137,22 @@ void LightAir_GameRunner::update() {
     // ---- Step 2: LOGIC ----
     GameOutput output;
 
+    if (_scoreActive) {
+        scoreUpdate(inputs, radio, output);
+        _display->update();
+        flushOutput(output);
+        while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
+        return;
+    }
+
     // ---- Score collection helpers (derived constants) ----
-    const bool   scoringEnabled = _game->winnerVars &&
-                                  _game->winnerVarCount > 0 &&
-                                  _game->scoringState != 255 &&
-                                  _rosterCount > 0;
-    const uint8_t  slotSize     = scoringEnabled ? _game->winnerVarCount * 4 : 0;
-    const uint32_t expectedMask = _rosterCount < 32
-                                  ? (1u << _rosterCount) - 1u
-                                  : 0xFFFFFFFFu;
+    const bool     scoringEnabled = _game->winnerVars &&
+                                    _game->winnerVarCount > 0 &&
+                                    _game->scoringState != 255 &&
+                                    _rosterCount > 0;
+    const uint32_t expectedMask   = _rosterCount < 32
+                                    ? (1u << _rosterCount) - 1u
+                                    : 0xFFFFFFFFu;
 
     // Step 2a: Infrastructure intercepts — handle before DirectRadioRules.
     // Marked events are skipped by the DirectRadioRules loop below.
@@ -161,46 +168,6 @@ void LightAir_GameRunner::update() {
             *_game->currentState = _game->scoringState;
             activateStateDisplay(_game->scoringState);
             output.ui.trigger(LightAir_UICtrl::UIEvent::EndGame);
-        }
-    }
-
-    // Score messages: accumulate per-player scores while in scoringState.
-    if (scoringEnabled && _scoreActive) {
-        for (uint8_t e = 0; e < radio.count; e++) {
-            const RadioEvent& ev = radio.events[e];
-            if (ev.type != RadioEventType::MessageReceived) continue;
-            if (ev.packet.msgType != _game->scoreMsgType)  continue;
-
-            infraHandled[e] = true;
-
-            // Validate payload size.
-            uint8_t expectedLen = 4 + _rosterCount * slotSize;
-            if (ev.packet.payloadLen < expectedLen) continue;
-
-            // Extract mask and new slot data.
-            uint32_t recvMask = 0;
-            memcpy(&recvMask, ev.packet.payload, 4);
-            uint32_t newBits = recvMask & ~_scoreAccumMask;
-
-            if (newBits) {
-                for (uint8_t r = 0; r < _rosterCount; r++) {
-                    if (!(newBits & (1u << r))) continue;
-                    memcpy(_scoreSlots[r],
-                           ev.packet.payload + 4 + r * slotSize,
-                           slotSize);
-                }
-                _scoreAccumMask |= newBits;
-
-                // Re-broadcast fused payload to propagate new knowledge.
-                scoreBroadcastFused(output);
-                _scoreSentAt = millis();
-            }
-
-            if (_scoreAccumMask == expectedMask && !_scoreResultShown) {
-                scoreAnnounce();
-                _scoreResultShown = true;
-                postScoreAnnounce();
-            }
         }
     }
 
@@ -238,7 +205,7 @@ void LightAir_GameRunner::update() {
     }
 
     // Step 2b: DirectRadioRules — handle all incoming MessageReceived events.
-    // Events intercepted above (MSG_END_GAME, score messages) are skipped.
+    // Events intercepted above (MSG_END_GAME, MSG_TOTEM_BEACON) are skipped.
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type != RadioEventType::MessageReceived) continue;
@@ -337,17 +304,100 @@ void LightAir_GameRunner::update() {
         break;
     }
 
-    // After Step 2e: timed retry — re-broadcast fused scores while waiting.
-    if (scoringEnabled && _scoreActive && !_scoreResultShown &&
+    // ---- Step 3: OUTPUT ----
+    _display->update();
+    flushOutput(output);
+
+    // Enforce fixed loop duration.
+    while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
+}
+
+/* =========================================================
+ *   SCORE UPDATE — ongoing scoring phase (runs when _scoreActive)
+ * ========================================================= */
+
+void LightAir_GameRunner::scoreUpdate(const InputReport& inputs,
+                                       const RadioReport& radio,
+                                       GameOutput& output) {
+    const bool     scoringEnabled = _game->winnerVars &&
+                                    _game->winnerVarCount > 0 &&
+                                    _game->scoringState != 255 &&
+                                    _rosterCount > 0;
+    const uint8_t  slotSize       = scoringEnabled ? _game->winnerVarCount * 4 : 0;
+    const uint32_t expectedMask   = _rosterCount < 32
+                                    ? (1u << _rosterCount) - 1u
+                                    : 0xFFFFFFFFu;
+
+    // Accumulate per-player score messages.
+    if (scoringEnabled) {
+        for (uint8_t e = 0; e < radio.count; e++) {
+            const RadioEvent& ev = radio.events[e];
+            if (ev.type != RadioEventType::MessageReceived) continue;
+            if (ev.packet.msgType != _game->scoreMsgType)  continue;
+
+            uint8_t expectedLen = 4 + _rosterCount * slotSize;
+            if (ev.packet.payloadLen < expectedLen) continue;
+
+            uint32_t recvMask = 0;
+            memcpy(&recvMask, ev.packet.payload, 4);
+            uint32_t newBits = recvMask & ~_scoreAccumMask;
+
+            if (newBits) {
+                for (uint8_t r = 0; r < _rosterCount; r++) {
+                    if (!(newBits & (1u << r))) continue;
+                    memcpy(_scoreSlots[r],
+                           ev.packet.payload + 4 + r * slotSize,
+                           slotSize);
+                }
+                _scoreAccumMask |= newBits;
+                scoreBroadcastFused(output);
+                _scoreSentAt = millis();
+            }
+
+            if (_scoreAccumMask == expectedMask && !_scoreResultShown) {
+                scoreAnnounce();
+                _scoreResultShown = true;
+                postScoreAnnounce();
+            }
+        }
+    }
+
+    // MSG_TOTEM_BEACON: no DirectRadioRules run in scoring phase; reply directly.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type           != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType != RadioMsg::MSG_TOTEM_BEACON)      continue;
+
+        uint8_t id = ev.packet.senderId;
+        if (!TotemDefs::isTotemId(id)) continue;
+
+        for (uint8_t t = 0; t < _totemCount; t++) {
+            if (_totems[t].id != id) continue;
+            uint8_t roleId = _totems[t].roleId;
+            uint8_t buf[2] = { roleId, 0 };
+            uint8_t bufLen = 1;
+            if (_game->totemRequirements) {
+                for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
+                    const LightAir_TotemRequirement& req = _game->totemRequirements[r];
+                    if (req.roleId == roleId && req.configSecs != nullptr) {
+                        buf[1] = (uint8_t)*req.configSecs;
+                        bufLen = 2;
+                        break;
+                    }
+                }
+            }
+            output.radio.replyWithPayload(ev.packet, buf, bufLen);
+            break;
+        }
+    }
+
+    // Timed retry — re-broadcast fused scores while waiting for all devices.
+    if (scoringEnabled && !_scoreResultShown &&
         _scoreSentAt != 0 &&
         millis() - _scoreSentAt >= GameDefaults::SCORE_RETRY_MS) {
         scoreBroadcastFused(output);
         _scoreSentAt = millis();
     }
-
-    // ---- Step 3: OUTPUT ----
-    _display->update();
-    flushOutput(output);
 
     // A+B chord on end-game screen triggers reboot.
     if (_endExitReady) {
@@ -365,9 +415,6 @@ void LightAir_GameRunner::update() {
             esp_restart();
         }
     }
-
-    // Enforce fixed loop duration.
-    while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
 }
 
 /* =========================================================
