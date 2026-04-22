@@ -151,7 +151,6 @@ private:
 
     // ---- S5 ----
     MenuResult runPreStart();
-    void     shareConfig();
     void     recordSeen(uint8_t id);
     bool     wasSeen(uint8_t id) const;
     void     renderSummary(uint8_t vScroll);

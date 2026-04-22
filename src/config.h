@@ -345,6 +345,14 @@ static_assert((1u + GameDefaults::MAX_WINNER_VARS * 4u) * (PlayerDefs::MAX_PLAYE
 // Used by the totem UI layer (LightAir_TotemUICtrl) and any runner
 // that needs to map a team or player ID to a display colour.
 // ---------------------------------------------------------------
+// ---------------------------------------------------------------
+// Team names
+// ---------------------------------------------------------------
+namespace TeamNames {
+    constexpr const char* kTeamO = "O";
+    constexpr const char* kTeamX = "X";
+}
+
 namespace TeamColors {
     // [team][channel]  0=R, 1=G, 2=B  — up to 8 teams supported
     static constexpr uint8_t kCount = 8;
