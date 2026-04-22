@@ -271,12 +271,6 @@ namespace GameDefaults {
     constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
     constexpr uint8_t  MSG_END_GAME             = RadioMsg::MSG_END_GAME;
 }
-// Worst-case fused score payload: (id + MAX_WINNER_VARS × int32_t) × MAX_PLAYER_ID players.
-// Must fit in a single radio packet.
-static_assert((1u + GameDefaults::MAX_WINNER_VARS * 4u) * (PlayerDefs::MAX_PLAYER_ID - 1u)
-              <= GameDefaults::RADIO_OUT_PAYLOAD,
-              "Score payload exceeds radio MTU — reduce MAX_WINNER_VARS or MAX_PLAYER_ID");
-
 // ---------------------------------------------------------------
 // Totem identity tables
 //
@@ -334,6 +328,12 @@ namespace PlayerDefs {
         "UN6",
     };
 }
+
+// Worst-case fused score payload: (id + MAX_WINNER_VARS × int32_t) × MAX_PLAYER_ID players.
+// Must fit in a single radio packet.
+static_assert((1u + GameDefaults::MAX_WINNER_VARS * 4u) * (PlayerDefs::MAX_PLAYER_ID - 1u)
+              <= GameDefaults::RADIO_OUT_PAYLOAD,
+              "Score payload exceeds radio MTU — reduce MAX_WINNER_VARS or MAX_PLAYER_ID");
 
 // ---------------------------------------------------------------
 // Colour tables
