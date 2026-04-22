@@ -496,15 +496,14 @@ static void onScoreAnnounce(const ScoreTable& t, LightAir_DisplayCtrl& disp) {
     int32_t cpPts[2] = {0, 0};
     int32_t shone[2] = {0, 0};
 
-    for (uint8_t r = 0; r < t.rosterCount; r++) {
-        if (!(t.accumMask & (1u << r))) continue;
-        uint8_t pid  = t.roster[r];
-        uint8_t team = (pid < PlayerDefs::MAX_PLAYER_ID) ? t.teamMap[pid] : 0;
+    for (uint8_t pid = 1; pid < PlayerDefs::MAX_PLAYER_ID; pid++) {
+        if (!(t.accumMask & (1u << pid))) continue;
+        uint8_t team = t.teamMap[pid];
         if (team > 1) team = 0;
 
         int32_t cp = 0, shn = 0;
-        memcpy(&cp,  t.slots[r],     4);  // winnerVars[0] = myTeamCPPoints (MAX)
-        memcpy(&shn, t.slots[r] + 4, 4);  // winnerVars[1] = shoneTimes     (MIN)
+        memcpy(&cp,  t.slots[pid],     4);  // winnerVars[0] = myTeamCPPoints (MAX)
+        memcpy(&shn, t.slots[pid] + 4, 4);  // winnerVars[1] = shoneTimes     (MIN)
 
         if (cp > cpPts[team]) cpPts[team] = cp;
         shone[team] += shn;

@@ -25,17 +25,14 @@ enum class MenuResult : uint8_t { Confirmed, Cancelled };
 // perform custom winner computation (e.g. team aggregation)
 // instead of the default individual-player ranking.
 //
-// roster[0..rosterCount-1]  — player IDs in collection order
-// accumMask                 — bit r = slots[r] is valid
-// slots[r]                  — winnerVarCount × int32_t LE for roster[r]
-// teamMap[id]               — team index (0–7) or 0xFF (teamless) for player id (size MAX_PLAYER_ID)
-// myPlayerId                — this device's logical player ID
+// accumMask     — bit id = slots[id] is valid (player-ID-indexed, ids 1–16)
+// slots[id]     — winnerVarCount × int32_t LE for player id
+// teamMap[id]   — team index (0–7) or 0xFF (teamless) for player id (size MAX_PLAYER_ID)
+// myPlayerId    — this device's logical player ID
 // ----------------------------------------------------------------
 struct ScoreTable {
-    uint8_t          rosterCount;
-    const uint8_t*   roster;
-    uint32_t         accumMask;
-    const uint8_t  (*slots)[GameDefaults::MAX_WINNER_VARS * 4];
+    uint32_t         accumMask;          // bit id set = slots[id] valid
+    const uint8_t  (*slots)[GameDefaults::MAX_WINNER_VARS * 4];  // indexed by player ID
     uint8_t          winnerVarCount;
     const WinnerVar* winnerVars;
     const uint8_t*   teamMap;    // size PlayerDefs::MAX_PLAYER_ID

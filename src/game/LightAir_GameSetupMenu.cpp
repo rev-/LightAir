@@ -997,7 +997,6 @@ void LightAir_GameSetupMenu::commitToRunner() {
         uint8_t roleId = _totemAssignment[s];
         if (roleId == TotemRoleId::NONE) continue;
         uint8_t id = TotemDefs::idFromIndex(s);
-        _runner.addToRoster(id);
         _runner.addTotem(id, roleId);
     }
 }

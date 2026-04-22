@@ -231,7 +231,7 @@ namespace DisplayDefaults {
     constexpr uint8_t MAX_BINDINGS      = 8;
     constexpr uint8_t SCREEN_WIDTH      = 128;
     constexpr uint8_t SCREEN_HEIGHT     = 64;
-    constexpr uint8_t TRAY_HEIGHT       = 21;
+    constexpr uint8_t TRAY_HEIGHT       = 30;
     constexpr uint8_t FONT_HEIGHT       = 10;
     // ArialMT_Plain_10 glyphs start 3 px below the cell top (font leading).
     // Add this offset when aligning icons to text rendered at the same y.
@@ -266,16 +266,16 @@ namespace GameDefaults {
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
     constexpr uint8_t  MAX_WINNER_VARS   = 2;    // max entries in a winnerVars[] table (primary + tie-breaker)
     constexpr uint32_t SCORE_RETRY_MS           = 2000; // ms between score re-broadcasts during scoringState
-    constexpr uint8_t  MAX_PARTICIPANTS         = 28;   // max roster entries (players + totems); mask must be uint32_t
+    constexpr uint32_t SCORE_TIMEOUT_MS         = 10000;// ms before winner shown despite missing scores
+    constexpr uint8_t  MAX_PARTICIPANTS         = 28;   // max entries for totems; players use MAX_PLAYER_ID
     constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
     constexpr uint8_t  MSG_END_GAME             = RadioMsg::MSG_END_GAME;
 }
-// Worst-case fused score payload: 4-byte mask + MAX_PARTICIPANTS slots of MAX_WINNER_VARS × int32_t.
-// Must fit in a single radio packet.  Reduce MAX_PARTICIPANTS or MAX_WINNER_VARS if this fires.
-static_assert(4u + (uint32_t)GameDefaults::MAX_PARTICIPANTS
-                  * GameDefaults::MAX_WINNER_VARS * 4u
+// Worst-case fused score payload: (id + MAX_WINNER_VARS × int32_t) × MAX_PLAYER_ID players.
+// Must fit in a single radio packet.
+static_assert((1u + GameDefaults::MAX_WINNER_VARS * 4u) * (PlayerDefs::MAX_PLAYER_ID - 1u)
               <= GameDefaults::RADIO_OUT_PAYLOAD,
-              "Score payload exceeds radio MTU — reduce MAX_PARTICIPANTS or MAX_WINNER_VARS");
+              "Score payload exceeds radio MTU — reduce MAX_WINNER_VARS or MAX_PLAYER_ID");
 
 // ---------------------------------------------------------------
 // Totem identity tables
