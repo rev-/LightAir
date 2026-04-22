@@ -517,6 +517,8 @@ void LightAir_GameSetupMenu::runSetupMenu() {
                 if (c < 3) { cursor = c; renderSetupMenu(); }
                 break;
             }
+            case '<':
+                return;  // back to game selection
             case 'A':
                 // Enter highlighted submenu.
                 if (cursor == 0) runConfigSubmenu();
@@ -638,10 +640,11 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
 
         uint8_t pid = (uint8_t)(idx + 1);  // player IDs 1–15
         char buf[20];
-        snprintf(buf, sizeof(buf), "%s%-3s  T%u",
+        const char* teamName = (_teams[pid] == 0) ? TeamNames::kTeamO : TeamNames::kTeamX;
+        snprintf(buf, sizeof(buf), "%s%-3s  T%s",
                  (delta == 0) ? ">" : " ",
                  PlayerDefs::playerShort[pid],
-                 _teams[pid]);
+                 teamName);
         _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
     printLegend("^V Nav  <> Chg  X:Exit", DisplayDefaults::BOTTOM_LINE_Y);
@@ -792,7 +795,14 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
  * ========================================================= */
 
 MenuResult LightAir_GameSetupMenu::runPreStart() {
-    shareConfig();
+    // Generate session token (1–255; 0 is UNSET sentinel, skip it).
+    uint8_t token = 0;
+    while (token == 0) token = (uint8_t)esp_random();
+    _radio.setSessionToken(token);
+
+    uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
+    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, _totemAssignment, _teams, token);
+    if (len > 0) _radio.broadcast(_msgType, blob, len);
 
     _seenCount = 0;
     recordSeen(_radio.playerId());
@@ -856,26 +866,6 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
 
         delay(GameDefaults::LOOP_MS);
     }
-}
-
-void LightAir_GameSetupMenu::shareConfig() {
-    _display.clear();
-    _display.setColor(true);
-    _display.print(0, 0,  "Share config?");
-    printLegend("O:YES  X:Skip", DisplayDefaults::BOTTOM_LINE_Y);
-    _display.flush();
-
-    char key = waitForKey();
-    if (key != 'A') return;
-
-    // Generate session token (1–255; 0 is UNSET sentinel, skip it).
-    uint8_t token = 0;
-    while (token == 0) token = (uint8_t)esp_random();
-    _radio.setSessionToken(token);
-
-    uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
-    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, _totemAssignment, _teams, token);
-    if (len > 0) _radio.broadcast(_msgType, blob, len);
 }
 
 void LightAir_GameSetupMenu::recordSeen(uint8_t id) {
