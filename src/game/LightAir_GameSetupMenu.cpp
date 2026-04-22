@@ -485,7 +485,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
         _display.clear();
         _display.setColor(true);
         const char* labels[3] = { "Config", "Teams", "Totems" };
-        for (uint8_t r = 0; r < 3; r++) {
+        for (uint8_t r = 0; r < 4; r++) {
             char buf[20];
             if (allowed[r]) {
                 snprintf(buf, sizeof(buf), "%s %.6s",
@@ -495,7 +495,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
             }
             _display.print(0, DisplayDefaults::FONT_HEIGHT * r, buf);
         }
-        printLegend("O:Enter  X:Skip", DisplayDefaults::BOTTOM_LINE_Y);
+        printLegend("O:Enter  <:Back  X:Start", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
     };
 
