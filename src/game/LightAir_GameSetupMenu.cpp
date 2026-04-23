@@ -1069,18 +1069,22 @@ MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
                 lastHeldReturn[(uint8_t)ke.key] = millis();  // Reset HELD repeat timer
                 return {ke.key, KeyState::PRESSED};
             }
-            if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
-                lastHeldReturn[(uint8_t)ke.key] = millis();
-                return {ke.key, KeyState::HELD};
+            if (ke.key!='A' && ke.key!='B'){ // Only for navigation keys
+              if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
+                  lastHeldReturn[(uint8_t)ke.key] = millis();
+                  return {ke.key, KeyState::HELD};
+              }
             }
             // Continue returning HELD if enough time has passed since last return
-            if (ke.state == KeyState::HELD && prev == KeyState::HELD) {
-                uint32_t now = millis();
-                if (now - lastHeldReturn[(uint8_t)ke.key] >= InputDefaults::HELD_REPEAT_MS) {
-                    lastHeldReturn[(uint8_t)ke.key] = now;
-                    return {ke.key, KeyState::HELD};
-                }
-            }
+            if (ke.key!='A' && ke.key!='B'){ // Only for navigation keys
+              if (ke.state == KeyState::HELD && prev == KeyState::HELD) {
+                  uint32_t now = millis();
+                  if (now - lastHeldReturn[(uint8_t)ke.key] >= InputDefaults::HELD_REPEAT_MS) {
+                      lastHeldReturn[(uint8_t)ke.key] = now;
+                      return {ke.key, KeyState::HELD};
+                  }
+              }
+          }
         }
         delay(GameDefaults::LOOP_MS);
     }
