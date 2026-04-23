@@ -26,7 +26,7 @@ public:
     Down,
     Up,
     EndGame,
-    StartGame,
+    GameStart,
     FlagGain,
     FlagTaken,
     FlagReturn,

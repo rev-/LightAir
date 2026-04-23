@@ -159,7 +159,7 @@ static int8_t cpIndex(uint8_t senderId) {
 }
 
 // ---- onBegin ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
                     const LightAir_GameRunner& runner) {
     lives            = startLives;
     energy           = startEnergy;

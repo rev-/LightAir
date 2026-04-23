@@ -191,7 +191,7 @@ static const WinnerVar winnerVars[] = {
 };
 
 // ---- onBegin: reset all runtime state from config ----
-static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
+static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
                     const LightAir_GameRunner&) {
     energy          = startEnergy;
     gameTimeLeft    = gameTime;
