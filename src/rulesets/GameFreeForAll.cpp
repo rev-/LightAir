@@ -182,6 +182,8 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
     triggerWasActive = false;
     releaseAt        = 0;
     memset(litAt, 0, sizeof(litAt));
+
+    ui.trigger(LightAir_UICtrl::UIEvent::GameStart);
 }
 
 // ---- Shared per-second ticker (call from every active-state behavior) ----
@@ -272,9 +274,7 @@ static void doInGame(const InputReport& inp, const RadioReport&,
 
     // Restore full energy once cooldown has elapsed.
     if (!triggerActive && energy < startEnergy) {
-        if (rechargeSecs == 0)
-            energy = startEnergy;
-        else if ((millis() - releaseAt)/1000 >= (uint32_t)rechargeSecs)
+        if ((millis() - releaseAt) >= (uint32_t)rechargeSecs * 1000)
             energy = startEnergy;
     }
 }

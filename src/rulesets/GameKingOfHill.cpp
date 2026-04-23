@@ -4,7 +4,7 @@
 #include "GameTypeIds.h"
 
 // ================================================================
-// King of Hill — FFA combat, one (or more) CP totem(s), teamless BASE.
+// King of Hill — FFA interactions, one (or more) CP totem(s), teamless BASE.
 //
 // States
 //   IN_GAME  (0) : active; can shoot; declares presence to CP.
@@ -175,6 +175,8 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*,
     memset(litAt, 0, sizeof(litAt));
 
     for (uint8_t i = 0; i < 6; i++) cpState[i] = CP_TEAM_NONE;
+
+    ui.trigger(LightAir_UICtrl::UIEvent::GameStart);
 
     PlayerConfig cfg;
     player_config_load(cfg);
@@ -358,7 +360,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
     tickGameTime();
     scanCpBeacons(radio, disp, out, true);
 
-    // ---- Combat ----
+    // ---- Interactions ----
     // Poll Enlight; a confirmed hit sends MSG_LIT. No friendly-fire check needed
     // since every player is their own team.
     EnlightResult r = enlightPtr->poll();
@@ -383,9 +385,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
     triggerWasActive = triggerActive;
 
     if (!triggerActive && energy < startEnergy) {
-        if (rechargeSecs == 0)
-            energy = startEnergy;
-        else if ((millis() - releaseAt) / 1000 >= (uint32_t)rechargeSecs)
+        if ((millis() - releaseAt) >= (uint32_t)rechargeSecs * 1000)
             energy = startEnergy;
     }
 }

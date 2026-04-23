@@ -175,6 +175,8 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
 
     myTeam = runner.teamOf(radio.playerId());
 
+    ui.trigger(LightAir_UICtrl::UIEvent::GameStart);
+
     for (uint8_t i = 0; i < 4; i++) {
         baseO_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_O, i);
         baseX_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_X, i);
@@ -350,9 +352,7 @@ static void doInGame(const InputReport& inp, const RadioReport&,
     triggerWasActive = triggerActive;
 
     if (!triggerActive && energy < startEnergy) {
-        if (rechargeSecs == 0)
-            energy = startEnergy;
-        else if ((millis() - releaseAt) / 1000 >= (uint32_t)rechargeSecs)
+        if ((millis() - releaseAt) >= (uint32_t)rechargeSecs * 1000)
             energy = startEnergy;
     }
 }
