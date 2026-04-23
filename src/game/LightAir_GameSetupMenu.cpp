@@ -878,48 +878,33 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
         if (_seenCount != prevCount)
             renderSummary(vScroll);
 
-        const InputReport& inp = _input.poll();
-        for (uint8_t i = 0; i < inp.keyEventCount; i++) {
-            const InputReport::KeyEntry& ke = inp.keyEvents[i];
-            if (ke.keypadId != _keypadId) continue;
+        MenuKeyEvent ev = waitForKey();
+        // Action buttons (A, B) only respond to PRESS
+        if ((ev.key == 'A' || ev.key == 'B') && ev.state != KeyState::PRESSED) continue;
 
-            KeyState prev = gPrevKeyState[(uint8_t)ke.key];
-            gPrevKeyState[(uint8_t)ke.key] = ke.state;
-
-            // Only handle RELEASED/RELEASED_HELD if transitioning from a held state
-            // This prevents triggering on lingering releases from before entering the menu
-            if ((ke.state == KeyState::RELEASED || ke.state == KeyState::RELEASED_HELD) &&
-                (prev != KeyState::PRESSED && prev != KeyState::HELD)) continue;
-
-            if (ke.state != KeyState::RELEASED &&
-                ke.state != KeyState::RELEASED_HELD) continue;
-
-            switch (ke.key) {
-                case 'A': {
-                    uint8_t payload = _countdownSecs / 10;
-                    _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, &payload, 1);
-                    runCountdownSequence(_countdownSecs);
-                    commitToRunner();
-                    return MenuResult::Confirmed;
-                }
-                case 'B':
-                    return MenuResult::Cancelled;
-                case '^':
-                    if (vScroll > 0) { vScroll--; renderSummary(vScroll); }
-                    break;
-                case 'V':
-                    vScroll++; renderSummary(vScroll);
-                    break;
-                case '<':
-                    if (_countdownSecs >= 10) { _countdownSecs -= 10; renderSummary(vScroll); }
-                    break;
-                case '>':
-                    if (_countdownSecs <= 290) { _countdownSecs += 10; renderSummary(vScroll); }
-                    break;
+        switch (ev.key) {
+            case 'A': {
+                uint8_t payload = _countdownSecs / 10;
+                _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, &payload, 1);
+                runCountdownSequence(_countdownSecs);
+                commitToRunner();
+                return MenuResult::Confirmed;
             }
+            case 'B':
+                return MenuResult::Cancelled;
+            case '^':
+                if (vScroll > 0) { vScroll--; renderSummary(vScroll); }
+                break;
+            case 'V':
+                vScroll++; renderSummary(vScroll);
+                break;
+            case '<':
+                if (_countdownSecs >= 10) { _countdownSecs -= 10; renderSummary(vScroll); }
+                break;
+            case '>':
+                if (_countdownSecs <= 290) { _countdownSecs += 10; renderSummary(vScroll); }
+                break;
         }
-
-        delay(GameDefaults::LOOP_MS);
     }
 }
 
