@@ -373,6 +373,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
         if (inp.buttons[i].id != InputDefaults::TRIG_1_ID) continue;
         ButtonState s = inp.buttons[i].state;
         if (s == ButtonState::PRESSED || s == ButtonState::HELD) {
+            triggerActive = true;
             if ((energy > 0) && (enlightPtr->run())) {
                 energy--;
                 energySpent++;

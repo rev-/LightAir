@@ -150,13 +150,14 @@ MenuResult LightAir_GameSetupMenu::run() {
         printLegend("O:Play  X:Settings", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
-        char key = waitForKey();
-        if (key == 'B') {
+        MenuKeyEvent ev = waitForKey();
+        if (ev.state != KeyState::PRESSED) continue;  // Only action buttons on PRESS
+        if (ev.key == 'B') {
             runSettingsMenu();
             _isDm = loadIsDm();   // refresh in case DM was toggled
             continue;
         }
-        if (key == 'A') break;
+        if (ev.key == 'A') break;
     }
 
     // ---- Branch on DM ----
@@ -172,7 +173,11 @@ MenuResult LightAir_GameSetupMenu::run() {
 
     // ---- S4 + S5: Setup → Pre-start (B in pre-start returns here) ----
     while (true) {
-        runSetupMenu();
+        if (!runSetupMenu()) {
+            // User pressed < to go back to game selection
+            runGameList();
+            continue;
+        }
         if (runPreStart() == MenuResult::Confirmed) break;
     }
     return MenuResult::Confirmed;
@@ -216,7 +221,11 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
         printLegend("O:Select  X:Back", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
-        char key = waitForKey();
+        MenuKeyEvent ev = waitForKey();
+        char key = ev.key;
+        // Action buttons (A, B) only respond to PRESS
+        if ((key == 'A' || key == 'B') && ev.state != KeyState::PRESSED) continue;
+
         if (key == 'B') return;
         if (key == '^' && sel > 0) { sel--; continue; }
         if (key == 'V' && sel < kCount - 1) { sel++; continue; }
@@ -250,7 +259,11 @@ void LightAir_GameSetupMenu::runIdSettings() {
         printLegend("O:Save   X:Cancel", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
-        char key = waitForKey();
+        MenuKeyEvent ev = waitForKey();
+        char key = ev.key;
+        // Action buttons (A, B) only respond to PRESS
+        if ((key == 'A' || key == 'B') && ev.state != KeyState::PRESSED) continue;
+
         if (key == 'B') return;
         if (key == '^' && cursor > 0) { cursor--; continue; }
         if (key == 'V' && cursor < 1) { cursor++; continue; }
@@ -303,7 +316,8 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
         for (uint8_t i = 0; i < inp.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = inp.keyEvents[i];
             if (ke.keypadId != _keypadId) continue;
-            if (ke.state != KeyState::RELEASED && ke.state != KeyState::RELEASED_HELD) continue;
+            // Only respond to PRESSED state (ignore HELD and RELEASED)
+            if (ke.state != KeyState::PRESSED) continue;
             if (ke.key == 'B') return MenuResult::Cancelled;
             if (ke.key == 'A' && _game && !joined) {
                 joined = true;
@@ -385,14 +399,15 @@ bool LightAir_GameSetupMenu::runRestartPrompt() {
     _display.flush();
 
     while (true) {
-        char key = waitForKey();
-        if (key == 'A') {
+        MenuKeyEvent ev = waitForKey();
+        if (ev.state != KeyState::PRESSED) continue;  // Only action buttons on PRESS
+        if (ev.key == 'A') {
             _game    = &lastGame;
             _gameIdx = lastIdx;
             initTotemAssignment();
             return true;
         }
-        if (key == 'B') return false;
+        if (ev.key == 'B') return false;
     }
 }
 
@@ -439,7 +454,8 @@ void LightAir_GameSetupMenu::runGameList() {
         for (uint8_t i = 0; i < rep.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = rep.keyEvents[i];
             if (ke.keypadId != _keypadId) continue;
-            if (ke.state != KeyState::RELEASED && ke.state != KeyState::RELEASED_HELD) continue;
+            // Only respond to PRESSED state (ignore HELD and RELEASED)
+            if (ke.state != KeyState::PRESSED) continue;
 
             switch (ke.key) {
                 case '^':
@@ -473,7 +489,7 @@ void LightAir_GameSetupMenu::runGameList() {
  *   S4 — SETUP MENU
  * ========================================================= */
 
-void LightAir_GameSetupMenu::runSetupMenu() {
+bool LightAir_GameSetupMenu::runSetupMenu() {
 
     // Build entry list: always Config + optional Teams + always Totems
     // Entries: 0=Config, 1=Teams (if teamCount > 0), 2=Totems
@@ -502,7 +518,11 @@ void LightAir_GameSetupMenu::runSetupMenu() {
     renderSetupMenu();
 
     while (true) {
-        char key = waitForKey();
+        MenuKeyEvent ev = waitForKey();
+        char key = ev.key;
+        // Action buttons (A, B) only respond to PRESS
+        if ((key == 'A' || key == 'B') && ev.state != KeyState::PRESSED) continue;
+
         switch (key) {
             case '^': {
                 // Move cursor to previous allowed entry.
@@ -518,7 +538,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
                 break;
             }
             case '<':
-                return;  // back to game selection
+                return false;  // back to game selection
             case 'A':
                 // Enter highlighted submenu.
                 if (cursor == 0) runConfigSubmenu();
@@ -537,7 +557,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
                     delay(2000);
                     renderSetupMenu();
                 } else {
-                    return;  // proceed to S5
+                    return true;  // proceed to S5
                 }
                 break;
         }
@@ -586,7 +606,7 @@ void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
 void LightAir_GameSetupMenu::runConfigSubmenu() {
     if (_game->configCount == 0) {
         showMessage2("Config", "No config vars", "", "B:back");
-        while (waitForKey() != 'B') {}
+        while (waitForKey().key != 'B') {}
         return;
     }
 
@@ -595,9 +615,14 @@ void LightAir_GameSetupMenu::runConfigSubmenu() {
     renderConfigEntry(cursor, n);
 
     while (true) {
-        char key = waitForKey();
+        MenuKeyEvent ev = waitForKey();
+        char key = ev.key;
         const ConfigVar& var = _game->configVars[cursor];
         int step = var.step ? var.step : 1;
+
+        // Action buttons (B) only respond to PRESS
+        if ((key == 'B') && ev.state != KeyState::PRESSED) continue;
+
         switch (key) {
             case '^':
                 if (cursor > 0) { cursor--; renderConfigEntry(cursor, n); }
@@ -656,8 +681,13 @@ void LightAir_GameSetupMenu::runTeamsSubmenu() {
     renderTeamEntry(cursor);
 
     while (true) {
-        char key = waitForKey();
+        MenuKeyEvent ev = waitForKey();
+        char key = ev.key;
         uint8_t pid = cursor + 1;
+
+        // Action button (B) only responds to PRESS
+        if (key == 'B' && ev.state != KeyState::PRESSED) continue;
+
         switch (key) {
             case '^':
                 if (cursor > 0) { cursor--; renderTeamEntry(cursor); }
@@ -769,7 +799,12 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
     renderTotemEntry(cursor);
 
     while (true) {
-        char key = waitForKey();
+        MenuKeyEvent ev = waitForKey();
+        char key = ev.key;
+
+        // Action button (B) only responds to PRESS
+        if (key == 'B' && ev.state != KeyState::PRESSED) continue;
+
         switch (key) {
             case '^':
                 if (cursor > 0) { cursor--; renderTotemEntry(cursor); }
@@ -1014,15 +1049,42 @@ void LightAir_GameSetupMenu::runCountdownSequence(uint8_t secs) {
  *   SHARED INPUT
  * ========================================================= */
 
-char LightAir_GameSetupMenu::waitForKey() {
+MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
+    // Track previous key states for edge detection (static, persists across calls).
+    // Supports keys: ^, V, <, >, A, B and others (use key char as index).
+    static KeyState prevState[256] = {};  // Index by ASCII value of key
+    static uint32_t lastHeldReturn[256] = {};  // Track last time HELD was returned per key
+
     while (true) {
         const InputReport& rep = _input.poll();
         for (uint8_t i = 0; i < rep.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = rep.keyEvents[i];
             if (ke.keypadId != _keypadId) continue;
-            if (ke.state != KeyState::RELEASED &&
-                ke.state != KeyState::RELEASED_HELD) continue;
-            return ke.key;
+
+            KeyState prev = prevState[(uint8_t)ke.key];
+            prevState[(uint8_t)ke.key] = ke.state;
+
+            // Return on state transitions: OFF→PRESSED or PRESSED→HELD
+            if (ke.state == KeyState::PRESSED && prev == KeyState::OFF) {
+                lastHeldReturn[(uint8_t)ke.key] = millis();  // Reset HELD repeat timer
+                return {ke.key, KeyState::PRESSED};
+            }
+            if (ke.key!='A' && ke.key!='B'){ // Only for navigation keys
+              if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
+                  lastHeldReturn[(uint8_t)ke.key] = millis();
+                  return {ke.key, KeyState::HELD};
+              }
+            }
+            // Continue returning HELD if enough time has passed since last return
+            if (ke.key!='A' && ke.key!='B'){ // Only for navigation keys
+              if (ke.state == KeyState::HELD && prev == KeyState::HELD) {
+                  uint32_t now = millis();
+                  if (now - lastHeldReturn[(uint8_t)ke.key] >= InputDefaults::HELD_REPEAT_MS) {
+                      lastHeldReturn[(uint8_t)ke.key] = now;
+                      return {ke.key, KeyState::HELD};
+                  }
+              }
+          }
         }
         delay(GameDefaults::LOOP_MS);
     }

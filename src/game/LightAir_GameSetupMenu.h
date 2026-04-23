@@ -45,6 +45,14 @@ bool game_apply_config(const LightAir_Game& game,
                         uint8_t* sessionTokenOut = nullptr);
 
 // ----------------------------------------------------------------
+// KeyEvent — returned by waitForKey() with both key and state info
+// ----------------------------------------------------------------
+struct MenuKeyEvent {
+    char key;
+    KeyState state;
+};
+
+// ----------------------------------------------------------------
 // LightAir_GameSetupMenu — unified DM/player pre-game menu.
 //
 // Screens:
@@ -130,7 +138,7 @@ private:
     void     renderGameList(uint8_t sel);
 
     // ---- S4 ----
-    void     runSetupMenu();
+    bool     runSetupMenu();
     bool     validateTotems() const;
 
     // ---- S4a ----
@@ -158,7 +166,7 @@ private:
     void     commitToRunner();
 
     // ---- Shared ----
-    char     waitForKey();
+    MenuKeyEvent waitForKey();
     void     showMessage2(const char* line0, const char* line1,
                           const char* line2, const char* line3);
     // Print text centered horizontally at pixel row y.
