@@ -882,8 +882,18 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
         for (uint8_t i = 0; i < inp.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = inp.keyEvents[i];
             if (ke.keypadId != _keypadId) continue;
+
+            KeyState prev = gPrevKeyState[(uint8_t)ke.key];
+            gPrevKeyState[(uint8_t)ke.key] = ke.state;
+
+            // Only handle RELEASED/RELEASED_HELD if transitioning from a held state
+            // This prevents triggering on lingering releases from before entering the menu
+            if ((ke.state == KeyState::RELEASED || ke.state == KeyState::RELEASED_HELD) &&
+                (prev != KeyState::PRESSED && prev != KeyState::HELD)) continue;
+
             if (ke.state != KeyState::RELEASED &&
                 ke.state != KeyState::RELEASED_HELD) continue;
+
             switch (ke.key) {
                 case 'A': {
                     uint8_t payload = _countdownSecs / 10;
