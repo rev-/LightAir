@@ -15,6 +15,10 @@ static const char* TAG = "GameConfig";
 #define MGR_NVS_NAMESPACE  "lightair"
 #define MGR_NVS_KEY_DM     "is_dm"
 
+// Key state tracking for menu input (used by waitForKey and resetKeyStates)
+static KeyState gPrevKeyState[256] = {};  // Track previous state per key (indexed by ASCII)
+static uint32_t gLastHeldReturn[256] = {};  // Track last time HELD was returned per key
+
 /* =========================================================
  *   CONFIG BLOB FREE FUNCTIONS
  * ========================================================= */
@@ -444,44 +448,41 @@ void LightAir_GameSetupMenu::runGameList() {
         return;
     }
 
+    resetKeyStates();  // Sync prevState with current reality to prevent carryover
+
     uint8_t lastIdx = _mgr.loadLastPlayed();
     uint8_t sel = (lastIdx < _mgr.count()) ? lastIdx : 0;
 
     renderGameList(sel);
 
     while (true) {
-        const InputReport& rep = _input.poll();
-        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
-            const InputReport::KeyEntry& ke = rep.keyEvents[i];
-            if (ke.keypadId != _keypadId) continue;
-            // Only respond to PRESSED state (ignore HELD and RELEASED)
-            if (ke.state != KeyState::PRESSED) continue;
+        MenuKeyEvent ev = waitForKey();
+        // Only respond to PRESSED state for action buttons (ignore HELD and RELEASED)
+        if ((ev.key == 'A' || ev.key == 'B') && ev.state != KeyState::PRESSED) continue;
 
-            switch (ke.key) {
-                case '^':
-                    if (sel > 0) { sel--; renderGameList(sel); }
-                    break;
-                case 'V':
-                    if (sel + 1 < _mgr.count()) { sel++; renderGameList(sel); }
-                    break;
-                case 'A':
-                    // Start with default/current config — skip S4.
-                    _game    = &_mgr.game(sel);
-                    _gameIdx = sel;
-                    _mgr.saveLastPlayed(sel);
-                    initTotemAssignment();
-                    return;
-                case 'B':
-                    // Enter setup.
-                    _game    = &_mgr.game(sel);
-                    _gameIdx = sel;
-                    _mgr.saveLastPlayed(sel);
-                    initTotemAssignment();
-                    runSetupMenu();
-                    return;
-            }
+        switch (ev.key) {
+            case '^':
+                if (sel > 0) { sel--; renderGameList(sel); }
+                break;
+            case 'V':
+                if (sel + 1 < _mgr.count()) { sel++; renderGameList(sel); }
+                break;
+            case 'A':
+                // Start with default/current config — skip S4.
+                _game    = &_mgr.game(sel);
+                _gameIdx = sel;
+                _mgr.saveLastPlayed(sel);
+                initTotemAssignment();
+                return;
+            case 'B':
+                // Enter setup.
+                _game    = &_mgr.game(sel);
+                _gameIdx = sel;
+                _mgr.saveLastPlayed(sel);
+                initTotemAssignment();
+                runSetupMenu();
+                return;
         }
-        delay(GameDefaults::LOOP_MS);
     }
 }
 
@@ -490,6 +491,7 @@ void LightAir_GameSetupMenu::runGameList() {
  * ========================================================= */
 
 bool LightAir_GameSetupMenu::runSetupMenu() {
+    resetKeyStates();  // Sync prevState with current reality to prevent carryover
 
     // Build entry list: always Config + optional Teams + always Totems
     // Entries: 0=Config, 1=Teams (if teamCount > 0), 2=Totems
@@ -604,6 +606,8 @@ void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
 }
 
 void LightAir_GameSetupMenu::runConfigSubmenu() {
+    resetKeyStates();  // Sync prevState with current reality to prevent carryover
+
     if (_game->configCount == 0) {
         showMessage2("Config", "No config vars", "", "B:back");
         while (waitForKey().key != 'B') {}
@@ -677,6 +681,8 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
 }
 
 void LightAir_GameSetupMenu::runTeamsSubmenu() {
+    resetKeyStates();  // Sync prevState with current reality to prevent carryover
+
     uint8_t cursor = 0;  // 0-based index into player IDs 1..15
     renderTeamEntry(cursor);
 
@@ -795,6 +801,8 @@ void LightAir_GameSetupMenu::renderTotemEntry(uint8_t cursor) {
 }
 
 void LightAir_GameSetupMenu::runTotemsSubmenu() {
+    resetKeyStates();  // Sync prevState with current reality to prevent carryover
+
     uint8_t cursor = 0;
     renderTotemEntry(cursor);
 
@@ -1049,42 +1057,46 @@ void LightAir_GameSetupMenu::runCountdownSequence(uint8_t secs) {
  *   SHARED INPUT
  * ========================================================= */
 
-MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
-    // Track previous key states for edge detection (static, persists across calls).
-    // Supports keys: ^, V, <, >, A, B and others (use key char as index).
-    static KeyState prevState[256] = {};  // Index by ASCII value of key
-    static uint32_t lastHeldReturn[256] = {};  // Track last time HELD was returned per key
+void LightAir_GameSetupMenu::resetKeyStates() {
+    // Synchronize prevState with current InputReport to prevent carryover from previous menus.
+    // This ensures that a key held from a previous menu won't retrigger in the new menu.
+    const InputReport& rep = _input.poll();
+    memset(gPrevKeyState, (uint8_t)KeyState::OFF, sizeof(gPrevKeyState));
+    for (uint8_t i = 0; i < rep.keyEventCount; i++) {
+        gPrevKeyState[(uint8_t)rep.keyEvents[i].key] = rep.keyEvents[i].state;
+    }
+}
 
+MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
     while (true) {
         const InputReport& rep = _input.poll();
         for (uint8_t i = 0; i < rep.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = rep.keyEvents[i];
             if (ke.keypadId != _keypadId) continue;
 
-            KeyState prev = prevState[(uint8_t)ke.key];
-            prevState[(uint8_t)ke.key] = ke.state;
+            KeyState prev = gPrevKeyState[(uint8_t)ke.key];
+            gPrevKeyState[(uint8_t)ke.key] = ke.state;
 
             // Return on state transitions: OFF→PRESSED or PRESSED→HELD
             if (ke.state == KeyState::PRESSED && prev == KeyState::OFF) {
-                lastHeldReturn[(uint8_t)ke.key] = millis();  // Reset HELD repeat timer
+                gLastHeldReturn[(uint8_t)ke.key] = millis();  // Reset HELD repeat timer
                 return {ke.key, KeyState::PRESSED};
             }
-            if (ke.key!='A' && ke.key!='B'){ // Only for navigation keys
-              if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
-                  lastHeldReturn[(uint8_t)ke.key] = millis();
-                  return {ke.key, KeyState::HELD};
-              }
+            if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
+                gLastHeldReturn[(uint8_t)ke.key] = millis();
+                return {ke.key, KeyState::HELD};
             }
             // Continue returning HELD if enough time has passed since last return
-            if (ke.key!='A' && ke.key!='B'){ // Only for navigation keys
-              if (ke.state == KeyState::HELD && prev == KeyState::HELD) {
-                  uint32_t now = millis();
-                  if (now - lastHeldReturn[(uint8_t)ke.key] >= InputDefaults::HELD_REPEAT_MS) {
-                      lastHeldReturn[(uint8_t)ke.key] = now;
-                      return {ke.key, KeyState::HELD};
-                  }
-              }
-          }
+            // A and B do not auto-repeat on HELD
+            if (ke.key != 'A' && ke.key != 'B') {
+                if (ke.state == KeyState::HELD && prev == KeyState::HELD) {
+                    uint32_t now = millis();
+                    if (now - gLastHeldReturn[(uint8_t)ke.key] >= InputDefaults::HELD_REPEAT_MS) {
+                        gLastHeldReturn[(uint8_t)ke.key] = now;
+                        return {ke.key, KeyState::HELD};
+                    }
+                }
+            }
         }
         delay(GameDefaults::LOOP_MS);
     }

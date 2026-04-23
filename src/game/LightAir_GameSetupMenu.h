@@ -167,6 +167,7 @@ private:
 
     // ---- Shared ----
     MenuKeyEvent waitForKey();
+    void     resetKeyStates();  // Reset prevState to reflect current input reality
     void     showMessage2(const char* line0, const char* line1,
                           const char* line2, const char* line3);
     // Print text centered horizontally at pixel row y.
