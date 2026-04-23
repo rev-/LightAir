@@ -468,21 +468,20 @@ void LightAir_GameSetupMenu::runGameList() {
                 if (sel + 1 < _mgr.count()) { sel++; renderGameList(sel); }
                 break;
             case 'A':
-                // Start with default/current config — go directly to countdown with defaults.
+                // Start with default/current config — skip S4.
                 _game    = &_mgr.game(sel);
                 _gameIdx = sel;
                 _mgr.saveLastPlayed(sel);
                 initTotemAssignment();
-                if (runPreStart() == MenuResult::Confirmed) return;
-                break;
+                return;
             case 'B':
-                // Enter setup menu.
+                // Enter setup.
                 _game    = &_mgr.game(sel);
                 _gameIdx = sel;
                 _mgr.saveLastPlayed(sel);
                 initTotemAssignment();
                 runSetupMenu();
-                break;
+                return;
         }
     }
 }
@@ -839,8 +838,6 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
  * ========================================================= */
 
 MenuResult LightAir_GameSetupMenu::runPreStart() {
-    resetKeyStates();  // Sync prevState with current reality to prevent carryover
-
     // Generate session token (1–255; 0 is UNSET sentinel, skip it).
     uint8_t token = 0;
     while (token == 0) token = (uint8_t)esp_random();
