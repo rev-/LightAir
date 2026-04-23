@@ -175,7 +175,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
 
     myTeam = runner.teamOf(radio.playerId());
 
-    ui.trigger(LightAir_UICtrl::UIEvent::GameStart);
+    ui->trigger(LightAir_UICtrl::UIEvent::GameStart);
 
     for (uint8_t i = 0; i < 4; i++) {
         baseO_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_O, i);

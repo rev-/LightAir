@@ -176,7 +176,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
 
     for (uint8_t i = 0; i < 6; i++) cpState[i] = CP_TEAM_NONE;
 
-    ui.trigger(LightAir_UICtrl::UIEvent::GameStart);
+    ui->trigger(LightAir_UICtrl::UIEvent::GameStart);
 
     PlayerConfig cfg;
     player_config_load(cfg);

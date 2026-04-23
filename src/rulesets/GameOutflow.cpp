@@ -208,7 +208,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
     enlightPtr->setCooldown(20);
     enlightPtr->setRepetitions(20);
 
-    ui.trigger(LightAir_UICtrl::UIEvent::GameStart);
+    ui->trigger(LightAir_UICtrl::UIEvent::GameStart);
 }
 
 // ---- Shared per-second game-time ticker ----

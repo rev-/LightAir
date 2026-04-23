@@ -183,7 +183,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
     releaseAt        = 0;
     memset(litAt, 0, sizeof(litAt));
 
-    ui.trigger(LightAir_UICtrl::UIEvent::GameStart);
+    ui->trigger(LightAir_UICtrl::UIEvent::GameStart);
 }
 
 // ---- Shared per-second ticker (call from every active-state behavior) ----

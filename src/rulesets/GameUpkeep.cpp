@@ -228,7 +228,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
 
     myTeam = runner.teamOf(radio.playerId());
 
-    ui.trigger(LightAir_UICtrl::UIEvent::GameStart);
+    ui->trigger(LightAir_UICtrl::UIEvent::GameStart);
 
     numActiveCPs = 0;
     for (uint8_t i = 0; i < 6; i++) {
