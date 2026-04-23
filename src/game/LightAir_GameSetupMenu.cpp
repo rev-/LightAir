@@ -172,7 +172,11 @@ MenuResult LightAir_GameSetupMenu::run() {
 
     // ---- S4 + S5: Setup → Pre-start (B in pre-start returns here) ----
     while (true) {
-        runSetupMenu();
+        if (!runSetupMenu()) {
+            // User pressed < to go back to game selection
+            runGameList();
+            continue;
+        }
         if (runPreStart() == MenuResult::Confirmed) break;
     }
     return MenuResult::Confirmed;
@@ -473,7 +477,7 @@ void LightAir_GameSetupMenu::runGameList() {
  *   S4 — SETUP MENU
  * ========================================================= */
 
-void LightAir_GameSetupMenu::runSetupMenu() {
+bool LightAir_GameSetupMenu::runSetupMenu() {
 
     // Build entry list: always Config + optional Teams + always Totems
     // Entries: 0=Config, 1=Teams (if teamCount > 0), 2=Totems
@@ -518,7 +522,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
                 break;
             }
             case '<':
-                return;  // back to game selection
+                return false;  // back to game selection
             case 'A':
                 // Enter highlighted submenu.
                 if (cursor == 0) runConfigSubmenu();
@@ -537,7 +541,7 @@ void LightAir_GameSetupMenu::runSetupMenu() {
                     delay(2000);
                     renderSetupMenu();
                 } else {
-                    return;  // proceed to S5
+                    return true;  // proceed to S5
                 }
                 break;
         }

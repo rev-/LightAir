@@ -130,7 +130,7 @@ private:
     void     renderGameList(uint8_t sel);
 
     // ---- S4 ----
-    void     runSetupMenu();
+    bool     runSetupMenu();
     bool     validateTotems() const;
 
     // ---- S4a ----
