@@ -1077,6 +1077,11 @@ MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
             KeyState prev = gPrevKeyState[(uint8_t)ke.key];
             gPrevKeyState[(uint8_t)ke.key] = ke.state;
 
+            // Reset to OFF when released so next press is detected as new edge
+            if (ke.state == KeyState::RELEASED || ke.state == KeyState::RELEASED_HELD) {
+                gPrevKeyState[(uint8_t)ke.key] = KeyState::OFF;
+            }
+
             // Return on state transitions: OFF→PRESSED or PRESSED→HELD
             if (ke.state == KeyState::PRESSED && prev == KeyState::OFF) {
                 gLastHeldReturn[(uint8_t)ke.key] = millis();  // Reset HELD repeat timer
