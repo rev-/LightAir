@@ -211,6 +211,7 @@ namespace RadioDefaults {
 // ---------------------------------------------------------------
 namespace InputDefaults {
     constexpr uint32_t LONG_PRESS_MS        = 500;   // ms before PRESSED transitions to HELD
+    constexpr uint32_t HELD_REPEAT_MS       = 100;   // ms between HELD key repeat events in menu
     constexpr uint32_t DEBOUNCE_MS          = 50;    // ms keypad signal must be stable
     constexpr uint8_t  MAX_BUTTONS          = 2;     // max registered buttons
     constexpr uint8_t  MAX_KEYPADS          = 1;     // max registered keypads

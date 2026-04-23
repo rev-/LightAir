@@ -635,29 +635,6 @@ void LightAir_GameSetupMenu::runConfigSubmenu() {
                 if (val < var.min) val = var.min;
                 *var.value = val;
                 renderConfigEntry(cursor, n);
-                // If HELD, continue changing while held
-                if (ev.state == KeyState::HELD) {
-                    uint32_t lastRepeat = millis();
-                    while (true) {
-                        delay(10);
-                        const InputReport& rep = _input.poll();
-                        bool stillHeld = false;
-                        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
-                            if (rep.keyEvents[i].key == '<' && rep.keyEvents[i].state == KeyState::HELD) {
-                                stillHeld = true;
-                                break;
-                            }
-                        }
-                        if (!stillHeld) break;
-                        if (millis() - lastRepeat >= 50) {
-                            val = *var.value - step;
-                            if (val < var.min) val = var.min;
-                            *var.value = val;
-                            renderConfigEntry(cursor, n);
-                            lastRepeat = millis();
-                        }
-                    }
-                }
                 break;
             }
             case '>': {
@@ -665,29 +642,6 @@ void LightAir_GameSetupMenu::runConfigSubmenu() {
                 if (val > var.max) val = var.max;
                 *var.value = val;
                 renderConfigEntry(cursor, n);
-                // If HELD, continue changing while held
-                if (ev.state == KeyState::HELD) {
-                    uint32_t lastRepeat = millis();
-                    while (true) {
-                        delay(10);
-                        const InputReport& rep = _input.poll();
-                        bool stillHeld = false;
-                        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
-                            if (rep.keyEvents[i].key == '>' && rep.keyEvents[i].state == KeyState::HELD) {
-                                stillHeld = true;
-                                break;
-                            }
-                        }
-                        if (!stillHeld) break;
-                        if (millis() - lastRepeat >= 50) {
-                            val = *var.value + step;
-                            if (val > var.max) val = var.max;
-                            *var.value = val;
-                            renderConfigEntry(cursor, n);
-                            lastRepeat = millis();
-                        }
-                    }
-                }
                 break;
             }
             case 'B': return;
@@ -745,54 +699,12 @@ void LightAir_GameSetupMenu::runTeamsSubmenu() {
                 uint8_t n = _game->teamCount;
                 _teams[pid] = (_teams[pid] == 0) ? n - 1 : _teams[pid] - 1;
                 renderTeamEntry(cursor);
-                // If HELD, continue cycling while held
-                if (ev.state == KeyState::HELD) {
-                    uint32_t lastRepeat = millis();
-                    while (true) {
-                        delay(10);
-                        const InputReport& rep = _input.poll();
-                        bool stillHeld = false;
-                        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
-                            if (rep.keyEvents[i].key == '<' && rep.keyEvents[i].state == KeyState::HELD) {
-                                stillHeld = true;
-                                break;
-                            }
-                        }
-                        if (!stillHeld) break;
-                        if (millis() - lastRepeat >= 50) {
-                            _teams[pid] = (_teams[pid] == 0) ? n - 1 : _teams[pid] - 1;
-                            renderTeamEntry(cursor);
-                            lastRepeat = millis();
-                        }
-                    }
-                }
                 break;
             }
             case '>': {
                 uint8_t n = _game->teamCount;
                 _teams[pid] = (_teams[pid] + 1) % n;
                 renderTeamEntry(cursor);
-                // If HELD, continue cycling while held
-                if (ev.state == KeyState::HELD) {
-                    uint32_t lastRepeat = millis();
-                    while (true) {
-                        delay(10);
-                        const InputReport& rep = _input.poll();
-                        bool stillHeld = false;
-                        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
-                            if (rep.keyEvents[i].key == '>' && rep.keyEvents[i].state == KeyState::HELD) {
-                                stillHeld = true;
-                                break;
-                            }
-                        }
-                        if (!stillHeld) break;
-                        if (millis() - lastRepeat >= 50) {
-                            _teams[pid] = (_teams[pid] + 1) % n;
-                            renderTeamEntry(cursor);
-                            lastRepeat = millis();
-                        }
-                    }
-                }
                 break;
             }
             case 'B': return;
@@ -903,52 +815,10 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
             case '<':
                 _totemAssignment[cursor] = nextTotemRole(cursor, -1);
                 renderTotemEntry(cursor);
-                // If HELD, continue cycling while held
-                if (ev.state == KeyState::HELD) {
-                    uint32_t lastRepeat = millis();
-                    while (true) {
-                        delay(10);
-                        const InputReport& rep = _input.poll();
-                        bool stillHeld = false;
-                        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
-                            if (rep.keyEvents[i].key == '<' && rep.keyEvents[i].state == KeyState::HELD) {
-                                stillHeld = true;
-                                break;
-                            }
-                        }
-                        if (!stillHeld) break;
-                        if (millis() - lastRepeat >= 50) {
-                            _totemAssignment[cursor] = nextTotemRole(cursor, -1);
-                            renderTotemEntry(cursor);
-                            lastRepeat = millis();
-                        }
-                    }
-                }
                 break;
             case '>':
                 _totemAssignment[cursor] = nextTotemRole(cursor, +1);
                 renderTotemEntry(cursor);
-                // If HELD, continue cycling while held
-                if (ev.state == KeyState::HELD) {
-                    uint32_t lastRepeat = millis();
-                    while (true) {
-                        delay(10);
-                        const InputReport& rep = _input.poll();
-                        bool stillHeld = false;
-                        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
-                            if (rep.keyEvents[i].key == '>' && rep.keyEvents[i].state == KeyState::HELD) {
-                                stillHeld = true;
-                                break;
-                            }
-                        }
-                        if (!stillHeld) break;
-                        if (millis() - lastRepeat >= 50) {
-                            _totemAssignment[cursor] = nextTotemRole(cursor, +1);
-                            renderTotemEntry(cursor);
-                            lastRepeat = millis();
-                        }
-                    }
-                }
                 break;
             case 'B': return;
         }
@@ -1183,6 +1053,7 @@ MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
     // Track previous key states for edge detection (static, persists across calls).
     // Supports keys: ^, V, <, >, A, B and others (use key char as index).
     static KeyState prevState[256] = {};  // Index by ASCII value of key
+    static uint32_t lastHeldReturn[256] = {};  // Track last time HELD was returned per key
 
     while (true) {
         const InputReport& rep = _input.poll();
@@ -1193,14 +1064,22 @@ MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
             KeyState prev = prevState[(uint8_t)ke.key];
             prevState[(uint8_t)ke.key] = ke.state;
 
-            // Return only on state transitions: OFF→PRESSED or PRESSED→HELD
-            // Skip stable states (PRESSED→PRESSED, HELD→HELD).
-            // Skip release events (RELEASED, RELEASED_HELD).
+            // Return on state transitions: OFF→PRESSED or PRESSED→HELD
             if (ke.state == KeyState::PRESSED && prev == KeyState::OFF) {
+                lastHeldReturn[(uint8_t)ke.key] = millis();  // Reset HELD repeat timer
                 return {ke.key, KeyState::PRESSED};
             }
             if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
+                lastHeldReturn[(uint8_t)ke.key] = millis();
                 return {ke.key, KeyState::HELD};
+            }
+            // Continue returning HELD if enough time has passed since last return
+            if (ke.state == KeyState::HELD && prev == KeyState::HELD) {
+                uint32_t now = millis();
+                if (now - lastHeldReturn[(uint8_t)ke.key] >= InputDefaults::HELD_REPEAT_MS) {
+                    lastHeldReturn[(uint8_t)ke.key] = now;
+                    return {ke.key, KeyState::HELD};
+                }
             }
         }
         delay(GameDefaults::LOOP_MS);
