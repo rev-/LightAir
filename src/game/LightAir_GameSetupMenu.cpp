@@ -838,6 +838,8 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
  * ========================================================= */
 
 MenuResult LightAir_GameSetupMenu::runPreStart() {
+    resetKeyStates();  // Sync prevState with current reality to prevent carryover
+
     // Generate session token (1–255; 0 is UNSET sentinel, skip it).
     uint8_t token = 0;
     while (token == 0) token = (uint8_t)esp_random();
