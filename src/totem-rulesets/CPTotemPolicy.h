@@ -129,18 +129,6 @@ constexpr uint32_t FLAG_REACTIVATABLE          = (1u << 16);  // REACTIVATE acti
 
 // ── Bits 17–31: Reserved ──────────────────────────────────────────
 
-// ── Pre-built combinations for common game modes ─────────────────
-constexpr uint32_t MODE_UPKEEP_CP =
-    ASSOCIATION_TEAM | CONTEST_PAUSE | POSTSCORE_REPEAT |
-    RESOLUTION_PREV_WINS | TIMER_SIMPLE | FLAG_TIMER_PAUSE_IN_CONTEST;
-
-constexpr uint32_t MODE_DOWNLOAD =
-    ASSOCIATION_PLAYER | CONTEST_RESET | POSTSCORE_INACTIVE | TIMER_SIMPLE;
-
-constexpr uint32_t MODE_KING_OF_HILL =
-    ASSOCIATION_PLAYER | CONTEST_PAUSE | POSTSCORE_REPEAT |
-    RESOLUTION_LAST_STANDING | TIMER_SIMPLE | FLAG_TIMER_PAUSE_IN_CONTEST;
-
 // ── Extracted-value sub-namespaces ───────────────────────────────
 // Return values of CPTotem's mode accessor helpers (assocScope(),
 // contestBeh(), postScore(), resolution(), timerMode()).

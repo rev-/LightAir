@@ -185,17 +185,19 @@ void LightAir_GameRunner::update() {
         for (uint8_t t = 0; t < _totemCount; t++) {
             if (_totems[t].id != id) continue;
             uint8_t roleId = _totems[t].roleId;
-            uint8_t buf[2] = { roleId, 0 };
-            uint8_t bufLen = 1;
-            // Include configSecs if any requirement for this role has one.
+            uint8_t buf[16] = { roleId };
+            uint8_t bufLen  = 1;
             if (_game->totemRequirements) {
                 for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
                     const LightAir_TotemRequirement& req = _game->totemRequirements[r];
-                    if (req.roleId == roleId && req.configSecs != nullptr) {
+                    if (req.roleId != roleId) continue;
+                    if (req.buildPayload != nullptr) {
+                        bufLen = 1 + req.buildPayload(buf + 1, (uint8_t)(sizeof(buf) - 1));
+                    } else if (req.configSecs != nullptr) {
                         buf[1] = (uint8_t)*req.configSecs;
-                        bufLen = 2;
-                        break;
+                        bufLen  = 2;
                     }
+                    break;
                 }
             }
             output.radio.replyWithPayload(ev.packet, buf, bufLen);
@@ -354,16 +356,19 @@ void LightAir_GameRunner::scoreUpdate(const InputReport& inputs,
         for (uint8_t t = 0; t < _totemCount; t++) {
             if (_totems[t].id != id) continue;
             uint8_t roleId = _totems[t].roleId;
-            uint8_t buf[2] = { roleId, 0 };
-            uint8_t bufLen = 1;
+            uint8_t buf[16] = { roleId };
+            uint8_t bufLen  = 1;
             if (_game->totemRequirements) {
                 for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
                     const LightAir_TotemRequirement& req = _game->totemRequirements[r];
-                    if (req.roleId == roleId && req.configSecs != nullptr) {
+                    if (req.roleId != roleId) continue;
+                    if (req.buildPayload != nullptr) {
+                        bufLen = 1 + req.buildPayload(buf + 1, (uint8_t)(sizeof(buf) - 1));
+                    } else if (req.configSecs != nullptr) {
                         buf[1] = (uint8_t)*req.configSecs;
-                        bufLen = 2;
-                        break;
+                        bufLen  = 2;
                     }
+                    break;
                 }
             }
             output.radio.replyWithPayload(ev.packet, buf, bufLen);

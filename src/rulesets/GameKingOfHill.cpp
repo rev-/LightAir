@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "GameTypeIds.h"
+#include "../totem-rulesets/CPTotemPolicy.h"
 
 // ================================================================
 // King of Hill — FFA interactions, one (or more) CP totem(s), teamless BASE.
@@ -12,18 +13,18 @@
 //   GAME_END (2) : game over; final score display.
 //
 // Teams
-//   No host-assigned teams.  Each player's 0-indexed "team slot" is
-//   derived from their hardware player ID: myTeam = cfg.id - 1 (0–15).
-//   This maps one-to-one to the CP's team/player index (cpTeam 0–15).
+//   No host-assigned teams.  Each player is identified by their hardware
+//   player ID (myPlayerId = cfg.id, 1–15).
 //
 // Radio messages (even = request, odd = reply)
 //   MSG_LIT           (0x10) : unicast hit to a target player.
 //   MSG_CP_BEACON     (0x52) : broadcast by CP totem every 2 s.
-//                              payload[0] = cpTeam (0–15 = owner, 0xFF = neutral).
-//                              Players reply with subType = myTeam+1 (1–16) if near.
+//                              payload[0]=CPState; [1]=assocPlayer; [2]=assocTeam;
+//                              [3]=assocRole; [4..5]=context LE; [6]=countdownRemSecs.
+//                              Players reply 0x53 with payload[0]=CPAction::PRESENCE.
 //   MSG_CP_SCORE      (0x54) : broadcast by CP totem when it awards a point.
-//                              payload[0] = cpTeam (0–15). Only the matching
-//                              player increments their local points counter.
+//                              payload[0]=assocPlayer, [1]=assocTeam, [2]=assocRole.
+//                              Only the matching player increments their local counter.
 //   MSG_BASE_BEACON   (0x56) : broadcast by teamless BASE (payload[0]=0xFF).
 //                              OUT_GAME players reply to request respawn.
 //   MSG_SCORE_COLLECT (0x12) : per-player score broadcast at GAME_END.
@@ -54,12 +55,13 @@
 //   0 = unlimited (time-only).
 //
 // Config vars
-//   startLives   : lives at start / after respawn (default 3).
-//   respawnSecs  : minimum seconds dead before BASE respawn (default 30).
-//   startEnergy  : energy at start / after respawn (default 50).
-//   rechargeSecs : secs after trigger release before energy restored (default 10).
-//   gameTime     : total game duration in seconds (default 900).
-//   endPoints    : CP-point limit that ends the game early; 0 = disabled (default).
+//   startLives      : lives at start / after respawn (default 3).
+//   respawnSecs     : minimum seconds dead before BASE respawn (default 30).
+//   startEnergy     : energy at start / after respawn (default 50).
+//   rechargeSecs    : secs after trigger release before energy restored (default 10).
+//   gameTime        : total game duration in seconds (default 900).
+//   endPoints       : CP-point limit that ends the game early; 0 = disabled (default).
+//   cpCountdownSecs : CP countdown duration in seconds (default 10).
 // ================================================================
 
 extern Enlight* enlightPtr;
@@ -79,8 +81,9 @@ using RadioMsg::MSG_BASE_BEACON;    // 0x56
 // ---- Reply sub-types for MSG_LIT ----
 enum ReplySubType : uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3, REPLY_IMMUNE = 4 };
 
-// ---- CP state sentinel ----
-static constexpr uint8_t CP_TEAM_NONE   = 0xFF;
+// ---- CP display-key sentinels (stored in cpState[] for change detection) ----
+static constexpr uint8_t CP_KEY_NEUTRAL   = 0xFF;  // IDLE / COOLDOWN / INACTIVE / etc.
+static constexpr uint8_t CP_KEY_CONTESTED = 0xFE;  // CONTESTED
 
 // ---- RSSI proximity thresholds ----
 static constexpr int8_t  NEAR_CP_RSSI    = -65;  // ~3 m indoors; CP presence
@@ -88,12 +91,13 @@ static constexpr int8_t  NEAR_BASE_RSSI  = -60;  // ~2 m indoors; BASE respawn
 static constexpr uint32_t HIT_IMMUNITY_MS = 3000;
 
 // ---- Config variables ----
-static int startLives   = 3;
-static int respawnSecs  = 30;
-static int startEnergy  = 50;
-static int rechargeSecs = 10;
-static int gameTime     = 900;
-static int endPoints    = 0;    // 0 = unlimited
+static int startLives      = 3;
+static int respawnSecs     = 30;
+static int startEnergy     = 50;
+static int rechargeSecs    = 10;
+static int gameTime        = 900;
+static int endPoints       = 0;   // 0 = unlimited
+static int cpCountdownSecs = 10;
 
 // ---- Runtime variables ----
 static int lives        = 3;
@@ -107,7 +111,7 @@ static uint8_t  gState;
 static uint32_t lastTickAt;
 static uint32_t respawnAt;
 static bool     canRespawn;
-static uint8_t  myTeam;    // cfg.id - 1 (0-indexed player slot)
+static uint8_t  myPlayerId;  // cfg.id (hardware player ID, 1–15)
 
 static bool     triggerWasActive = false;
 static uint32_t releaseAt        = 0;
@@ -116,17 +120,18 @@ static uint32_t litAt[PlayerDefs::MAX_PLAYER_ID];
 // ---- Totem device-ID slots ----
 static uint8_t cpIds[6]      = {};
 static uint8_t numActiveCPs  = 0;
-static uint8_t cpState[6];   // last known cpTeam broadcast per CP
+static uint8_t cpState[6];   // compact display key per CP; updated from MSG_CP_BEACON
 
 // ---- Config vars (startup menu) ----
 static const ConfigVar configVars[] = {
-    //name           value            min    max   step
-    { "Lives",      &startLives,      1,    5,     1 },
-    { "Respawn",    &respawnSecs,     5,  120,     5 },
-    { "Energy",     &startEnergy,    10,  100,    10 },
-    { "Recharge",   &rechargeSecs,    0,   20,     5 },
-    { "Time",       &gameTime,       60,  900,    60 },
-    { "EndPoints",  &endPoints,       0,  100,    20 },
+    //name             value               min    max   step
+    { "Lives",        &startLives,          1,    5,     1 },
+    { "Respawn",      &respawnSecs,         5,  120,     5 },
+    { "Energy",       &startEnergy,        10,  100,    10 },
+    { "Recharge",     &rechargeSecs,        0,   20,     5 },
+    { "Time",         &gameTime,           60,  900,    60 },
+    { "EndPoints",    &endPoints,           0,  100,    20 },
+    { "CP Secs",      &cpCountdownSecs,     5,   60,     5 },
 };
 
 // ---- Monitor vars ----
@@ -143,12 +148,32 @@ static const MonitorVar monitorVars[] = {
     MonitorVar::Int("Shone",   &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1),
 };
 
+// ---- CP activation payload builder ----
+// Player-based association; contested pauses countdown; repeating score; last-standing wins.
+static uint8_t buildCpPayload(uint8_t* buf, uint8_t /*maxLen*/) {
+    constexpr uint32_t mode =
+        CPPolicy::ASSOCIATION_PLAYER         |
+        CPPolicy::CONTEST_PAUSE              |
+        CPPolicy::POSTSCORE_REPEAT           |
+        CPPolicy::RESOLUTION_LAST_STANDING   |
+        CPPolicy::TIMER_SIMPLE               |
+        CPPolicy::FLAG_TIMER_PAUSE_IN_CONTEST;
+    buf[0] = (uint8_t)( mode         & 0xFFu);
+    buf[1] = (uint8_t)((mode >>  8)  & 0xFFu);
+    buf[2] = (uint8_t)((mode >> 16)  & 0xFFu);
+    buf[3] = (uint8_t)((mode >> 24)  & 0xFFu);
+    buf[4] = (uint8_t)( cpCountdownSecs       & 0xFFu);
+    buf[5] = (uint8_t)((cpCountdownSecs >> 8) & 0xFFu);
+    buf[6] = 0; buf[7] = 0; buf[8] = 0; buf[9] = 0; buf[10] = 0;
+    return 11;
+}
+
 // ---- Totem requirements ----
 static const LightAir_TotemRequirement totemRequirements[] = {
-    { TotemRoleId::CP,    1, 6, nullptr },  // 1 required, up to 6
-    { TotemRoleId::BASE,  1, 4, nullptr },  // 1 required teamless base
-    { TotemRoleId::BONUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr },
-    { TotemRoleId::MALUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+    { TotemRoleId::CP,    1, 6, nullptr, buildCpPayload },
+    { TotemRoleId::BASE,  1, 4, nullptr, nullptr },
+    { TotemRoleId::BONUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr, nullptr },
+    { TotemRoleId::MALUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr, nullptr },
 };
 
 // ---- Helper: find CP by sender ID ----
@@ -174,17 +199,13 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
     releaseAt        = 0;
     memset(litAt, 0, sizeof(litAt));
 
-    for (uint8_t i = 0; i < 6; i++) cpState[i] = CP_TEAM_NONE;
+    for (uint8_t i = 0; i < 6; i++) cpState[i] = CP_KEY_NEUTRAL;
 
     ui->trigger(LightAir_UICtrl::UIEvent::GameStart);
 
     PlayerConfig cfg;
     player_config_load(cfg);
-    // Each player is their own "team"; use 0-indexed slot so the CP reply
-    // formula (subType = myTeam+1) maps player 1→subType 1, player 2→subType 2, etc.
-    myTeam = (cfg.id > 0 && cfg.id < PlayerDefs::MAX_PLAYER_ID)
-             ? (uint8_t)(cfg.id - 1)
-             : 0;
+    myPlayerId = (cfg.id > 0 && cfg.id < PlayerDefs::MAX_PLAYER_ID) ? cfg.id : 0;
 
     numActiveCPs = 0;
     for (uint8_t i = 0; i < 6; i++) {
@@ -217,9 +238,9 @@ static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput
 }
 
 static void onCpScore(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
-    if (cpIndex(pkt.senderId) < 0) return;   // ignore unknown CP
-    if (pkt.payloadLen < 1)        return;
-    if (pkt.payload[0] != myTeam)  return;   // only count this player's points
+    if (cpIndex(pkt.senderId) < 0)      return;
+    if (pkt.payloadLen < 1)             return;
+    if (pkt.payload[0] != myPlayerId)   return;  // payload[0] = assocPlayer
     points++;
 }
 
@@ -269,6 +290,16 @@ static void tickGameTime() {
     }
 }
 
+// Derive compact display key from a CP beacon packet.
+// Returns 1–15 = owning player ID, CP_KEY_CONTESTED, or CP_KEY_NEUTRAL.
+static uint8_t cpDisplayKey(const RadioPacket& pkt) {
+    if (pkt.payloadLen < 3) return CP_KEY_NEUTRAL;
+    if ((CPState)pkt.payload[0] == CPState::CONTESTED) return CP_KEY_CONTESTED;
+    uint8_t assocPlayer = pkt.payload[1];
+    if (assocPlayer == 0) return CP_KEY_NEUTRAL;  // no player associated
+    return assocPlayer;
+}
+
 // ---- Scan CP beacons: update ownership display and (if active) reply with presence ----
 // sendPresence = true in IN_GAME, false in OUT_GAME (down players cannot capture CPs).
 static void scanCpBeacons(const RadioReport& radio, LightAir_DisplayCtrl& disp,
@@ -281,29 +312,31 @@ static void scanCpBeacons(const RadioReport& radio, LightAir_DisplayCtrl& disp,
         int8_t idx = cpIndex(ev.packet.senderId);
         if (idx < 0) continue;
 
-        // Notify on ownership change (CP_TEAM_NONE = first beacon ever heard).
-        uint8_t newState = ev.packet.payload[0];
-        if (newState != cpState[idx]) {
-            cpState[idx] = newState;
+        uint8_t newKey = cpDisplayKey(ev.packet);
+        if (newKey != cpState[idx]) {
+            cpState[idx] = newKey;
             char msg[20];
-            if (newState == CP_TEAM_NONE) {
+            if (newKey == CP_KEY_NEUTRAL) {
                 snprintf(msg, sizeof(msg), "CP %d neutral", idx + 1);
                 disp.showMessage(msg, 3000);
-            } else {
-                // +1 converts 0-indexed cpTeam back to player ID for display.
-                snprintf(msg, sizeof(msg), "CP %d -> P%d!", idx + 1, (int)newState + 1);
+            } else if (newKey == CP_KEY_CONTESTED) {
+                snprintf(msg, sizeof(msg), "CP %d contested!", idx + 1);
                 disp.showMessage(msg, 3000);
-                if (newState == myTeam)
-                    out.ui.trigger(LightAir_UICtrl::UIEvent::FlagReturn);  // gained CP
+            } else {
+                snprintf(msg, sizeof(msg), "CP %d -> P%d!", idx + 1, (int)newKey);
+                disp.showMessage(msg, 3000);
+                if (newKey == myPlayerId)
+                    out.ui.trigger(LightAir_UICtrl::UIEvent::FlagReturn);
                 else
-                    out.ui.trigger(LightAir_UICtrl::UIEvent::FlagTaken);   // lost CP
+                    out.ui.trigger(LightAir_UICtrl::UIEvent::FlagTaken);
             }
         }
 
-        // Reply with our presence so the CP totem can update ownership.
-        // subType = myTeam + 1 (same formula as Upkeep: 1 = slot-0, 2 = slot-1, …).
-        if (sendPresence && ev.rssi >= NEAR_CP_RSSI)
-            out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
+        // Reply with CPAction::PRESENCE; radio header carries senderId for association.
+        if (sendPresence && ev.rssi >= NEAR_CP_RSSI) {
+            uint8_t pres = (uint8_t)CPAction::PRESENCE;
+            out.radio.replyWithPayload(ev.packet, &pres, 1);
+        }
     }
 }
 
@@ -409,7 +442,7 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
         if (ev.rssi            < NEAR_BASE_RSSI)                  continue;
         canRespawn = true;
         // Reply so the BASE totem shows a Respawn animation in this player's colour.
-        out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
+        out.radio.reply(ev.packet, myPlayerId);
         break;
     }
 }
@@ -428,7 +461,7 @@ static const StateBehavior behaviors[] = {
 extern const LightAir_Game game_koh = {
     /* typeId                */ GameTypeId::KING_OF_HILL,
     /* name                  */ "King of Hill",
-    /* configVars            */ KoH::configVars,         /* configCount            */ 6,
+    /* configVars            */ KoH::configVars,         /* configCount            */ 7,
     /* monitorVars           */ KoH::monitorVars,        /* monitorCount           */ 8,
     /* directRadioRules      */ KoH::directRadioRules,   /* directRadioRuleCount   */ 6,
     /* replyRadioRules       */ KoH::replyRadioRules,    /* replyRadioRuleCount    */ 3,

@@ -34,7 +34,7 @@ struct RadioReplyMsg {
     uint8_t  senderId;
     uint8_t  origMsgType;
     uint32_t origTimestamp;
-    uint8_t  payload[4];    // reply payload bytes
+    uint8_t  payload[16];   // reply payload bytes (16 covers max totem activation payload)
     uint8_t  payloadLen;    // 0 = no payload
 };
 
@@ -92,11 +92,11 @@ struct RadioOutput {
         }
     }
 
-    // Queue a reply with an explicit multi-byte payload (up to 4 bytes).
+    // Queue a reply with an explicit multi-byte payload (up to 16 bytes).
     void replyWithPayload(const RadioPacket& original,
                           const uint8_t* pl, uint8_t len) {
         if (replyCount >= GameDefaults::RADIO_REPLY_MAX) return;
-        if (len > 4) len = 4;
+        if (len > 16) len = 16;
         RadioReplyMsg& r   = replies[replyCount++];
         r.senderId         = original.senderId;
         r.origMsgType      = original.msgType;

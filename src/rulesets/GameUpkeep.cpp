@@ -1,7 +1,8 @@
 #include <LightAir.h>
 #include <string.h>
-#include "GameTypeIds.h"
 #include <stdio.h>
+#include "GameTypeIds.h"
+#include "../totem-rulesets/CPTotemPolicy.h"
 
 // ================================================================
 // Upkeep — two-team game with Control Points (CPs).
@@ -15,12 +16,12 @@
 //   MSG_LIT           (0x10) : unicast hit to a target player.
 //   MSG_TOTEM_BEACON  (0xF0) : broadcast by all totems periodically (received only).
 //   MSG_CP_BEACON     (0x52) : broadcast by CP totems every 2 s.
-//                              payload[0] = cpTeam: 0=O, 1=X, 0xFF=teamless.
-//                              Players reply 0x53 to notify presence:
-//                              subType = 1 (team-O) or 2 (team-X).
-//                              subType = 0 (empty auto-reply) is ignored by the CP.
+//                              payload[0]=CPState; [1]=assocPlayer; [2]=assocTeam;
+//                              [3]=assocRole; [4..5]=context LE; [6]=countdownRemSecs.
+//                              Players reply 0x53 with payload[0]=CPAction::PRESENCE.
+//                              team/role are carried in the radio packet header.
 //   MSG_CP_SCORE      (0x54) : broadcast by CP totem when it awards 1 point.
-//                              payload[0] = team (0=O, 1=X) that receives the point.
+//                              payload[0]=assocPlayer, [1]=assocTeam, [2]=assocRole.
 //   MSG_SCORE_COLLECT (0x12) : broadcast per-player scores during GAME_END.
 //
 // Reply sub-types (payload[0] of the 0x11 reply to MSG_LIT)
@@ -59,6 +60,7 @@
 //   gameTime         : total game duration in seconds (default 900).
 //   friendlyFire     : 0 = off (default), 1 = on.
 //   endPoints        : combined CP-point limit for early GAME_END; 0 = disabled (default 150).
+//   cpCountdownSecs  : CP countdown duration in seconds (default 10).
 // ================================================================
 
 extern Enlight* enlightPtr;
@@ -84,8 +86,9 @@ enum ReplySubType : uint8_t {
     REPLY_IMMUNE = 5,
 };
 
-// ---- CP team encoding (used in MSG_CP_BEACON payload[0] and cpState[]) ----
-static constexpr uint8_t CP_TEAM_NONE = 0xFF;  // teamless
+// ---- CP display-key sentinels (stored in cpState[] for change detection) ----
+static constexpr uint8_t CP_KEY_NEUTRAL   = 0xFF;  // IDLE / COOLDOWN / INACTIVE / etc.
+static constexpr uint8_t CP_KEY_CONTESTED = 0xFE;  // CONTESTED
 
 // ---- RSSI proximity thresholds ----
 static constexpr int8_t  NEAR_CP_RSSI    = -65;  // ~3 m indoors for CP presence
@@ -100,6 +103,7 @@ static int rechargeSecs     = 10;
 static int gameTime         = 900;
 static int friendlyFire     = 0;
 static int endPoints        = 150;
+static int cpCountdownSecs  = 10;
 
 // ---- Runtime variables ----
 static int lives          = 3;
@@ -114,8 +118,8 @@ static int myTeamCPPoints = 0;   // = teamOPoints or teamXPoints; used by Winner
 // Score string shown on display: "myPts/enemyPts"
 static char teamScoreStr[9] = "0/0";
 
-// Cached CP ownership states; updated from MSG_CP_BEACON.
-// CP_TEAM_NONE = not yet heard from this CP.
+// Compact display key per CP; updated from MSG_CP_BEACON.
+// 0 = team-O owned, 1 = team-X owned, CP_KEY_CONTESTED, CP_KEY_NEUTRAL.
 static uint8_t cpState[6];
 
 static uint8_t  gState;
@@ -146,6 +150,7 @@ static const ConfigVar configVars[] = {
     { "Time",          &gameTime,          60,   900,  60  },
     { "FriendlyFire",  &friendlyFire,       0,     1,   1  },
     { "EndPoints",     &endPoints,          0,   500,  50  },
+    { "CP Secs",       &cpCountdownSecs,    5,    60,   5  },
 };
 
 // ---- Monitor vars ----
@@ -163,14 +168,36 @@ static const MonitorVar monitorVars[] = {
     MonitorVar::Int("Shone",  &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1),
 };
 
+// ---- CP activation payload builder ----
+// Sends mode + countdown to each CP totem on game start.
+static uint8_t buildCpPayload(uint8_t* buf, uint8_t /*maxLen*/) {
+    // Team-based association; contested pauses countdown; repeating score (classic CP).
+    constexpr uint32_t mode =
+        CPPolicy::ASSOCIATION_TEAM           |
+        CPPolicy::CONTEST_PAUSE              |
+        CPPolicy::POSTSCORE_REPEAT           |
+        CPPolicy::RESOLUTION_PREV_WINS       |
+        CPPolicy::TIMER_SIMPLE               |
+        CPPolicy::FLAG_TIMER_PAUSE_IN_CONTEST;
+    buf[0] = (uint8_t)( mode         & 0xFFu);
+    buf[1] = (uint8_t)((mode >>  8)  & 0xFFu);
+    buf[2] = (uint8_t)((mode >> 16)  & 0xFFu);
+    buf[3] = (uint8_t)((mode >> 24)  & 0xFFu);
+    buf[4] = (uint8_t)( cpCountdownSecs       & 0xFFu);  // countdown_secs LSB
+    buf[5] = (uint8_t)((cpCountdownSecs >> 8) & 0xFFu);  // countdown_secs MSB
+    // context, cooldown, suspend, prime: leave at zero (totem defaults apply).
+    buf[6] = 0; buf[7] = 0; buf[8] = 0; buf[9] = 0; buf[10] = 0;
+    return 11;
+}
+
 // ---- Totem requirements ----
 static const LightAir_TotemRequirement totemRequirements[] = {
-    { TotemRoleId::CP,     3, 6, nullptr },
-    { TotemRoleId::BASE_O, 1, 3, nullptr },
-    { TotemRoleId::BASE_X, 1, 3, nullptr },
-    { TotemRoleId::BASE,   0, 3, nullptr },
-    { TotemRoleId::BONUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
-    { TotemRoleId::MALUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+    { TotemRoleId::CP,     3, 6, nullptr, buildCpPayload },
+    { TotemRoleId::BASE_O, 1, 3, nullptr, nullptr },
+    { TotemRoleId::BASE_X, 1, 3, nullptr, nullptr },
+    { TotemRoleId::BASE,   0, 3, nullptr, nullptr },
+    { TotemRoleId::BONUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr, nullptr },
+    { TotemRoleId::MALUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr, nullptr },
 };
 
 // ---- Helpers ----
@@ -223,7 +250,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
     releaseAt        = 0;
     memset(litAt, 0, sizeof(litAt));
 
-    for (uint8_t i = 0; i < 6; i++) cpState[i] = CP_TEAM_NONE;
+    for (uint8_t i = 0; i < 6; i++) cpState[i] = CP_KEY_NEUTRAL;
     snprintf(teamScoreStr, sizeof(teamScoreStr), "0/0");
 
     myTeam = runner.teamOf(radio.playerId());
@@ -274,8 +301,9 @@ static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput
 }
 
 static void onCpScore(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
-    if (cpIndex(pkt.senderId) < 0) return;   // ignore unknown senders
-    uint8_t scoringTeam = pkt.payload[0];
+    if (cpIndex(pkt.senderId) < 0) return;
+    if (pkt.payloadLen < 2) return;
+    uint8_t scoringTeam = pkt.payload[1];    // [0]=assocPlayer, [1]=assocTeam
     if      (scoringTeam == 0) teamOPoints++;
     else if (scoringTeam == 1) teamXPoints++;
     else return;
@@ -335,7 +363,17 @@ static void tickGameTime() {
     }
 }
 
-// ---- Scan CP beacons: update ownership cache and (if sendPresence) reply with team ----
+// Derive a compact display key from a CP beacon packet.
+// Returns 0/1 = owning team, CP_KEY_CONTESTED, or CP_KEY_NEUTRAL.
+static uint8_t cpDisplayKey(const RadioPacket& pkt) {
+    if (pkt.payloadLen < 3) return CP_KEY_NEUTRAL;
+    if ((CPState)pkt.payload[0] == CPState::CONTESTED) return CP_KEY_CONTESTED;
+    uint8_t assocTeam = pkt.payload[2];
+    if (assocTeam == 0xFF) return CP_KEY_NEUTRAL;
+    return assocTeam;  // 0 = team-O, 1 = team-X
+}
+
+// ---- Scan CP beacons: update ownership cache and (if sendPresence) reply with presence ----
 // Called from both doInGame (sendPresence=true) and doOutGame (sendPresence=false).
 // Ownership changes trigger a tray message and a UI event so the player is informed.
 static void scanCpBeacons(const RadioReport& radio, LightAir_DisplayCtrl& disp,
@@ -348,30 +386,32 @@ static void scanCpBeacons(const RadioReport& radio, LightAir_DisplayCtrl& disp,
         int8_t idx = cpIndex(ev.packet.senderId);
         if (idx < 0) continue;
 
-        // Notify on ownership change (CP_TEAM_NONE = unknown = first beacon ever heard).
-        uint8_t newState = ev.packet.payload[0];
-        if (newState != cpState[idx]) {
-            cpState[idx] = newState;
-            char msg[16];
-            if (newState == CP_TEAM_NONE) {
+        uint8_t newKey = cpDisplayKey(ev.packet);
+        if (newKey != cpState[idx]) {
+            cpState[idx] = newKey;
+            char msg[20];
+            if (newKey == CP_KEY_NEUTRAL) {
                 snprintf(msg, sizeof(msg), "CP %d neutral", idx + 1);
+                disp.showMessage(msg, 3000);
+            } else if (newKey == CP_KEY_CONTESTED) {
+                snprintf(msg, sizeof(msg), "CP %d contested!", idx + 1);
                 disp.showMessage(msg, 3000);
             } else {
                 snprintf(msg, sizeof(msg), "CP %d->Team %c!", idx + 1,
-                         newState == 0 ? 'O' : 'X');
+                         newKey == 0 ? 'O' : 'X');
                 disp.showMessage(msg, 3000);
-                // Good news if our team captured it, bad news if the enemy did.
-                if (newState == myTeam)
+                if (newKey == myTeam)
                     out.ui.trigger(LightAir_UICtrl::UIEvent::FlagReturn);
                 else
                     out.ui.trigger(LightAir_UICtrl::UIEvent::FlagTaken);
             }
         }
 
-        // Reply with our team so the CP totem can track who is nearby.
-        // subType: 1 = team-O player, 2 = team-X player (0 = empty auto-reply, ignored).
-        if (sendPresence && ev.rssi >= NEAR_CP_RSSI)
-            out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
+        // Reply with CPAction::PRESENCE; the radio layer carries team in the packet header.
+        if (sendPresence && ev.rssi >= NEAR_CP_RSSI) {
+            uint8_t pres = (uint8_t)CPAction::PRESENCE;
+            out.radio.replyWithPayload(ev.packet, &pres, 1);
+        }
     }
 }
 
@@ -536,7 +576,7 @@ extern const LightAir_Game game_upkeep = {
     /* typeId                */ GameTypeId::UPKEEP,
     /* name                  */ "Upkeep",
     /* configVars            */ Upkeep::configVars,
-    /* configCount           */ 7,
+    /* configCount           */ 8,
     /* monitorVars           */ Upkeep::monitorVars,
     /* monitorCount          */ sizeof(Upkeep::monitorVars) / sizeof(*Upkeep::monitorVars),
     /* directRadioRules      */ Upkeep::directRadioRules,
