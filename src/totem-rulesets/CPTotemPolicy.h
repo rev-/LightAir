@@ -31,9 +31,13 @@
 //   [9]     cooldown_secs               (0 → 30 s default)
 //   [10]    suspend_secs                (0 → indefinite)
 //   [11]    prime_secs                  (0 → 5 s default)
+//   [12]    beaconMsgType               (0 → MSG_CP_BEACON 0x52)
+//   [13]    maxPoints                   (0 → unlimited; else INACTIVE after N awards)
+//   [14]    beaconInterval_100ms        (0 → 20 = 2 s; units: 100 ms)
+//   [15]    totemTeam                   (0xFF → teamless; used with FLAG_ENEMY_TEAM_ONLY)
 //
-// Beacon payload layout (MSG_CP_BEACON, 0x52)
-// ────────────────────────────────────────────
+// Beacon payload layout (beaconMsgType, default MSG_CP_BEACON 0x52)
+// ──────────────────────────────────────────────────────────────────
 //   [0]     CPState
 //   [1]     associated playerID   (0 = none)
 //   [2]     associated team       (0xFF = none)
@@ -42,8 +46,8 @@
 //   [5]     context high byte
 //   [6]     countdown remaining seconds (0xFF = not running)
 //
-// Player reply payload layout (MSG_CP_BEACON+1, 0x53)
-// ────────────────────────────────────────────────────
+// Player reply payload layout (beaconMsgType+1)
+// ─────────────────────────────────────────────
 //   [0]     CPAction
 //   [1..2]  new context uint16_t LE  (CPAction::CONTEXT only)
 //   team and role are read from RadioPacket header fields, not payload.
@@ -127,7 +131,11 @@ constexpr uint32_t FLAG_SUSPEND_ENABLED        = (1u << 14);  // players may tri
 constexpr uint32_t FLAG_CONTEST_TIMER          = (1u << 15);  // CONTESTED times out after _countdownMs → IDLE
 constexpr uint32_t FLAG_REACTIVATABLE          = (1u << 16);  // REACTIVATE action reverts INACTIVE → IDLE
 
-// ── Bits 17–31: Reserved ──────────────────────────────────────────
+// ── Bits 17–18: Role-behaviour flags ──────────────────────────────
+constexpr uint32_t FLAG_ENEMY_TEAM_ONLY = (1u << 17);  // only players whose team ≠ totemTeam may associate
+constexpr uint32_t FLAG_SILENT_INACTIVE = (1u << 18);  // suppress beacon broadcasts in INACTIVE state
+
+// ── Bits 19–31: Reserved ──────────────────────────────────────────
 
 // ── Extracted-value sub-namespaces ───────────────────────────────
 // Return values of CPTotem's mode accessor helpers (assocScope(),

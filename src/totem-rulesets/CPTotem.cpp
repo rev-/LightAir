@@ -6,9 +6,11 @@
 // ================================================================
 // CPTotem — generalised "point-giving" totem runner.
 //
-// Replaces the original two-state (NEUTRAL/OWNED) implementation
-// with a seven-state machine parameterised entirely by the 32-bit
-// mode word and duration fields in the activation payload.
+// A single class that implements CP, BASE, BONUS, MALUS, and FLAG
+// roles through a seven-state machine fully parameterised by the
+// activation payload.  Role-specific behaviour (UI events, beacon
+// message type, enemy-team filtering, silence in INACTIVE) is
+// selected via the new payload bytes [12..15] and mode bits 17–18.
 //
 // See CPTotemPolicy.h for the full protocol documentation.
 // ================================================================
@@ -30,15 +32,21 @@ static constexpr uint8_t  CP_PRESENCE_MAX         = 16;
 class CPTotem : public LightAir_TotemRunner {
 
     // ── Configuration (set at activation; never changed during a game) ──
+    uint8_t  _roleId;           // from payload[0]; drives UI event selection
     uint32_t _mode;
-    uint32_t _countdownMs;   // capture / scoring countdown
-    uint32_t _cooldownMs;    // post-score cooldown; also CONTESTED timeout
-    uint32_t _suspendMs;     // 0 = indefinite (exit only via RESUME)
-    uint32_t _primeMs;       // PRIMED phase duration (TIMER_PRIMED only)
+    uint32_t _countdownMs;
+    uint32_t _cooldownMs;
+    uint32_t _suspendMs;
+    uint32_t _primeMs;
+    uint8_t  _beaconMsgType;    // message type for beacon broadcasts
+    uint8_t  _maxPoints;        // 0 = unlimited; INACTIVE after this many awards
+    uint32_t _beaconIntervalMs; // window / broadcast period
+    uint8_t  _totemTeam;        // own team; 0xFF = teamless
 
     // ── Mutable game state ───────────────────────────────────────────
     CPState  _state;
     uint16_t _context;
+    uint8_t  _pointsAwarded;    // counts awardScore() calls; reset on activation
 
     // ── Current association ──────────────────────────────────────────
     uint8_t  _assocPlayer;
@@ -51,9 +59,9 @@ class CPTotem : public LightAir_TotemRunner {
     uint8_t  _prevRole;
 
     // ── Timers ───────────────────────────────────────────────────────
-    uint32_t _stateEnteredAt;  // millis() when current state was entered
-    uint32_t _accumulatedMs;   // TIMER_ACCUMULATE: total entity-present time
-    uint32_t _windowStart;     // start of current beacon window
+    uint32_t _stateEnteredAt;
+    uint32_t _accumulatedMs;
+    uint32_t _windowStart;
 
     // ── Presence collection (reset each window) ──────────────────────
     struct PresenceEntry { uint8_t senderId, team, role; };
@@ -61,19 +69,30 @@ class CPTotem : public LightAir_TotemRunner {
     uint8_t       _presenceCount;
 
     // ── Mode field accessors ─────────────────────────────────────────
-    uint8_t assocScope()   const { return (uint8_t)( _mode        & 0x03u); }
-    uint8_t contestBeh()   const { return (uint8_t)((_mode >>  2) & 0x03u); }
-    uint8_t postScore()    const { return (uint8_t)((_mode >>  4) & 0x03u); }
-    uint8_t resolution()   const { return (uint8_t)((_mode >>  6) & 0x03u); }
-    uint8_t timerMode()    const { return (uint8_t)((_mode >>  8) & 0x03u); }
+    uint8_t assocScope()    const { return (uint8_t)( _mode        & 0x03u); }
+    uint8_t contestBeh()    const { return (uint8_t)((_mode >>  2) & 0x03u); }
+    uint8_t postScore()     const { return (uint8_t)((_mode >>  4) & 0x03u); }
+    uint8_t resolution()    const { return (uint8_t)((_mode >>  6) & 0x03u); }
+    uint8_t timerMode()     const { return (uint8_t)((_mode >>  8) & 0x03u); }
 
-    bool pauseInContest()  const { return (_mode & CPPolicy::FLAG_TIMER_PAUSE_IN_CONTEST) != 0; }
-    bool lockOnPrime()     const { return (_mode & CPPolicy::FLAG_LOCK_ON_PRIME)          != 0; }
-    bool lockOnCount()     const { return (_mode & CPPolicy::FLAG_LOCK_ON_COUNT)          != 0; }
-    bool roleGated()       const { return (_mode & CPPolicy::FLAG_ROLE_GATED)             != 0; }
-    bool suspendEnabled()  const { return (_mode & CPPolicy::FLAG_SUSPEND_ENABLED)        != 0; }
-    bool contestTimer()    const { return (_mode & CPPolicy::FLAG_CONTEST_TIMER)          != 0; }
-    bool reactivatable()   const { return (_mode & CPPolicy::FLAG_REACTIVATABLE)          != 0; }
+    bool pauseInContest()   const { return (_mode & CPPolicy::FLAG_TIMER_PAUSE_IN_CONTEST) != 0; }
+    bool lockOnPrime()      const { return (_mode & CPPolicy::FLAG_LOCK_ON_PRIME)          != 0; }
+    bool lockOnCount()      const { return (_mode & CPPolicy::FLAG_LOCK_ON_COUNT)          != 0; }
+    bool roleGated()        const { return (_mode & CPPolicy::FLAG_ROLE_GATED)             != 0; }
+    bool suspendEnabled()   const { return (_mode & CPPolicy::FLAG_SUSPEND_ENABLED)        != 0; }
+    bool contestTimer()     const { return (_mode & CPPolicy::FLAG_CONTEST_TIMER)          != 0; }
+    bool reactivatable()    const { return (_mode & CPPolicy::FLAG_REACTIVATABLE)          != 0; }
+    bool enemyTeamOnly()    const { return (_mode & CPPolicy::FLAG_ENEMY_TEAM_ONLY)        != 0; }
+    bool silentInactive()   const { return (_mode & CPPolicy::FLAG_SILENT_INACTIVE)        != 0; }
+
+    bool isFlagRole() const {
+        return _roleId == TotemRoleId::FLAG_O || _roleId == TotemRoleId::FLAG_X;
+    }
+    bool isBaseRole() const {
+        return _roleId == TotemRoleId::BASE_O
+            || _roleId == TotemRoleId::BASE_X
+            || _roleId == TotemRoleId::BASE;
+    }
 
     // ── Association helpers ──────────────────────────────────────────
 
@@ -101,7 +120,6 @@ class CPTotem : public LightAir_TotemRunner {
         _assocRole   = _prevRole;
     }
 
-    // Does entry e match the entity currently tracked by _assoc*?
     bool matchesAssoc(const PresenceEntry& e) const {
         switch (assocScope()) {
             case CPPolicy::Scope::PLAYER: return e.senderId == _assocPlayer;
@@ -111,21 +129,18 @@ class CPTotem : public LightAir_TotemRunner {
         }
     }
 
-    // Is the currently associated entity represented in this window's presence?
     bool assocPresent() const {
         for (uint8_t i = 0; i < _presenceCount; i++)
             if (matchesAssoc(_presence[i])) return true;
         return false;
     }
 
-    // First presence entry that does NOT match _assoc*; nullptr if none.
     const PresenceEntry* firstOther() const {
         for (uint8_t i = 0; i < _presenceCount; i++)
             if (!matchesAssoc(_presence[i])) return &_presence[i];
         return nullptr;
     }
 
-    // Same as matchesAssoc but against an arbitrary snapshot, not _assoc*.
     bool snapshotPresent(uint8_t pid, uint8_t tm, uint8_t rl) const {
         for (uint8_t i = 0; i < _presenceCount; i++) {
             const PresenceEntry& e = _presence[i];
@@ -141,7 +156,6 @@ class CPTotem : public LightAir_TotemRunner {
 
     // ── State entry ──────────────────────────────────────────────────
 
-    // preserveAccum: keep _accumulatedMs (CONTEST_PAUSE returning to ASSOCIATED).
     void enterState(CPState s, uint32_t now, LightAir_TotemOutput& out,
                     bool preserveAccum = false) {
         _state          = s;
@@ -150,30 +164,50 @@ class CPTotem : public LightAir_TotemRunner {
         updateBackground(out);
     }
 
-    // ── UI ───────────────────────────────────────────────────────────
+    // ── UI helpers ───────────────────────────────────────────────────
+
+    // Colour of the currently associated entity (team or player).
+    void assocColor(uint8_t& r, uint8_t& g, uint8_t& b) const {
+        if (assocScope() != CPPolicy::Scope::PLAYER && _assocTeam < TeamColors::kCount) {
+            r = TeamColors::kColors[_assocTeam][0];
+            g = TeamColors::kColors[_assocTeam][1];
+            b = TeamColors::kColors[_assocTeam][2];
+        } else if (_assocPlayer < PlayerDefs::MAX_PLAYER_ID) {
+            r = PlayerColors::kColors[_assocPlayer][0];
+            g = PlayerColors::kColors[_assocPlayer][1];
+            b = PlayerColors::kColors[_assocPlayer][2];
+        } else {
+            r = 255; g = 255; b = 255;
+        }
+    }
+
+    // Colour identifying this totem's own team; falls back to assocColor.
+    void totemColor(uint8_t& r, uint8_t& g, uint8_t& b) const {
+        if (_totemTeam < TeamColors::kCount) {
+            r = TeamColors::kColors[_totemTeam][0];
+            g = TeamColors::kColors[_totemTeam][1];
+            b = TeamColors::kColors[_totemTeam][2];
+        } else {
+            assocColor(r, g, b);
+        }
+    }
+
+    // ── Background animation ──────────────────────────────────────────
 
     void updateBackground(LightAir_TotemOutput& out) const {
+        uint8_t r, g, b;
         switch (_state) {
 
             case CPState::IDLE:
                 out.ui.trigger(TotemUIEvent::Idle);
                 break;
 
-            case CPState::PRIMED: {
-                // Dim version of the associated entity's colour (quarter brightness).
-                uint8_t r = 64, g = 64, b = 64;
-                if (assocScope() != CPPolicy::Scope::PLAYER && _assocTeam < TeamColors::kCount) {
-                    r = TeamColors::kColors[_assocTeam][0] / 4;
-                    g = TeamColors::kColors[_assocTeam][1] / 4;
-                    b = TeamColors::kColors[_assocTeam][2] / 4;
-                } else if (_assocPlayer < PlayerDefs::MAX_PLAYER_ID) {
-                    r = PlayerColors::kColors[_assocPlayer][0] / 4;
-                    g = PlayerColors::kColors[_assocPlayer][1] / 4;
-                    b = PlayerColors::kColors[_assocPlayer][2] / 4;
-                }
+            case CPState::PRIMED:
+                r = 0; g = 0; b = 0;
+                assocColor(r, g, b);
+                r /= 4; g /= 4; b /= 4;
                 out.ui.trigger(TotemUIEvent::Custom1, r, g, b);
                 break;
-            }
 
             case CPState::ASSOCIATED:
                 if (assocScope() == CPPolicy::Scope::PLAYER ||
@@ -189,29 +223,26 @@ class CPTotem : public LightAir_TotemRunner {
                 break;
 
             case CPState::SUSPENDED:
-                // Dim white pulse — totem is frozen.
                 out.ui.trigger(TotemUIEvent::Custom2, 40, 40, 40);
                 break;
 
-            case CPState::COOLDOWN: {
-                // Very dim colour of last scorer, indicating temporary lockout.
-                uint8_t r = 32, g = 32, b = 32;
-                if (assocScope() != CPPolicy::Scope::PLAYER && _assocTeam < TeamColors::kCount) {
-                    r = TeamColors::kColors[_assocTeam][0] / 8;
-                    g = TeamColors::kColors[_assocTeam][1] / 8;
-                    b = TeamColors::kColors[_assocTeam][2] / 8;
-                } else if (_assocPlayer < PlayerDefs::MAX_PLAYER_ID) {
-                    r = PlayerColors::kColors[_assocPlayer][0] / 8;
-                    g = PlayerColors::kColors[_assocPlayer][1] / 8;
-                    b = PlayerColors::kColors[_assocPlayer][2] / 8;
-                }
+            case CPState::COOLDOWN:
+                r = 0; g = 0; b = 0;
+                assocColor(r, g, b);
+                r /= 8; g /= 8; b /= 8;
                 out.ui.trigger(TotemUIEvent::Custom3, r, g, b);
                 break;
-            }
 
             case CPState::INACTIVE:
-                // Off — totem is done for this game session.
-                out.ui.trigger(TotemUIEvent::Custom4, 0, 0, 0);
+                if (isFlagRole()) {
+                    // Flag is out: show team colour looping "missing" animation.
+                    r = 0; g = 0; b = 0;
+                    totemColor(r, g, b);
+                    out.ui.trigger(TotemUIEvent::FlagMissing, r, g, b);
+                } else {
+                    // Depleted or permanently locked out: dark/off.
+                    out.ui.trigger(TotemUIEvent::Custom4, 0, 0, 0);
+                }
                 break;
         }
     }
@@ -246,18 +277,38 @@ class CPTotem : public LightAir_TotemRunner {
             (uint8_t)((_context >> 8) & 0xFFu),
             countdownRemainingSecs(now),
         };
-        out.radio.broadcast(MSG_CP_BEACON, pl, 7);
+        out.radio.broadcast(_beaconMsgType, pl, 7);
     }
 
     void awardScore(LightAir_TotemOutput& out) {
+        _pointsAwarded++;
         uint8_t pl[3] = { _assocPlayer, _assocTeam, _assocRole };
         out.radio.broadcast(MSG_CP_SCORE, pl, 3);
-        out.ui.trigger(TotemUIEvent::Bonus);
+
+        // Role-specific UI event for the score moment.
+        uint8_t r = 0, g = 0, b = 0;
+        if (_roleId == TotemRoleId::MALUS) {
+            out.ui.trigger(TotemUIEvent::Malus);
+        } else if (isBaseRole()) {
+            assocColor(r, g, b);
+            out.ui.trigger(TotemUIEvent::Respawn, r, g, b);
+        } else if (isFlagRole()) {
+            totemColor(r, g, b);
+            out.ui.trigger(TotemUIEvent::FlagTaken, r, g, b);
+        } else {
+            // CP, BONUS, and anything else.
+            out.ui.trigger(TotemUIEvent::Bonus);
+        }
     }
 
     // ── Post-score transition ─────────────────────────────────────────
 
     void handlePostScore(uint32_t now, LightAir_TotemOutput& out) {
+        // Max-points depletion overrides the per-mode post-score setting.
+        if (_maxPoints > 0 && _pointsAwarded >= _maxPoints) {
+            enterState(CPState::INACTIVE, now, out);
+            return;
+        }
         switch (postScore()) {
             case CPPolicy::PostScore::LOOP:
                 clearAssoc();
@@ -270,7 +321,6 @@ class CPTotem : public LightAir_TotemRunner {
                 enterState(CPState::INACTIVE, now, out);
                 break;
             case CPPolicy::PostScore::REPEAT:
-                // Stay in ASSOCIATED; restart the countdown.
                 _stateEnteredAt = now;
                 _accumulatedMs  = 0;
                 break;
@@ -279,22 +329,17 @@ class CPTotem : public LightAir_TotemRunner {
 
     // ── Contest handling ──────────────────────────────────────────────
 
-    // Called when a different entity appears while PRIMED or ASSOCIATED.
     void handleConflict(uint32_t now, LightAir_TotemOutput& out,
                         const PresenceEntry& other) {
         switch (contestBeh()) {
             case CPPolicy::Contest::HOLD:
-                // Ignore the newcomer.
                 break;
-
             case CPPolicy::Contest::RESET:
-                // New entity takes over immediately.
                 applyAssoc(other);
                 _stateEnteredAt = now;
                 _accumulatedMs  = 0;
                 updateBackground(out);
                 break;
-
             case CPPolicy::Contest::PAUSE:
             case CPPolicy::Contest::PAUSE_THEN_RESET:
                 savePrev();
@@ -307,12 +352,9 @@ class CPTotem : public LightAir_TotemRunner {
 
     void evaluateIdle(uint32_t now, LightAir_TotemOutput& out) {
         if (_presenceCount == 0) return;
-
-        // Pick the first valid candidate.
         for (uint8_t i = 0; i < _presenceCount; i++) {
             if (roleGated() && _presence[i].role == CP_NO_ROLE) continue;
             applyAssoc(_presence[i]);
-
             if (timerMode() == CPPolicy::Timer::PRIMED) {
                 enterState(CPState::PRIMED, now, out);
             } else if (timerMode() == CPPolicy::Timer::IMMEDIATE) {
@@ -331,21 +373,16 @@ class CPTotem : public LightAir_TotemRunner {
         const PresenceEntry* oth = lockOnPrime() ? nullptr : firstOther();
 
         if (!ap && !lockOnPrime()) {
-            // Associated entity left and association is not locked.
             clearAssoc();
             enterState(CPState::IDLE, now, out);
             return;
         }
-
         if (oth) {
             handleConflict(now, out, *oth);
             return;
         }
-
-        if ((now - _stateEnteredAt) >= _primeMs) {
-            // Prime phase complete — start the real countdown.
+        if ((now - _stateEnteredAt) >= _primeMs)
             enterState(CPState::ASSOCIATED, now, out);
-        }
     }
 
     void evaluateAssociated(uint32_t now, LightAir_TotemOutput& out) {
@@ -354,29 +391,24 @@ class CPTotem : public LightAir_TotemRunner {
 
         if (!ap) {
             if (timerMode() == CPPolicy::Timer::ACCUMULATE) {
-                // Timer pauses; check for a new entity.
                 if (oth) handleConflict(now, out, *oth);
-                // else: just wait
             } else {
                 clearAssoc();
                 enterState(CPState::IDLE, now, out);
             }
             return;
         }
-
         if (oth) {
             handleConflict(now, out, *oth);
             return;
         }
 
-        // Associated entity present, no conflict.
         if (timerMode() == CPPolicy::Timer::ACCUMULATE)
             _accumulatedMs += (now - _windowStart);
 
         uint32_t elapsed = (timerMode() == CPPolicy::Timer::ACCUMULATE)
                            ? _accumulatedMs
                            : (now - _stateEnteredAt);
-
         if (elapsed >= _countdownMs) {
             awardScore(out);
             handlePostScore(now, out);
@@ -384,20 +416,18 @@ class CPTotem : public LightAir_TotemRunner {
     }
 
     void evaluateContested(uint32_t now, LightAir_TotemOutput& out) {
-        // Optional hard timeout for the contest (uses _countdownMs as duration).
         if (contestTimer() && (now - _stateEnteredAt) >= _countdownMs) {
             clearAssoc();
             enterState(CPState::IDLE, now, out);
             return;
         }
-
         if (_presenceCount == 0) {
             clearAssoc();
             enterState(CPState::IDLE, now, out);
             return;
         }
 
-        bool prevPresent  = snapshotPresent(_prevPlayer, _prevTeam, _prevRole);
+        bool prevPresent = snapshotPresent(_prevPlayer, _prevTeam, _prevRole);
 
         // Temporarily adopt prev snapshot so firstOther() sees "others" correctly.
         uint8_t sp = _assocPlayer, st = _assocTeam, sr = _assocRole;
@@ -406,43 +436,35 @@ class CPTotem : public LightAir_TotemRunner {
         bool othersPresent = (otherEntry != nullptr);
         _assocPlayer = sp; _assocTeam = st; _assocRole = sr;
 
-        // Both sides still here — contest unresolved.
-        if (prevPresent && othersPresent) return;
+        if (prevPresent && othersPresent) return;  // still unresolved
 
         bool resetTimer = (contestBeh() == CPPolicy::Contest::PAUSE_THEN_RESET);
 
         if (prevPresent && !othersPresent) {
-            // Original holder remains alone.
             restorePrev();
             enterState(CPState::ASSOCIATED, now, out, !resetTimer);
             return;
         }
 
-        // Only non-prev entities (or no one) remain.
         switch (resolution()) {
             case CPPolicy::Resolution::PREV_WINS:
-                // Prev did not win; neutralise regardless.
                 clearAssoc();
                 enterState(CPState::IDLE, now, out);
                 break;
-
             case CPPolicy::Resolution::LAST_STANDING:
                 if (othersPresent) {
                     applyAssoc(*otherEntry);
-                    enterState(CPState::ASSOCIATED, now, out);  // new entity: always fresh start
+                    enterState(CPState::ASSOCIATED, now, out);
                 } else {
                     clearAssoc();
                     enterState(CPState::IDLE, now, out);
                 }
                 break;
-
             case CPPolicy::Resolution::NEUTRALIZE:
                 clearAssoc();
                 enterState(CPState::IDLE, now, out);
                 break;
-
             case CPPolicy::Resolution::FIRST_REPLY:
-                // First presence entry in this window wins; always fresh countdown.
                 applyAssoc(_presence[0]);
                 enterState(CPState::ASSOCIATED, now, out);
                 break;
@@ -451,7 +473,6 @@ class CPTotem : public LightAir_TotemRunner {
 
     void evaluateSuspended(uint32_t now, LightAir_TotemOutput& out) {
         if (_suspendMs > 0 && (now - _stateEnteredAt) >= _suspendMs) {
-            // Timed suspension expired; clear and return to IDLE.
             clearAssoc();
             enterState(CPState::IDLE, now, out);
         }
@@ -481,12 +502,19 @@ public:
 
     void onActivate(const uint8_t* payload, uint8_t len,
                     LightAir_TotemOutput& out) override {
-        _mode        = 0;
-        _countdownMs = CP_DEFAULT_COUNTDOWN_MS;
-        _cooldownMs  = CP_DEFAULT_COOLDOWN_MS;
-        _suspendMs   = 0;
-        _primeMs     = CP_DEFAULT_PRIME_MS;
+        // ── Config defaults ──
+        _roleId           = (len >= 1) ? payload[0] : TotemRoleId::CP;
+        _mode             = 0;
+        _countdownMs      = CP_DEFAULT_COUNTDOWN_MS;
+        _cooldownMs       = CP_DEFAULT_COOLDOWN_MS;
+        _suspendMs        = 0;
+        _primeMs          = CP_DEFAULT_PRIME_MS;
+        _beaconMsgType    = MSG_CP_BEACON;
+        _maxPoints        = 0;
+        _beaconIntervalMs = CP_BEACON_INTERVAL_MS;
+        _totemTeam        = CP_NO_TEAM;
 
+        // ── Parse payload ──
         if (len >= 5) {
             _mode = (uint32_t)payload[1]
                   | ((uint32_t)payload[2] <<  8)
@@ -497,15 +525,17 @@ public:
             uint16_t s = (uint16_t)payload[5] | ((uint16_t)payload[6] << 8);
             if (s > 0) _countdownMs = (uint32_t)s * 1000u;
         }
-        if (len >= 10 && payload[9] > 0)
-            _cooldownMs = (uint32_t)payload[9] * 1000u;
-        if (len >= 11)
-            _suspendMs = (uint32_t)payload[10] * 1000u;
-        if (len >= 12 && payload[11] > 0)
-            _primeMs = (uint32_t)payload[11] * 1000u;
+        if (len >= 10 && payload[9]  > 0) _cooldownMs = (uint32_t)payload[9]  * 1000u;
+        if (len >= 11)                     _suspendMs  = (uint32_t)payload[10] * 1000u;
+        if (len >= 12 && payload[11] > 0)  _primeMs    = (uint32_t)payload[11] * 1000u;
 
         uint16_t initCtx = 0;
         if (len >= 9) initCtx = (uint16_t)payload[7] | ((uint16_t)payload[8] << 8);
+
+        if (len >= 13 && payload[12] != 0) _beaconMsgType    = payload[12];
+        if (len >= 14)                      _maxPoints        = payload[13];
+        if (len >= 15 && payload[14] != 0)  _beaconIntervalMs = (uint32_t)payload[14] * 100u;
+        if (len >= 16)                      _totemTeam        = payload[15];
 
         reset();
         _context     = initCtx;
@@ -514,12 +544,14 @@ public:
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        if (msg.msgType != MSG_CP_BEACON + 1) return;
+        if (msg.msgType != _beaconMsgType + 1) return;
         if (msg.payloadLen == 0) return;
 
         auto action = (CPAction)msg.payload[0];
 
         if (action == CPAction::PRESENCE) {
+            // Enemy-team-only mode: discard presence from the totem's own team.
+            if (enemyTeamOnly() && msg.team == _totemTeam) return;
             if (_presenceCount < CP_PRESENCE_MAX)
                 _presence[_presenceCount++] = { msg.senderId, msg.team, msg.role };
             return;
@@ -543,30 +575,40 @@ public:
             _state == CPState::INACTIVE) {
             clearAssoc();
             enterState(CPState::IDLE, now, out);
+            // For FLAG roles fire FlagReturn as one-shot overlay after the Idle background.
+            if (isFlagRole()) {
+                uint8_t r = 0, g = 0, b = 0;
+                totemColor(r, g, b);
+                out.ui.trigger(TotemUIEvent::FlagReturn, r, g, b);
+            }
             return;
         }
 
         if (action == CPAction::CONTEXT && msg.payloadLen >= 3) {
             _context = (uint16_t)msg.payload[1] | ((uint16_t)msg.payload[2] << 8);
-            broadcastBeacon(now, out);  // push updated context to players immediately
+            broadcastBeacon(now, out);  // push updated context immediately
             return;
         }
     }
 
     void update(LightAir_TotemOutput& out) override {
         uint32_t now = millis();
-        if ((now - _windowStart) < CP_BEACON_INTERVAL_MS) return;
+        if ((now - _windowStart) < _beaconIntervalMs) return;
 
         evaluateWindow(now, out);
 
         _presenceCount = 0;
         _windowStart   = now;
-        broadcastBeacon(now, out);
+
+        // FLAG_SILENT_INACTIVE suppresses the beacon when the flag is "out".
+        if (_state != CPState::INACTIVE || !silentInactive())
+            broadcastBeacon(now, out);
     }
 
     void reset() override {
         _state          = CPState::IDLE;
         _context        = 0;
+        _pointsAwarded  = 0;
         clearAssoc();
         _prevPlayer     = CP_NO_PLAYER;
         _prevTeam       = CP_NO_TEAM;
@@ -575,6 +617,12 @@ public:
         _accumulatedMs  = 0;
         _windowStart    = 0;
         _presenceCount  = 0;
+        // Safe defaults so onMessage/update work even before onActivate.
+        _beaconMsgType    = MSG_CP_BEACON;
+        _beaconIntervalMs = CP_BEACON_INTERVAL_MS;
+        _totemTeam        = CP_NO_TEAM;
+        _maxPoints        = 0;
+        _roleId           = TotemRoleId::CP;
     }
 };
 
