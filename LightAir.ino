@@ -119,12 +119,12 @@ static DeviceHardware hw;
 
 #ifdef TEST_UNIT
 #include <test/LightAir_test.h>"
+#include <AUnit.h>
 
 void _setup() {
     // write as needed  
 }
 
-#include <AUnit.h>
 void loop() {
     aunit::TestRunner::run();
 }

@@ -127,17 +127,16 @@ uint8_t LightAir_GameRunner::teamOf(uint8_t id) const {
  *   UPDATE — one loop iteration
  * ========================================================= */
 
-void LightAir_GameRunner::update() {
-    uint32_t loopStart = millis();
+ void LightAir_GameRunner::_read(InputReport &inputs, RadioReport &radio){
+    _input->poll();
+    _radio->poll();
+ }
 
-    // ---- Step 1: READ ----
-    const InputReport& inputs = _input->poll();
-    const RadioReport& radio  = _radio->poll();
+ void LightAir_GameRunner::_logic(InputReport &inputs, RadioReport &radio, 
+    GameOutput &output){
+    // TODO:
 
-    // ---- Step 2: LOGIC ----
-    GameOutput output;
-
-    // ---- Score collection helpers (derived constants) ----
+        // ---- Score collection helpers (derived constants) ----
     const bool   scoringEnabled = _game->winnerVars &&
                                   _game->winnerVarCount > 0 &&
                                   _game->scoringState != 255 &&
@@ -345,7 +344,10 @@ void LightAir_GameRunner::update() {
         _scoreSentAt = millis();
     }
 
-    // ---- Step 3: OUTPUT ----
+ }
+
+ void LightAir_GameRunner::_output(InputReport &inputs, GameOutput &output){
+    
     _display->update();
     flushOutput(output);
 
@@ -365,6 +367,24 @@ void LightAir_GameRunner::update() {
             esp_restart();
         }
     }
+
+ }
+
+ void LightAir_GameRunner::update() {
+    uint32_t loopStart = millis();
+
+    InputReport inputs;
+    RadioReport radio;
+    GameOutput output;
+
+    // ---- Step 1: READ ----
+    this->_read(inputs, radio);
+
+    // ---- Step 2: LOGIC ----
+
+
+    // ---- Step 3: OUTPUT ----
+    this->_output(inputs, output);
 
     // Enforce fixed loop duration.
     while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}

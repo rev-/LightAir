@@ -1,7 +1,6 @@
 #ifndef LIGHTAIR_TEST_HW_H
 #define LIGHTAIR_TEST_HW_H
 
-#include <Arduino.h>
 #include <ArduinoLog.h>
 #include <AUnit.h>
 

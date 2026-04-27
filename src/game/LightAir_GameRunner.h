@@ -141,4 +141,8 @@ private:
     bool scoreSlotsEqual(const uint8_t* a, const uint8_t* b) const;
     void scoreAnnounce() const;
     void scoreBroadcastFused(GameOutput& output) const;
+
+    void _read(InputReport &inputs, RadioReport &radio);
+    void _logic(InputReport &inputs, RadioReport &radio, GameOutput &output);
+    void _output(InputReport &inputs, GameOutput &output);
 };
