@@ -626,6 +626,30 @@ public:
     }
 };
 
-// ── Singleton ────────────────────────────────────────────────────
+// ── Singletons — one instance per role ───────────────────────────
+// All roles are now handled by CPTotem; activation payload selects
+// the behaviour.  The old per-role classes (BaseTotem, BonusTotem,
+// MalusTotem, FlagTotem) no longer export runner pointers.
 static CPTotem s_cp;
-LightAir_TotemRunner* totemRunner_cp = &s_cp;
+LightAir_TotemRunner* totemRunner_cp    = &s_cp;
+
+static CPTotem s_baseO;
+LightAir_TotemRunner* totemRunner_baseO = &s_baseO;
+
+static CPTotem s_baseX;
+LightAir_TotemRunner* totemRunner_baseX = &s_baseX;
+
+static CPTotem s_base;
+LightAir_TotemRunner* totemRunner_base  = &s_base;
+
+static CPTotem s_bonus;
+LightAir_TotemRunner* totemRunner_bonus = &s_bonus;
+
+static CPTotem s_malus;
+LightAir_TotemRunner* totemRunner_malus = &s_malus;
+
+static CPTotem s_flagO;
+LightAir_TotemRunner* totemRunner_flagO = &s_flagO;
+
+static CPTotem s_flagX;
+LightAir_TotemRunner* totemRunner_flagX = &s_flagX;

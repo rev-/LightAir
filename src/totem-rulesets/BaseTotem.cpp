@@ -88,11 +88,4 @@ public:
     }
 };
 
-// ---- Singletons ----
-static BaseTotem s_baseO(0);
-static BaseTotem s_baseX(1);
-static BaseTotem s_base(0xFF);   // teamless
-
-LightAir_TotemRunner* totemRunner_baseO = &s_baseO;
-LightAir_TotemRunner* totemRunner_baseX = &s_baseX;
-LightAir_TotemRunner* totemRunner_base  = &s_base;
+// Singletons and runner exports moved to CPTotem.cpp.

@@ -82,7 +82,4 @@ public:
     }
 };
 
-// ---- Singleton ----
-static MalusTotem s_malus;
-
-LightAir_TotemRunner* totemRunner_malus = &s_malus;
+// Singleton and runner export moved to CPTotem.cpp.

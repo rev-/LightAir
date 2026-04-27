@@ -80,7 +80,4 @@ public:
     }
 };
 
-// ---- Singleton ----
-static BonusTotem s_bonus;
-
-LightAir_TotemRunner* totemRunner_bonus = &s_bonus;
+// Singleton and runner export moved to CPTotem.cpp.

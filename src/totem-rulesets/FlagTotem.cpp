@@ -108,9 +108,4 @@ public:
     }
 };
 
-// ---- Singletons ----
-static FlagTotem s_flagO(0);
-static FlagTotem s_flagX(1);
-
-LightAir_TotemRunner* totemRunner_flagO = &s_flagO;
-LightAir_TotemRunner* totemRunner_flagX = &s_flagX;
+// Singletons and runner exports moved to CPTotem.cpp.

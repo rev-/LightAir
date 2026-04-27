@@ -77,6 +77,8 @@ using RadioMsg::MSG_SCORE_COLLECT;  // 0x12
 using RadioMsg::MSG_CP_BEACON;      // 0x52
 using RadioMsg::MSG_CP_SCORE;       // 0x54
 using RadioMsg::MSG_BASE_BEACON;    // 0x56
+using RadioMsg::MSG_BONUS_BEACON;   // 0x5E
+using RadioMsg::MSG_MALUS_BEACON;   // 0x60
 
 // ---- Reply sub-types for MSG_LIT ----
 enum ReplySubType : uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3, REPLY_IMMUNE = 4 };
@@ -119,7 +121,13 @@ static uint32_t litAt[PlayerDefs::MAX_PLAYER_ID];
 
 // ---- Totem device-ID slots ----
 static uint8_t cpIds[6]      = {};
-static uint8_t numActiveCPs  = 0;
+static uint8_t base_ids[4]   = {};
+static uint8_t bonusIds[GameDefaults::MAX_PARTICIPANTS] = {};
+static uint8_t malusIds[GameDefaults::MAX_PARTICIPANTS] = {};
+static uint8_t numActiveCPs      = 0;
+static uint8_t numActiveBases    = 0;
+static uint8_t numActiveBonuses  = 0;
+static uint8_t numActiveMaluses  = 0;
 static uint8_t cpState[6];   // compact display key per CP; updated from MSG_CP_BEACON
 
 // ---- Config vars (startup menu) ----
@@ -148,8 +156,8 @@ static const MonitorVar monitorVars[] = {
     MonitorVar::Int("Shone",   &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1),
 };
 
-// ---- CP activation payload builder ----
-// Player-based association; contested pauses countdown; repeating score; last-standing wins.
+// ---- Activation payload builders ----
+
 static uint8_t buildCpPayload(uint8_t* buf, uint8_t /*maxLen*/) {
     constexpr uint32_t mode =
         CPPolicy::ASSOCIATION_PLAYER         |
@@ -158,28 +166,100 @@ static uint8_t buildCpPayload(uint8_t* buf, uint8_t /*maxLen*/) {
         CPPolicy::RESOLUTION_LAST_STANDING   |
         CPPolicy::TIMER_SIMPLE               |
         CPPolicy::FLAG_TIMER_PAUSE_IN_CONTEST;
-    buf[0] = (uint8_t)( mode         & 0xFFu);
-    buf[1] = (uint8_t)((mode >>  8)  & 0xFFu);
-    buf[2] = (uint8_t)((mode >> 16)  & 0xFFu);
-    buf[3] = (uint8_t)((mode >> 24)  & 0xFFu);
-    buf[4] = (uint8_t)( cpCountdownSecs       & 0xFFu);
-    buf[5] = (uint8_t)((cpCountdownSecs >> 8) & 0xFFu);
-    buf[6] = 0; buf[7] = 0; buf[8] = 0; buf[9] = 0; buf[10] = 0;
-    return 11;
+    buf[0]  = (uint8_t)( mode        & 0xFFu);
+    buf[1]  = (uint8_t)((mode >>  8) & 0xFFu);
+    buf[2]  = (uint8_t)((mode >> 16) & 0xFFu);
+    buf[3]  = (uint8_t)((mode >> 24) & 0xFFu);
+    buf[4]  = (uint8_t)( cpCountdownSecs       & 0xFFu);
+    buf[5]  = (uint8_t)((cpCountdownSecs >> 8) & 0xFFu);
+    buf[6]  = 0; buf[7]  = 0;
+    buf[8]  = 0; buf[9]  = 0; buf[10] = 0;
+    buf[11] = 0;     // beaconMsgType (0 → MSG_CP_BEACON default)
+    buf[12] = 0;     // maxPoints (unlimited)
+    buf[13] = 0;     // beaconInterval (default 2 s)
+    buf[14] = 0xFF;  // totemTeam (teamless)
+    return 15;
+}
+
+static uint8_t buildBaseAnyPayload(uint8_t* buf, uint8_t /*maxLen*/) {
+    constexpr uint32_t mode =
+        CPPolicy::ASSOCIATION_ANY      |
+        CPPolicy::CONTEST_HOLD         |
+        CPPolicy::POSTSCORE_LOOP       |
+        CPPolicy::RESOLUTION_PREV_WINS |
+        CPPolicy::TIMER_IMMEDIATE;
+    buf[0]  = (uint8_t)( mode        & 0xFFu);
+    buf[1]  = (uint8_t)((mode >>  8) & 0xFFu);
+    buf[2]  = (uint8_t)((mode >> 16) & 0xFFu);
+    buf[3]  = (uint8_t)((mode >> 24) & 0xFFu);
+    buf[4]  = 0; buf[5]  = 0;
+    buf[6]  = 0; buf[7]  = 0;
+    buf[8]  = 0; buf[9]  = 0; buf[10] = 0;
+    buf[11] = MSG_BASE_BEACON;
+    buf[12] = 0;
+    buf[13] = 0;
+    buf[14] = 0xFF;
+    return 15;
+}
+
+static uint8_t buildBonusPayload(uint8_t* buf, uint8_t /*maxLen*/) {
+    constexpr uint32_t mode =
+        CPPolicy::ASSOCIATION_ANY      |
+        CPPolicy::CONTEST_HOLD         |
+        CPPolicy::POSTSCORE_COOLDOWN   |
+        CPPolicy::RESOLUTION_PREV_WINS |
+        CPPolicy::TIMER_IMMEDIATE;
+    buf[0]  = (uint8_t)( mode        & 0xFFu);
+    buf[1]  = (uint8_t)((mode >>  8) & 0xFFu);
+    buf[2]  = (uint8_t)((mode >> 16) & 0xFFu);
+    buf[3]  = (uint8_t)((mode >> 24) & 0xFFu);
+    buf[4]  = 0; buf[5]  = 0;
+    buf[6]  = 0; buf[7]  = 0;
+    buf[8]  = 30;
+    buf[9]  = 0; buf[10] = 0;
+    buf[11] = MSG_BONUS_BEACON;
+    buf[12] = 0;
+    buf[13] = 0;
+    buf[14] = 0xFF;
+    return 15;
+}
+
+static uint8_t buildMalusPayload(uint8_t* buf, uint8_t maxLen) {
+    uint8_t n = buildBonusPayload(buf, maxLen);
+    buf[11] = MSG_MALUS_BEACON;
+    return n;
 }
 
 // ---- Totem requirements ----
 static const LightAir_TotemRequirement totemRequirements[] = {
-    { TotemRoleId::CP,    1, 6, nullptr, buildCpPayload },
-    { TotemRoleId::BASE,  1, 4, nullptr, nullptr },
-    { TotemRoleId::BONUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr, nullptr },
-    { TotemRoleId::MALUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr, nullptr },
+    { TotemRoleId::CP,    1, 6,  nullptr, buildCpPayload      },
+    { TotemRoleId::BASE,  1, 4,  nullptr, buildBaseAnyPayload },
+    { TotemRoleId::BONUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr, buildBonusPayload },
+    { TotemRoleId::MALUS, 0, GameDefaults::MAX_PARTICIPANTS, nullptr, buildMalusPayload },
 };
 
-// ---- Helper: find CP by sender ID ----
+// ---- Helpers ----
 static int8_t cpIndex(uint8_t senderId) {
     for (uint8_t i = 0; i < numActiveCPs; i++)
         if (cpIds[i] != 0 && cpIds[i] == senderId) return (int8_t)i;
+    return -1;
+}
+
+static bool isBaseTotem(uint8_t senderId) {
+    for (uint8_t i = 0; i < numActiveBases; i++)
+        if (base_ids[i] != 0 && base_ids[i] == senderId) return true;
+    return false;
+}
+
+static int8_t bonusIndex(uint8_t senderId) {
+    for (int i = 0; i < numActiveBonuses; i++)
+        if (bonusIds[i] != 0 && bonusIds[i] == senderId) return (int8_t)i;
+    return -1;
+}
+
+static int8_t malusIndex(uint8_t senderId) {
+    for (int i = 0; i < numActiveMaluses; i++)
+        if (malusIds[i] != 0 && malusIds[i] == senderId) return (int8_t)i;
     return -1;
 }
 
@@ -213,6 +293,24 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
         if (id == 0) break;
         cpIds[numActiveCPs++] = id;
     }
+    numActiveBases = 0;
+    for (uint8_t i = 0; i < 4; i++) {
+        uint8_t id = runner.totemIdForRole(TotemRoleId::BASE, i);
+        if (id == 0) break;
+        base_ids[numActiveBases++] = id;
+    }
+    numActiveBonuses = 0;
+    for (uint8_t i = 0; i < GameDefaults::MAX_PARTICIPANTS; i++) {
+        uint8_t id = runner.totemIdForRole(TotemRoleId::BONUS, i);
+        if (id == 0) break;
+        bonusIds[numActiveBonuses++] = id;
+    }
+    numActiveMaluses = 0;
+    for (uint8_t i = 0; i < GameDefaults::MAX_PARTICIPANTS; i++) {
+        uint8_t id = runner.totemIdForRole(TotemRoleId::MALUS, i);
+        if (id == 0) break;
+        malusIds[numActiveMaluses++] = id;
+    }
 }
 
 // ---- DirectRadioRule conditions ----
@@ -244,14 +342,40 @@ static void onCpScore(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&
     points++;
 }
 
+static void onBaseScore(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    if (!isBaseTotem(pkt.senderId))   return;
+    if (pkt.payloadLen < 1)           return;
+    if (pkt.payload[0] != myPlayerId) return;
+    canRespawn = true;
+}
+
+static void onBonusScore(const RadioPacket& pkt, LightAir_DisplayCtrl& disp, GameOutput&) {
+    if (bonusIndex(pkt.senderId) < 0) return;
+    if (pkt.payloadLen < 1)           return;
+    if (pkt.payload[0] != myPlayerId) return;
+    energy = startEnergy;
+    disp.showMessage("Bonus!", 1500);
+}
+
+static void onMalusScore(const RadioPacket& pkt, LightAir_DisplayCtrl& disp, GameOutput&) {
+    if (malusIndex(pkt.senderId) < 0) return;
+    if (pkt.payloadLen < 1)           return;
+    if (pkt.payload[0] != myPlayerId) return;
+    if (lives > 1) lives--;
+    disp.showMessage("Malus!", 1500);
+}
+
 static const DirectRadioRule directRadioRules[] = {
     //  state     msgType         condition    replySubType  onReceive
-    { IN_GAME,  MSG_LIT,        litAndTaken,  REPLY_TAKEN,  onLitTaken  },
-    { IN_GAME,  MSG_LIT,        litAndShone,  REPLY_SHONE,  onLitShone  },
-    { IN_GAME,  MSG_LIT,        litButImmune, REPLY_IMMUNE, nullptr     },
-    { OUT_GAME, MSG_LIT,        nullptr,      REPLY_DOWN,   nullptr     },
-    { IN_GAME,  MSG_CP_SCORE,   nullptr,     0,            onCpScore  },
-    { OUT_GAME, MSG_CP_SCORE,   nullptr,     0,            onCpScore  },
+    { IN_GAME,  MSG_LIT,        litAndTaken,  REPLY_TAKEN,  onLitTaken   },
+    { IN_GAME,  MSG_LIT,        litAndShone,  REPLY_SHONE,  onLitShone   },
+    { IN_GAME,  MSG_LIT,        litButImmune, REPLY_IMMUNE, nullptr      },
+    { OUT_GAME, MSG_LIT,        nullptr,      REPLY_DOWN,   nullptr      },
+    { IN_GAME,  MSG_CP_SCORE,   nullptr,      0,            onCpScore    },
+    { OUT_GAME, MSG_CP_SCORE,   nullptr,      0,            onCpScore    },
+    { OUT_GAME, MSG_CP_SCORE,   nullptr,      0,            onBaseScore  },
+    { IN_GAME,  MSG_CP_SCORE,   nullptr,      0,            onBonusScore },
+    { IN_GAME,  MSG_CP_SCORE,   nullptr,      0,            onMalusScore },
 };
 
 // ---- ReplyRadioRule handlers ----
@@ -432,17 +556,16 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
 
     if (millis() < respawnAt) return;
 
-    // Scan for a teamless BASE beacon (payload[0]==0xFF) within range.
+    // Scan for a known BASE beacon within range; reply with PRESENCE so the
+    // CPTotem awards a score → onBaseScore() sets canRespawn = true.
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type           != RadioEventType::MessageReceived) continue;
         if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
-        if (ev.packet.payloadLen < 1)                             continue;
-        if (ev.packet.payload[0] != 0xFF)                         continue;  // teamless only
+        if (!isBaseTotem(ev.packet.senderId))                     continue;
         if (ev.rssi            < NEAR_BASE_RSSI)                  continue;
-        canRespawn = true;
-        // Reply so the BASE totem shows a Respawn animation in this player's colour.
-        out.radio.reply(ev.packet, myPlayerId);
+        uint8_t pres = (uint8_t)CPAction::PRESENCE;
+        out.radio.replyWithPayload(ev.packet, &pres, 1);
         break;
     }
 }
@@ -463,7 +586,7 @@ extern const LightAir_Game game_koh = {
     /* name                  */ "King of Hill",
     /* configVars            */ KoH::configVars,         /* configCount            */ 7,
     /* monitorVars           */ KoH::monitorVars,        /* monitorCount           */ 8,
-    /* directRadioRules      */ KoH::directRadioRules,   /* directRadioRuleCount   */ 6,
+    /* directRadioRules      */ KoH::directRadioRules,   /* directRadioRuleCount   */ 9,
     /* replyRadioRules       */ KoH::replyRadioRules,    /* replyRadioRuleCount    */ 3,
     /* rules                 */ KoH::rules,              /* ruleCount              */ 6,
     /* behaviors             */ KoH::behaviors,          /* behaviorCount          */ 3,
