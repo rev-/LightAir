@@ -1,6 +1,7 @@
 #include <LightAir.h>
 #include <string.h>
 #include "GameTypeIds.h"
+#include "../totem-rulesets/CPTotemPolicy.h"
 
 // ================================================================
 // Teams — two-team game: O vs X.
@@ -60,7 +61,10 @@ enum State : uint8_t { IN_GAME, OUT_GAME, GAME_END };
 using RadioMsg::MSG_LIT;            // 0x10
 using RadioMsg::MSG_SCORE_COLLECT;  // 0x12
 using RadioMsg::MSG_POINT_REPORT;   // 0x14
+using RadioMsg::MSG_CP_SCORE;       // 0x54
 using RadioMsg::MSG_BASE_BEACON;    // 0x56
+using RadioMsg::MSG_BONUS_BEACON;   // 0x5E
+using RadioMsg::MSG_MALUS_BEACON;   // 0x60
 
 // ---- Reply sub-types ----
 enum ReplySubType : uint8_t {
@@ -103,11 +107,17 @@ static bool     triggerWasActive = false;
 static uint32_t releaseAt        = 0;
 static uint32_t litAt[PlayerDefs::MAX_PLAYER_ID];
 static uint8_t  myTeam;       // 0=O, 1=X; loaded from runner in onBegin
+static uint8_t  myPlayerId;
 static uint8_t  teamMap[PlayerDefs::MAX_PLAYER_ID];  // per-player team index; filled from config blob
 
 // ---- Totem device-ID slots (populated in onBegin from runner) ----
-static uint8_t baseO_ids[4] = {};   // team-O base device IDs
-static uint8_t baseX_ids[4] = {};   // team-X base device IDs
+static uint8_t baseO_ids[4] = {};
+static uint8_t baseX_ids[4] = {};
+static uint8_t base_ids[4]  = {};
+static uint8_t bonusIds[GameDefaults::MAX_PARTICIPANTS] = {};
+static uint8_t malusIds[GameDefaults::MAX_PARTICIPANTS] = {};
+static uint8_t numActiveBonuses = 0;
+static uint8_t numActiveMaluses = 0;
 
 // ---- Config vars (startup menu) ----
 static const ConfigVar configVars[] = {
@@ -135,25 +145,85 @@ static const MonitorVar monitorVars[] = {
     MonitorVar::Int("Shone",  &shoneTimes,   1u<<GAME_END, ICON_LIFE,   1, 1),
 };
 
+// ---- Activation payload builders ----
+static uint8_t buildBaseOPayload(uint8_t* buf, uint8_t /*maxLen*/) {
+    constexpr uint32_t mode =
+        CPPolicy::ASSOCIATION_ANY | CPPolicy::CONTEST_HOLD | CPPolicy::POSTSCORE_LOOP |
+        CPPolicy::RESOLUTION_PREV_WINS | CPPolicy::TIMER_IMMEDIATE | CPPolicy::FLAG_ENEMY_TEAM_ONLY;
+    buf[0]=(uint8_t)(mode&0xFFu); buf[1]=(uint8_t)((mode>>8)&0xFFu);
+    buf[2]=(uint8_t)((mode>>16)&0xFFu); buf[3]=(uint8_t)((mode>>24)&0xFFu);
+    buf[4]=0; buf[5]=0; buf[6]=0; buf[7]=0; buf[8]=0; buf[9]=0; buf[10]=0;
+    buf[11]=MSG_BASE_BEACON; buf[12]=0; buf[13]=0; buf[14]=1;  // totemTeam=X → only team-O
+    return 15;
+}
+static uint8_t buildBaseXPayload(uint8_t* buf, uint8_t maxLen) {
+    uint8_t n = buildBaseOPayload(buf, maxLen); buf[14] = 0; return n;  // totemTeam=O → only team-X
+}
+static uint8_t buildBaseAnyPayload(uint8_t* buf, uint8_t /*maxLen*/) {
+    constexpr uint32_t mode =
+        CPPolicy::ASSOCIATION_ANY | CPPolicy::CONTEST_HOLD | CPPolicy::POSTSCORE_LOOP |
+        CPPolicy::RESOLUTION_PREV_WINS | CPPolicy::TIMER_IMMEDIATE;
+    buf[0]=(uint8_t)(mode&0xFFu); buf[1]=(uint8_t)((mode>>8)&0xFFu);
+    buf[2]=(uint8_t)((mode>>16)&0xFFu); buf[3]=(uint8_t)((mode>>24)&0xFFu);
+    buf[4]=0; buf[5]=0; buf[6]=0; buf[7]=0; buf[8]=0; buf[9]=0; buf[10]=0;
+    buf[11]=MSG_BASE_BEACON; buf[12]=0; buf[13]=0; buf[14]=0xFF;
+    return 15;
+}
+static uint8_t buildBonusPayload(uint8_t* buf, uint8_t /*maxLen*/) {
+    constexpr uint32_t mode =
+        CPPolicy::ASSOCIATION_ANY | CPPolicy::CONTEST_HOLD | CPPolicy::POSTSCORE_COOLDOWN |
+        CPPolicy::RESOLUTION_PREV_WINS | CPPolicy::TIMER_IMMEDIATE;
+    buf[0]=(uint8_t)(mode&0xFFu); buf[1]=(uint8_t)((mode>>8)&0xFFu);
+    buf[2]=(uint8_t)((mode>>16)&0xFFu); buf[3]=(uint8_t)((mode>>24)&0xFFu);
+    buf[4]=0; buf[5]=0; buf[6]=0; buf[7]=0; buf[8]=30; buf[9]=0; buf[10]=0;
+    buf[11]=MSG_BONUS_BEACON; buf[12]=0; buf[13]=0; buf[14]=0xFF;
+    return 15;
+}
+static uint8_t buildMalusPayload(uint8_t* buf, uint8_t maxLen) {
+    uint8_t n = buildBonusPayload(buf, maxLen); buf[11] = MSG_MALUS_BEACON; return n;
+}
+
 // ---- Totem requirements ----
 static const LightAir_TotemRequirement totemRequirements[] = {
-    { TotemRoleId::BASE_O, 0, 4, nullptr },
-    { TotemRoleId::BASE_X, 0, 4, nullptr },
-    { TotemRoleId::BASE,   0, 4, nullptr },
-    { TotemRoleId::BONUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
-    { TotemRoleId::MALUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr },
+    { TotemRoleId::BASE_O, 0, 4, nullptr, buildBaseOPayload   },
+    { TotemRoleId::BASE_X, 0, 4, nullptr, buildBaseXPayload   },
+    { TotemRoleId::BASE,   0, 4, nullptr, buildBaseAnyPayload },
+    { TotemRoleId::BONUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr, buildBonusPayload },
+    { TotemRoleId::MALUS,  0, GameDefaults::MAX_PARTICIPANTS, nullptr, buildMalusPayload },
 };
 
-// ---- Helper: is targetId on the opposing team? ----
+// ---- Helpers ----
 static bool isOpponent(uint8_t targetId) {
     if (targetId >= PlayerDefs::MAX_PLAYER_ID) return false;
     return teamMap[targetId] != myTeam;
 }
-
-// ---- Helper: is senderId on the same team as this player? ----
 static bool isMyTeammate(uint8_t senderId) {
     if (senderId >= PlayerDefs::MAX_PLAYER_ID) return false;
     return teamMap[senderId] == myTeam;
+}
+static bool isMyTeamBase(uint8_t id) {
+    const uint8_t* myB = (myTeam == 0) ? baseO_ids : baseX_ids;
+    for (int i = 0; i < 4; i++) {
+        if (myB[i]     != 0 && myB[i]     == id) return true;
+        if (base_ids[i] != 0 && base_ids[i] == id) return true;
+    }
+    return false;
+}
+static bool isBaseTotem(uint8_t id) {
+    for (int i = 0; i < 4; i++) {
+        if (baseO_ids[i] != 0 && baseO_ids[i] == id) return true;
+        if (baseX_ids[i] != 0 && baseX_ids[i] == id) return true;
+        if (base_ids[i]  != 0 && base_ids[i]  == id) return true;
+    }
+    return false;
+}
+static int8_t bonusIndex(uint8_t id) {
+    for (int i = 0; i < numActiveBonuses; i++) if (bonusIds[i] == id) return (int8_t)i;
+    return -1;
+}
+static int8_t malusIndex(uint8_t id) {
+    for (int i = 0; i < numActiveMaluses; i++) if (malusIds[i] == id) return (int8_t)i;
+    return -1;
 }
 
 // ---- onBegin ----
@@ -173,13 +243,27 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
     releaseAt        = 0;
     memset(litAt, 0, sizeof(litAt));
 
-    myTeam = runner.teamOf(radio.playerId());
+    myTeam     = runner.teamOf(radio.playerId());
+    myPlayerId = radio.playerId();
 
     ui->trigger(LightAir_UICtrl::UIEvent::GameStart);
 
     for (uint8_t i = 0; i < 4; i++) {
         baseO_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_O, i);
         baseX_ids[i] = runner.totemIdForRole(TotemRoleId::BASE_X, i);
+        base_ids[i]  = runner.totemIdForRole(TotemRoleId::BASE,   i);
+    }
+    numActiveBonuses = 0;
+    for (uint8_t i = 0; i < GameDefaults::MAX_PARTICIPANTS; i++) {
+        uint8_t id = runner.totemIdForRole(TotemRoleId::BONUS, i);
+        if (id == 0) break;
+        bonusIds[numActiveBonuses++] = id;
+    }
+    numActiveMaluses = 0;
+    for (uint8_t i = 0; i < GameDefaults::MAX_PARTICIPANTS; i++) {
+        uint8_t id = runner.totemIdForRole(TotemRoleId::MALUS, i);
+        if (id == 0) break;
+        malusIds[numActiveMaluses++] = id;
     }
 }
 
@@ -219,15 +303,39 @@ static void onPointReport(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOut
         myTeamPoints++;
 }
 
+static void onBaseScore(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
+    if (!isBaseTotem(pkt.senderId))   return;
+    if (pkt.payloadLen < 1)           return;
+    if (pkt.payload[0] != myPlayerId) return;
+    canRespawn = true;
+}
+static void onBonusScore(const RadioPacket& pkt, LightAir_DisplayCtrl& disp, GameOutput&) {
+    if (bonusIndex(pkt.senderId) < 0) return;
+    if (pkt.payloadLen < 1)           return;
+    if (pkt.payload[0] != myPlayerId) return;
+    energy = startEnergy;
+    disp.showMessage("Bonus!", 1500);
+}
+static void onMalusScore(const RadioPacket& pkt, LightAir_DisplayCtrl& disp, GameOutput&) {
+    if (malusIndex(pkt.senderId) < 0) return;
+    if (pkt.payloadLen < 1)           return;
+    if (pkt.payload[0] != myPlayerId) return;
+    if (lives > 1) lives--;
+    disp.showMessage("Malus!", 1500);
+}
+
 static const DirectRadioRule directRadioRules[] = {
     //  state     msgType            condition           replySubType   onReceive
-    { IN_GAME,  MSG_LIT,           litAndTakenAndValid, REPLY_TAKEN,  onLitTaken   },
-    { IN_GAME,  MSG_LIT,           litAndShoneAndValid, REPLY_SHONE,  onLitShone   },
-    { IN_GAME,  MSG_LIT,           litButFriendly,      REPLY_FRIEND, nullptr      },
-    { IN_GAME,  MSG_LIT,           litButImmune,        REPLY_IMMUNE, nullptr      },
-    { OUT_GAME, MSG_LIT,           nullptr,             REPLY_DOWN,   nullptr      },
+    { IN_GAME,  MSG_LIT,           litAndTakenAndValid, REPLY_TAKEN,  onLitTaken    },
+    { IN_GAME,  MSG_LIT,           litAndShoneAndValid, REPLY_SHONE,  onLitShone    },
+    { IN_GAME,  MSG_LIT,           litButFriendly,      REPLY_FRIEND, nullptr       },
+    { IN_GAME,  MSG_LIT,           litButImmune,        REPLY_IMMUNE, nullptr       },
+    { OUT_GAME, MSG_LIT,           nullptr,             REPLY_DOWN,   nullptr       },
     { IN_GAME,  MSG_POINT_REPORT,  nullptr,             0,            onPointReport },
     { OUT_GAME, MSG_POINT_REPORT,  nullptr,             0,            onPointReport },
+    { OUT_GAME, MSG_CP_SCORE,      nullptr,             0,            onBaseScore   },
+    { IN_GAME,  MSG_CP_SCORE,      nullptr,             0,            onBonusScore  },
+    { IN_GAME,  MSG_CP_SCORE,      nullptr,             0,            onMalusScore  },
 };
 
 // ---- ReplyRadioRule handlers ----
@@ -364,21 +472,14 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
     // Minimum respawn timer: ignore beacons until the wait has elapsed.
     if (millis() < respawnAt) return;
 
-    // Scan for a qualifying BASE beacon: must belong to this player's team
-    // (or be teamless, payload[0]==0xFF) and have RSSI above the proximity
-    // threshold (~2 m indoors).
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type           != RadioEventType::MessageReceived) continue;
         if (ev.packet.msgType != MSG_BASE_BEACON)                 continue;
-        if (ev.packet.payloadLen < 1)                             continue;
-        if (ev.packet.payload[0] != myTeam &&
-            ev.packet.payload[0] != 0xFF)                         continue;
+        if (!isMyTeamBase(ev.packet.senderId))                    continue;
         if (ev.rssi < NEAR_RSSI_THRESHOLD)                        continue;
-        canRespawn = true;
-        // Reply so the BASE totem can show a Respawn animation.
-        // subType 1 = team-O, 2 = team-X.
-        out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
+        uint8_t pres = (uint8_t)CPAction::PRESENCE;
+        out.radio.replyWithPayload(ev.packet, &pres, 1);
         break;
     }
 }
@@ -440,7 +541,7 @@ extern const LightAir_Game game_teams = {
     /* name                  */ "Teams",
     /* configVars            */ Teams::configVars,         /* configCount            */ 7,
     /* monitorVars           */ Teams::monitorVars,        /* monitorCount           */ 8,
-    /* directRadioRules      */ Teams::directRadioRules,   /* directRadioRuleCount   */ 7,
+    /* directRadioRules      */ Teams::directRadioRules,   /* directRadioRuleCount   */ 10,
     /* replyRadioRules       */ Teams::replyRadioRules,    /* replyRadioRuleCount    */ 4,
     /* rules                 */ Teams::rules,              /* ruleCount              */ 6,
     /* behaviors             */ Teams::behaviors,          /* behaviorCount          */ 3,
