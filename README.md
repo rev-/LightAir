@@ -50,4 +50,5 @@ Participation is considered an important asset, so for example the software is s
 2. once defined, the game and its configuration is shared with all the other players via ESP-NOW packets
 3. therefore, players must all be within radio reach, while totems are not required to
 4. Totems are "activated" by custom messages by the players. This allows totems to be planted outside radio reach at the beginning of the game
+5. Game rulesets are being translated to Lua in order to be easily shareable as files, without re-compiling
 
