@@ -246,7 +246,7 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
         if (key == 'A') {
             if (sel == 0 && _calibRoutine) _calibRoutine->run();
             if (sel == 1) runIdSettings();
-            if (sel == 2 && _enlight && _uiCtrl) runTestMode();
+            if (sel == 2) runTestMode();
         }
     }
 }
