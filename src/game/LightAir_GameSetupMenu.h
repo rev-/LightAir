@@ -91,10 +91,12 @@ public:
     // Must be called before run().
     void setCalibRoutine(EnlightCalibRoutine& r) { _calibRoutine = &r; }
 
-    // Optional: register UICtrl for Test mode LED/audio feedback.
-    // Enlight is obtained automatically from the calib routine.
+    // Optional: register Enlight and UICtrl for Test mode.
     // Must be called before run().
-    void setUICtrl(class LightAir_UICtrl& ui) { _uiCtrl = &ui; }
+    void setEnlightAndUI(class Enlight& e, class LightAir_UICtrl& ui) {
+        _enlight = &e;
+        _uiCtrl = &ui;
+    }
 
     // Valid after Confirmed return.
     const LightAir_Game& selectedGame() const { return *_game; }
@@ -108,8 +110,9 @@ private:
     LightAir_Radio&       _radio;
     uint8_t               _msgType;
 
-    EnlightCalibRoutine*   _calibRoutine = nullptr;
-    class LightAir_UICtrl* _uiCtrl       = nullptr;
+    EnlightCalibRoutine* _calibRoutine = nullptr;
+    class Enlight*       _enlight = nullptr;
+    class LightAir_UICtrl* _uiCtrl = nullptr;
     bool                 _isDm   = false;
     const LightAir_Game* _game   = nullptr;
     uint8_t              _gameIdx = 0;

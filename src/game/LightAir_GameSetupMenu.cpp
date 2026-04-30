@@ -332,13 +332,12 @@ void LightAir_GameSetupMenu::runTestMode() {
         _display.flush();
 
         // Poll Enlight for results from any ongoing test
-        Enlight* e = _calibRoutine ? &_calibRoutine->enlight() : nullptr;
-        if (e && e->isActive()) {
-            EnlightResult res = e->poll();
+        if (_enlight && _enlight->isActive()) {
+            EnlightResult res = _enlight->poll();
             if (res.status == EnlightStatus::PLAYER_HIT && res.id < PlayerDefs::MAX_PLAYER_ID) {
                 snprintf(litMessageColor, sizeof(litMessageColor), "%s", PlayerDefs::playerShort[res.id]);
                 litMessageTime = millis() + 2000;
-                if (_uiCtrl) _uiCtrl->trigger(LightAir_UICtrl::UIEvent::Lit);
+                _uiCtrl->trigger(LightAir_UICtrl::UIEvent::Lit);
             }
         }
 
@@ -357,9 +356,9 @@ void LightAir_GameSetupMenu::runTestMode() {
         }
 
         if (key == buttonVirtualKey(InputDefaults::TRIG_1_ID) && state == KeyState::PRESSED) {
-            if (e) {
-                e->setRepetitions(reps);
-                e->run();
+            if (_enlight) {
+                _enlight->setRepetitions(reps);
+                _enlight->run();
             }
         }
     }

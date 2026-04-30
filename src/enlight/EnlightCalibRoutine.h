@@ -46,8 +46,6 @@ public:
 
     void run();  // blocking; executes step 1 then step 2
 
-    Enlight& enlight() const { return _e; }
-
 private:
     // --- step implementations ---
     void step1();
