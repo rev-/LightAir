@@ -9,7 +9,7 @@
 // Entered when 'B' is held at power-on (parallel to '^' for DM mode).
 // After completion the device proceeds with normal game setup.
 //
-// Step 1 — Phase offset (clear target in view):
+// Step 1 — Phase offset + white balance (clear target in view):
 //   For each of N_RUNS measurements the user presses TRIG1 to trigger a
 //   single Enlight run.  Runs with saturation > SAT_THRESH are discarded
 //   (user must press TRIG1 again).  For each valid run the raw ADC buffer
@@ -17,6 +17,9 @@
 //   (0°…90°); the offset yielding the maximum sum is recorded as the
 //   bestPhase for that shot.  After all shots the bestPhase values are
 //   sorted and the median is saved to NVS and applied.
+//   The average R, G, B correlator values from the clear target are also
+//   used to derive rfact = avgG/avgR and bfact = avgG/avgB, which are saved
+//   to NVS so that a spectrally-flat target normalises to equal channel weights.
 //   Press TRIG2 to continue.
 //
 // Step 2 — Baseline ("void", no target):
@@ -29,12 +32,13 @@
 //   Illuminate a white diffusing wall or target from varying distances
 //   (contact to ~5 m).  Collect 50 runs (100 ms apart, no saturation
 //   rejection).  For each reading compute:
-//     near_pow = |rnear| + |gnear| + |bnear|
-//     far_pow  = |rout|  + |gout|  + |bout|
-//   Track the maximum near_pow and maximum far_pow seen across all 50
-//   readings.  Save them to NVS as "Max Near White" and "Max Far White".
-//   These thresholds allow the classifier to distinguish reflective
-//   (legitimate) targets from diffusing surfaces.
+//     near_pow     = |rnear| + |gnear| + |bnear|
+//     far_pow      = |rout|  + |gout|  + |bout|
+//     rawPerCycle  = rawsum / REPS
+//   Track the maximum of each across all 50 readings.  Save them to NVS as
+//   "Max Near White", "Max Far White", and limpow (= max rawPerCycle).
+//   classify() rejects a measurement when rawsum <= limpow * cycles, so the
+//   threshold scales with the in-game repetition count automatically.
 //   Press TRIG2 to finish.
 // ---------------------------------------------------------------
 class EnlightCalibRoutine {

@@ -121,53 +121,11 @@ void Enlight::buildSintab(uint32_t phase) {
 }
 
 /* ============================================================
- *   buildGrid() + gridLookup()
- * ============================================================ */
-static void sort_unique(float* a, int& n) {
-    for (int i=1;i<n;i++){float k=a[i];int j=i-1;while(j>=0&&a[j]>k){a[j+1]=a[j];j--;}a[j+1]=k;}
-    int o=0; for(int i=0;i<n;i++) if(o==0||a[i]!=a[o-1]) a[o++]=a[i]; n=o;
-}
-static int upper_bound_f(const float* a, int n, float v) {
-    int lo=0,hi=n; while(lo<hi){int m=(lo+hi)/2; if(a[m]<=v)lo=m+1; else hi=m;} return lo;
-}
-
-void Enlight::buildGrid() {
-    memset(&_grid, 0, sizeof(_grid));
-    float xb[GRID_MAX_THRESH], yb[GRID_MAX_THRESH]; int nx=0,ny=0;
-    for (int p=1;p<CALIB_MAX_PLAYERS;p++) {
-        const float* b=colorBox::colorBox[p]; if(b[0]<=-5.0f) continue;
-        if(nx+2<=GRID_MAX_THRESH){xb[nx++]=b[1];xb[nx++]=b[0];}
-        if(ny+2<=GRID_MAX_THRESH){yb[ny++]=b[3];yb[ny++]=b[2];}
-    }
-    sort_unique(xb,nx); sort_unique(yb,ny);
-    _grid.nX=nx; _grid.nY=ny;
-    memcpy(_grid.xThresh,xb,nx*sizeof(float));
-    memcpy(_grid.yThresh,yb,ny*sizeof(float));
-    for (int p=1;p<CALIB_MAX_PLAYERS;p++) {
-        const float* b=colorBox::colorBox[p]; if(b[0]<=-5.0f) continue;
-        _grid.table[upper_bound_f(_grid.xThresh,nx,(b[0]+b[1])*0.5f)]
-                   [upper_bound_f(_grid.yThresh,ny,(b[2]+b[3])*0.5f)] = (uint8_t)p;
-    }
-    ESP_LOGI(TAG, "Grid: %d X thresholds, %d Y thresholds", nx, ny);
-}
-
-int Enlight::gridLookup(float outr, float outang) const {
-    if (_grid.nX==0||outr<_grid.xThresh[0]||outr>_grid.xThresh[_grid.nX-1]
-      ||_grid.nY==0||outang<_grid.yThresh[0]||outang>_grid.yThresh[_grid.nY-1])
-        return -1;
-    const uint8_t p = _grid.table
-        [upper_bound_f(_grid.xThresh,_grid.nX,outr)]
-        [upper_bound_f(_grid.yThresh,_grid.nY,outang)];
-    return (p>0)?(int)p:-1;
-}
-
-/* ============================================================
  *   begin()
  * ============================================================ */
 bool Enlight::begin() {
     if (!generateWaveform()) return false;
     buildSintab(_cal.phaseOff); if (!_sintab) return false;
-    buildGrid();
 
     gpio_config_t gc={};
     gc.pin_bit_mask=1ULL<<_cfg.afeOn;
@@ -255,7 +213,7 @@ bool Enlight::run() {
 }
 
 EnlightRawMeasure Enlight::rawMeasure() const {
-    return { _rout, _gout, _bout, _rnear, _gnear, _bnear, _satCount, _arrayiter };
+    return { _rout, _gout, _bout, _rnear, _gnear, _bnear, _satCount, _arrayiter, _rawsum };
 }
 
 EnlightResult Enlight::poll() {
@@ -440,7 +398,7 @@ EnlightResult Enlight::classify() {
              _rawsum, rout, gout, bout, _rnear, _gnear, _bnear,
              (unsigned long)_satCount, frac_far_q16, frac_near_q16);
 
-    if (_rawsum <= (long long)_cal.limpow) return {EnlightStatus::LOW_POW, 0};
+    if (_rawsum <= (long long)_cal.limpow * cycles) return {EnlightStatus::LOW_POW, 0};
 
     const float farSum  = (float)((rout)  + (gout)  + (bout));
     const float nearSum = (float)((_rnear) + (_gnear) + (_bnear));
@@ -454,10 +412,13 @@ EnlightResult Enlight::classify() {
     if (s <= 0.0f) return {EnlightStatus::NO_HIT, 0};
     outr /= s; outg /= s;
     const float outang = (outr < 1.0f) ? (outg / (1.0f - outr)) : 1.0f;
-    const int hit = gridLookup(outr, outang);
-    if (hit > 0) {
-        ESP_LOGI(TAG, "HIT player %d (outr=%.3f outang=%.3f)", hit, outr, outang);
-        return {EnlightStatus::PLAYER_HIT, (uint8_t)hit};
+    for (int p = 1; p < CALIB_MAX_PLAYERS; p++) {
+        const float* b = colorBox::colorBox[p];
+        if (b[0] <= -5.0f) continue;
+        if (outr >= b[1] && outr <= b[0] && outang >= b[3] && outang <= b[2]) {
+            ESP_LOGI(TAG, "HIT player %d (outr=%.3f outang=%.3f)", p, (double)outr, (double)outang);
+            return {EnlightStatus::PLAYER_HIT, (uint8_t)p};
+        }
     }
     return {EnlightStatus::NO_HIT, 0};
 }
