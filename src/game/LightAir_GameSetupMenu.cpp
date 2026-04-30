@@ -209,8 +209,8 @@ bool LightAir_GameSetupMenu::loadIsDm() {
 }
 
 void LightAir_GameSetupMenu::runSettingsMenu() {
-    static const char* const kEntries[] = { "Calibration", "ID / DM" };
-    static constexpr uint8_t kCount = 2;
+    static const char* const kEntries[] = { "Calibration", "ID / DM", "Test mode" };
+    static constexpr uint8_t kCount = 3;
     uint8_t sel = 0;
 
     while (true) {
@@ -236,6 +236,7 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
         if (key == 'A') {
             if (sel == 0 && _calibRoutine) _calibRoutine->run();
             if (sel == 1) runIdSettings();
+            if (sel == 2 && _testMode) _testMode->run();
         }
     }
 }
