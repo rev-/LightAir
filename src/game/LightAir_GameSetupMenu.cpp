@@ -1,5 +1,7 @@
 #include "LightAir_GameSetupMenu.h"
+#include "../enlight/Enlight.h"
 #include "../enlight/EnlightCalibRoutine.h"
+#include "../ui/player/LightAir_UICtrl.h"
 #include "../nvs_config.h"
 #include "../totem-rulesets/TotemRoleIds.h"
 #include <Arduino.h>
@@ -209,8 +211,8 @@ bool LightAir_GameSetupMenu::loadIsDm() {
 }
 
 void LightAir_GameSetupMenu::runSettingsMenu() {
-    static const char* const kEntries[] = { "Calibration", "ID / DM" };
-    static constexpr uint8_t kCount = 2;
+    static const char* const kEntries[] = { "Calibration", "ID / DM", "Test Mode" };
+    static constexpr uint8_t kCount = 3;
     uint8_t sel = 0;
 
     while (true) {
@@ -236,6 +238,7 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
         if (key == 'A') {
             if (sel == 0 && _calibRoutine) _calibRoutine->run();
             if (sel == 1) runIdSettings();
+            if (sel == 2 && _enlight && _uiCtrl) runTestMode();
         }
     }
 }
@@ -290,6 +293,91 @@ void LightAir_GameSetupMenu::runIdSettings() {
             }
             return;
         }
+    }
+}
+
+void LightAir_GameSetupMenu::runTestMode() {
+    uint32_t reps = 5;
+    const uint32_t MIN_REPS = 1, MAX_REPS = 100;
+    uint32_t litMessageTime = 0;
+    char litMessageColor[4] = "";
+    KeyState prevLeftState = KeyState::RELEASED;
+    KeyState prevRightState = KeyState::RELEASED;
+
+    while (true) {
+        // Render current state
+        _display.clear();
+        _display.setColor(true);
+        _display.print(0, 0, "-- Test Mode --");
+        char repLine[20];
+        snprintf(repLine, sizeof(repLine), "Reps: %lu", (unsigned long)reps);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT, repLine);
+
+        if (millis() < litMessageTime) {
+            char msgLine[20];
+            snprintf(msgLine, sizeof(msgLine), "LIT %s", litMessageColor);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, msgLine);
+        }
+
+        printLegend("<>Reps  TRIG1:Test", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
+        printLegend("X:Back", DisplayDefaults::BOTTOM_LINE_Y);
+        _display.flush();
+
+        // Poll Enlight for results from any ongoing test
+        if (_enlight && _enlight->isActive()) {
+            EnlightResult res = _enlight->poll();
+            if (res.status == EnlightStatus::PLAYER_HIT && res.id < PlayerDefs::MAX_PLAYER_ID) {
+                snprintf(litMessageColor, sizeof(litMessageColor), "%s", PlayerDefs::playerShort[res.id]);
+                litMessageTime = millis() + 2000;
+                _uiCtrl->trigger(LightAir_UICtrl::UIEvent::Lit);
+            }
+        }
+
+        // Input handling
+        const InputReport& rep = _input.poll();
+
+        // Process buttons (TRIG_1, TRIG_2)
+        for (uint8_t i = 0; i < rep.buttonCount; i++) {
+            if (rep.buttons[i].id == InputDefaults::TRIG_1_ID &&
+                rep.buttons[i].state == ButtonState::PRESSED) {
+                if (_enlight) {
+                    _enlight->setRepetitions(reps);
+                    _enlight->run();
+                }
+            }
+            if (rep.buttons[i].id == InputDefaults::TRIG_2_ID &&
+                rep.buttons[i].state == ButtonState::PRESSED) {
+                return;
+            }
+        }
+
+        // Process keypad keys
+        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
+            const InputReport::KeyEntry& ke = rep.keyEvents[i];
+            if (ke.keypadId != _keypadId) continue;
+
+            if (ke.key == '<') {
+                if (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD) {
+                    if (prevLeftState != KeyState::HELD) {
+                        reps = (reps > MIN_REPS) ? (reps - 1) : MIN_REPS;
+                    }
+                }
+                prevLeftState = ke.state;
+            }
+            if (ke.key == '>') {
+                if (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD) {
+                    if (prevRightState != KeyState::HELD) {
+                        reps = (reps < MAX_REPS) ? (reps + 1) : MAX_REPS;
+                    }
+                }
+                prevRightState = ke.state;
+            }
+            if (ke.key == 'B' && ke.state == KeyState::PRESSED) {
+                return;
+            }
+        }
+
+        delay(10);
     }
 }
 

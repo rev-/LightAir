@@ -91,6 +91,13 @@ public:
     // Must be called before run().
     void setCalibRoutine(EnlightCalibRoutine& r) { _calibRoutine = &r; }
 
+    // Optional: register Enlight and UICtrl for Test mode.
+    // Must be called before run().
+    void setEnlightAndUI(class Enlight& e, class LightAir_UICtrl& ui) {
+        _enlight = &e;
+        _uiCtrl = &ui;
+    }
+
     // Valid after Confirmed return.
     const LightAir_Game& selectedGame() const { return *_game; }
 
@@ -104,6 +111,8 @@ private:
     uint8_t               _msgType;
 
     EnlightCalibRoutine* _calibRoutine = nullptr;
+    class Enlight*       _enlight = nullptr;
+    class LightAir_UICtrl* _uiCtrl = nullptr;
     bool                 _isDm   = false;
     const LightAir_Game* _game   = nullptr;
     uint8_t              _gameIdx = 0;
@@ -126,6 +135,7 @@ private:
     // ---- Home / Settings ----
     void runSettingsMenu();
     void runIdSettings();
+    void runTestMode();
     void saveIsDm(bool val);
     bool loadIsDm();
 
