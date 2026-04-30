@@ -21,6 +21,14 @@ static const char* TAG = "GameConfig";
 static KeyState gPrevKeyState[256] = {};  // Track previous state per key (indexed by ASCII)
 static uint32_t gLastHeldReturn[256] = {};  // Track last time HELD was returned per key
 
+// Button state tracking — buttons are returned from waitForKey() as virtual key chars
+// '\x01' + buttonId (e.g. TRIG_1_ID=0 → '\x01', TRIG_2_ID=1 → '\x02')
+static ButtonState gPrevButtonState[InputDefaults::MAX_BUTTONS] = {};
+static uint32_t    gLastButtonHeld[InputDefaults::MAX_BUTTONS]  = {};
+
+// Convenience: convert a button id to its virtual key character
+static inline char buttonVirtualKey(uint8_t id) { return (char)(0x01 + id); }
+
 /* =========================================================
  *   CONFIG BLOB FREE FUNCTIONS
  * ========================================================= */
@@ -319,7 +327,7 @@ void LightAir_GameSetupMenu::runTestMode() {
             _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, msgLine);
         }
 
-        printLegend("<>Reps  O:Test", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
+        printLegend("<>Reps  TRIG1:Test", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
         printLegend("X:Back", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
@@ -335,13 +343,10 @@ void LightAir_GameSetupMenu::runTestMode() {
 
         // Wait for and handle input
         MenuKeyEvent ev = waitForKey();
-        char key = ev.key;
-        KeyState state = ev.state;
+        const char key = ev.key;
+        const KeyState state = ev.state;
 
-        // Action buttons (A, B) only respond to PRESS
-        if ((key == 'A' || key == 'B') && state != KeyState::PRESSED) continue;
-
-        if (key == 'B') return;
+        if (key == 'B' && state == KeyState::PRESSED) return;
 
         if (key == '<' && (state == KeyState::PRESSED || state == KeyState::HELD)) {
             reps = (reps > MIN_REPS) ? (reps - 1) : MIN_REPS;
@@ -350,7 +355,7 @@ void LightAir_GameSetupMenu::runTestMode() {
             reps = (reps < MAX_REPS) ? (reps + 1) : MAX_REPS;
         }
 
-        if (key == 'A' && state == KeyState::PRESSED) {
+        if (key == buttonVirtualKey(InputDefaults::TRIG_1_ID) && state == KeyState::PRESSED) {
             if (_enlight) {
                 _enlight->setRepetitions(reps);
                 _enlight->run();
@@ -1124,15 +1129,22 @@ void LightAir_GameSetupMenu::resetKeyStates() {
     // Synchronize prevState with current InputReport to prevent carryover from previous menus.
     // This ensures that a key held from a previous menu won't retrigger in the new menu.
     const InputReport& rep = _input.poll();
-    memset(gPrevKeyState, (uint8_t)KeyState::OFF, sizeof(gPrevKeyState));
+    memset(gPrevKeyState,    (uint8_t)KeyState::OFF,    sizeof(gPrevKeyState));
+    memset(gPrevButtonState, (uint8_t)ButtonState::OFF, sizeof(gPrevButtonState));
     for (uint8_t i = 0; i < rep.keyEventCount; i++) {
         gPrevKeyState[(uint8_t)rep.keyEvents[i].key] = rep.keyEvents[i].state;
+    }
+    for (uint8_t i = 0; i < rep.buttonCount; i++) {
+        if (rep.buttons[i].id < InputDefaults::MAX_BUTTONS)
+            gPrevButtonState[rep.buttons[i].id] = rep.buttons[i].state;
     }
 }
 
 MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
     while (true) {
         const InputReport& rep = _input.poll();
+
+        // Keypad keys
         for (uint8_t i = 0; i < rep.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = rep.keyEvents[i];
             if (ke.keypadId != _keypadId) continue;
@@ -1147,7 +1159,7 @@ MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
 
             // Return on state transitions: OFF→PRESSED or PRESSED→HELD
             if (ke.state == KeyState::PRESSED && prev == KeyState::OFF) {
-                gLastHeldReturn[(uint8_t)ke.key] = millis();  // Reset HELD repeat timer
+                gLastHeldReturn[(uint8_t)ke.key] = millis();
                 return {ke.key, KeyState::PRESSED};
             }
             if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
@@ -1166,6 +1178,37 @@ MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
                 }
             }
         }
+
+        // Buttons (triggers) — same state machine as keys, encoded as virtual chars
+        for (uint8_t i = 0; i < rep.buttonCount; i++) {
+            const InputReport::ButtonEntry& be = rep.buttons[i];
+            if (be.id >= InputDefaults::MAX_BUTTONS) continue;
+
+            ButtonState prev = gPrevButtonState[be.id];
+            gPrevButtonState[be.id] = be.state;
+
+            if (be.state == ButtonState::RELEASED || be.state == ButtonState::RELEASED_HELD) {
+                gPrevButtonState[be.id] = ButtonState::OFF;
+            }
+
+            const char vk = buttonVirtualKey(be.id);
+            if (be.state == ButtonState::PRESSED && prev == ButtonState::OFF) {
+                gLastButtonHeld[be.id] = millis();
+                return {vk, KeyState::PRESSED};
+            }
+            if (be.state == ButtonState::HELD && prev == ButtonState::PRESSED) {
+                gLastButtonHeld[be.id] = millis();
+                return {vk, KeyState::HELD};
+            }
+            if (be.state == ButtonState::HELD && prev == ButtonState::HELD) {
+                uint32_t now = millis();
+                if (now - gLastButtonHeld[be.id] >= InputDefaults::HELD_REPEAT_MS) {
+                    gLastButtonHeld[be.id] = now;
+                    return {vk, KeyState::HELD};
+                }
+            }
+        }
+
         delay(GameDefaults::LOOP_MS);
     }
 }
