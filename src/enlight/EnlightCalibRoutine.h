@@ -77,13 +77,13 @@ private:
     LightAir_InputCtrl& _input;
     uint8_t             _keypadId;
 
-    long long           _step1_r[N_RUNS];  // RGB values from step1 for each run
-    long long           _step1_g[N_RUNS];
-    long long           _step1_b[N_RUNS];
-    uint32_t            _step1_n;  // number of runs collected in step1
-
     static constexpr uint32_t N_RUNS     = 50;    // valid runs to collect per step
     static constexpr uint32_t REPS       = 5;     // run() repetitions per measurement
     static constexpr uint32_t DELAY_MS   = 100;   // ms between measurements
     static constexpr float    SAT_THRESH = 0.10f; // discard if > 10 % saturated
+
+    long long           _step1_r[N_RUNS];  // RGB values from step1 for each run
+    long long           _step1_g[N_RUNS];
+    long long           _step1_b[N_RUNS];
+    uint32_t            _step1_n;  // number of runs collected in step1
 };
