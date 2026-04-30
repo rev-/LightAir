@@ -206,6 +206,7 @@ void _setup() {
                                     InputDefaults::KEYPAD_ID,
                                     *radio);
         menu.setCalibRoutine(*calibRoutine);
+        menu.setEnlightAndUI(*enlight, playerUi);
         if (menu.run() != MenuResult::Confirmed) {
             Log.infoln("Setup menu cancelled — rebooting");
             ESP.restart();

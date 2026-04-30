@@ -1,5 +1,7 @@
 #include "LightAir_GameSetupMenu.h"
+#include "../enlight/Enlight.h"
 #include "../enlight/EnlightCalibRoutine.h"
+#include "../ui/player/LightAir_UICtrl.h"
 #include "../nvs_config.h"
 #include "../totem-rulesets/TotemRoleIds.h"
 #include <Arduino.h>
@@ -18,6 +20,14 @@ static const char* TAG = "GameConfig";
 // Key state tracking for menu input (used by waitForKey and resetKeyStates)
 static KeyState gPrevKeyState[256] = {};  // Track previous state per key (indexed by ASCII)
 static uint32_t gLastHeldReturn[256] = {};  // Track last time HELD was returned per key
+
+// Button state tracking — buttons are returned from waitForKey() as virtual key chars
+// '\x01' + buttonId (e.g. TRIG_1_ID=0 → '\x01', TRIG_2_ID=1 → '\x02')
+static ButtonState gPrevButtonState[InputDefaults::MAX_BUTTONS] = {};
+static uint32_t    gLastButtonHeld[InputDefaults::MAX_BUTTONS]  = {};
+
+// Convenience: convert a button id to its virtual key character
+static inline char buttonVirtualKey(uint8_t id) { return (char)(0x01 + id); }
 
 /* =========================================================
  *   CONFIG BLOB FREE FUNCTIONS
@@ -209,8 +219,8 @@ bool LightAir_GameSetupMenu::loadIsDm() {
 }
 
 void LightAir_GameSetupMenu::runSettingsMenu() {
-    static const char* const kEntries[] = { "Calibration", "ID / DM" };
-    static constexpr uint8_t kCount = 2;
+    static const char* const kEntries[] = { "Calibration", "ID / DM", "Test Mode" };
+    static constexpr uint8_t kCount = 3;
     uint8_t sel = 0;
 
     while (true) {
@@ -236,6 +246,7 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
         if (key == 'A') {
             if (sel == 0 && _calibRoutine) _calibRoutine->run();
             if (sel == 1) runIdSettings();
+            if (sel == 2 && _enlight && _uiCtrl) runTestMode();
         }
     }
 }
@@ -289,6 +300,66 @@ void LightAir_GameSetupMenu::runIdSettings() {
                 waitForKey();
             }
             return;
+        }
+    }
+}
+
+void LightAir_GameSetupMenu::runTestMode() {
+    uint32_t reps = 5;
+    const uint32_t MIN_REPS = 1, MAX_REPS = 100;
+    uint32_t litMessageTime = 0;
+    char litMessageColor[4] = "";
+
+    resetKeyStates();
+
+    while (true) {
+        // Render current state
+        _display.clear();
+        _display.setColor(true);
+        _display.print(0, 0, "-- Test Mode --");
+        char repLine[20];
+        snprintf(repLine, sizeof(repLine), "Reps: %lu", (unsigned long)reps);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT, repLine);
+
+        if (millis() < litMessageTime) {
+            char msgLine[20];
+            snprintf(msgLine, sizeof(msgLine), "LIT %s", litMessageColor);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, msgLine);
+        }
+
+        printLegend("<>Reps  TRIG1:Test", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
+        printLegend("X:Back", DisplayDefaults::BOTTOM_LINE_Y);
+        _display.flush();
+
+        // Poll Enlight for results from any ongoing test
+        if (_enlight && _enlight->isActive()) {
+            EnlightResult res = _enlight->poll();
+            if (res.status == EnlightStatus::PLAYER_HIT && res.id < PlayerDefs::MAX_PLAYER_ID) {
+                snprintf(litMessageColor, sizeof(litMessageColor), "%s", PlayerDefs::playerShort[res.id]);
+                litMessageTime = millis() + 2000;
+                _uiCtrl->trigger(LightAir_UICtrl::UIEvent::Lit);
+            }
+        }
+
+        // Wait for and handle input
+        MenuKeyEvent ev = waitForKey();
+        const char key = ev.key;
+        const KeyState state = ev.state;
+
+        if (key == 'B' && state == KeyState::PRESSED) return;
+
+        if (key == '<' && (state == KeyState::PRESSED || state == KeyState::HELD)) {
+            reps = (reps > MIN_REPS) ? (reps - 1) : MIN_REPS;
+        }
+        if (key == '>' && (state == KeyState::PRESSED || state == KeyState::HELD)) {
+            reps = (reps < MAX_REPS) ? (reps + 1) : MAX_REPS;
+        }
+
+        if (key == buttonVirtualKey(InputDefaults::TRIG_1_ID) && state == KeyState::PRESSED) {
+            if (_enlight) {
+                _enlight->setRepetitions(reps);
+                _enlight->run();
+            }
         }
     }
 }
@@ -1058,15 +1129,22 @@ void LightAir_GameSetupMenu::resetKeyStates() {
     // Synchronize prevState with current InputReport to prevent carryover from previous menus.
     // This ensures that a key held from a previous menu won't retrigger in the new menu.
     const InputReport& rep = _input.poll();
-    memset(gPrevKeyState, (uint8_t)KeyState::OFF, sizeof(gPrevKeyState));
+    memset(gPrevKeyState,    (uint8_t)KeyState::OFF,    sizeof(gPrevKeyState));
+    memset(gPrevButtonState, (uint8_t)ButtonState::OFF, sizeof(gPrevButtonState));
     for (uint8_t i = 0; i < rep.keyEventCount; i++) {
         gPrevKeyState[(uint8_t)rep.keyEvents[i].key] = rep.keyEvents[i].state;
+    }
+    for (uint8_t i = 0; i < rep.buttonCount; i++) {
+        if (rep.buttons[i].id < InputDefaults::MAX_BUTTONS)
+            gPrevButtonState[rep.buttons[i].id] = rep.buttons[i].state;
     }
 }
 
 MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
     while (true) {
         const InputReport& rep = _input.poll();
+
+        // Keypad keys
         for (uint8_t i = 0; i < rep.keyEventCount; i++) {
             const InputReport::KeyEntry& ke = rep.keyEvents[i];
             if (ke.keypadId != _keypadId) continue;
@@ -1081,7 +1159,7 @@ MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
 
             // Return on state transitions: OFF→PRESSED or PRESSED→HELD
             if (ke.state == KeyState::PRESSED && prev == KeyState::OFF) {
-                gLastHeldReturn[(uint8_t)ke.key] = millis();  // Reset HELD repeat timer
+                gLastHeldReturn[(uint8_t)ke.key] = millis();
                 return {ke.key, KeyState::PRESSED};
             }
             if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
@@ -1100,6 +1178,37 @@ MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
                 }
             }
         }
+
+        // Buttons (triggers) — same state machine as keys, encoded as virtual chars
+        for (uint8_t i = 0; i < rep.buttonCount; i++) {
+            const InputReport::ButtonEntry& be = rep.buttons[i];
+            if (be.id >= InputDefaults::MAX_BUTTONS) continue;
+
+            ButtonState prev = gPrevButtonState[be.id];
+            gPrevButtonState[be.id] = be.state;
+
+            if (be.state == ButtonState::RELEASED || be.state == ButtonState::RELEASED_HELD) {
+                gPrevButtonState[be.id] = ButtonState::OFF;
+            }
+
+            const char vk = buttonVirtualKey(be.id);
+            if (be.state == ButtonState::PRESSED && prev == ButtonState::OFF) {
+                gLastButtonHeld[be.id] = millis();
+                return {vk, KeyState::PRESSED};
+            }
+            if (be.state == ButtonState::HELD && prev == ButtonState::PRESSED) {
+                gLastButtonHeld[be.id] = millis();
+                return {vk, KeyState::HELD};
+            }
+            if (be.state == ButtonState::HELD && prev == ButtonState::HELD) {
+                uint32_t now = millis();
+                if (now - gLastButtonHeld[be.id] >= InputDefaults::HELD_REPEAT_MS) {
+                    gLastButtonHeld[be.id] = now;
+                    return {vk, KeyState::HELD};
+                }
+            }
+        }
+
         delay(GameDefaults::LOOP_MS);
     }
 }
