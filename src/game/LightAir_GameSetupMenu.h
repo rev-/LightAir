@@ -3,11 +3,13 @@
 #include "LightAir_GameRunner.h"
 #include "LightAir_GameManager.h"
 #include "../ui/player/display/LightAir_Display.h"
+#include "../ui/player/LightAir_UICtrl.h"
 #include "../input/LightAir_InputCtrl.h"
 #include "../radio/LightAir_Radio.h"
 #include "../config.h"
 
 class EnlightCalibRoutine;
+class EnlightTestMode;
 
 // ----------------------------------------------------------------
 // Config blob format (used by game_serialize_config / game_apply_config):
@@ -91,6 +93,10 @@ public:
     // Must be called before run().
     void setCalibRoutine(EnlightCalibRoutine& r) { _calibRoutine = &r; }
 
+    // Optional: register a test mode accessible from Settings → Test mode.
+    // Must be called before run().
+    void setTestMode(EnlightTestMode& t) { _testMode = &t; }
+
     // Valid after Confirmed return.
     const LightAir_Game& selectedGame() const { return *_game; }
 
@@ -104,6 +110,7 @@ private:
     uint8_t               _msgType;
 
     EnlightCalibRoutine* _calibRoutine = nullptr;
+    EnlightTestMode*     _testMode = nullptr;
     bool                 _isDm   = false;
     const LightAir_Game* _game   = nullptr;
     uint8_t              _gameIdx = 0;
