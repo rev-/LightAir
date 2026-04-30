@@ -305,10 +305,18 @@ void LightAir_GameSetupMenu::runIdSettings() {
 }
 
 void LightAir_GameSetupMenu::runTestMode() {
+    // Verify prerequisites
+    if (!_enlight || !_uiCtrl) {
+        showMessage2("Test mode requires", "setEnlightAndUI()", "to be called.", "");
+        waitForKey();
+        return;
+    }
+
     uint32_t reps = 5;
     const uint32_t MIN_REPS = 1, MAX_REPS = 100;
     uint32_t litMessageTime = 0;
     char litMessageColor[4] = "";
+    char lastKeyDebug[16] = "none";
 
     resetKeyStates();
 
@@ -327,6 +335,10 @@ void LightAir_GameSetupMenu::runTestMode() {
             _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, msgLine);
         }
 
+        char dbgLine[16];
+        snprintf(dbgLine, sizeof(dbgLine), "Key: %s", lastKeyDebug);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * 3, dbgLine);
+
         printLegend("<>Reps  TRIG1:Test", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
         printLegend("X:Back", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
@@ -335,6 +347,15 @@ void LightAir_GameSetupMenu::runTestMode() {
         MenuKeyEvent ev = waitForKey();
         const char key = ev.key;
         const KeyState state = ev.state;
+
+        // Debug output
+        if (key == '<') snprintf(lastKeyDebug, sizeof(lastKeyDebug), "<");
+        else if (key == '>') snprintf(lastKeyDebug, sizeof(lastKeyDebug), ">");
+        else if (key == 'A') snprintf(lastKeyDebug, sizeof(lastKeyDebug), "A");
+        else if (key == 'B') snprintf(lastKeyDebug, sizeof(lastKeyDebug), "B");
+        else if (key == buttonVirtualKey(InputDefaults::TRIG_1_ID)) snprintf(lastKeyDebug, sizeof(lastKeyDebug), "TRIG1");
+        else if (key == buttonVirtualKey(InputDefaults::TRIG_2_ID)) snprintf(lastKeyDebug, sizeof(lastKeyDebug), "TRIG2");
+        else snprintf(lastKeyDebug, sizeof(lastKeyDebug), "?%d", (int)(unsigned char)key);
 
         if (key == 'B' && state == KeyState::PRESSED) return;
 
