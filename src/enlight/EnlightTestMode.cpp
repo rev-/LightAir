@@ -56,10 +56,6 @@ void EnlightTestMode::run() {
                     gAPressed = true;
                 } else if (state == KeyState::RELEASED || state == KeyState::RELEASED_HELD) {
                     gAPressed = false;
-                    // Exit if both were pressed and now both are released
-                    if (!gBPressed) {
-                        return;
-                    }
                 }
             }
             if (key == 'B') {
@@ -67,10 +63,6 @@ void EnlightTestMode::run() {
                     gBPressed = true;
                 } else if (state == KeyState::RELEASED || state == KeyState::RELEASED_HELD) {
                     gBPressed = false;
-                    // Exit if both were pressed and now both are released
-                    if (!gAPressed) {
-                        return;
-                    }
                 }
             }
 
