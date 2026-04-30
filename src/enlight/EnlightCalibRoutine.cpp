@@ -65,6 +65,9 @@ void EnlightCalibRoutine::step1() {
         phases[n] = computeBestPhase();
 
         long long r = m.rout, g = m.gout, b = m.bout;
+        _step1_r[n] = r;
+        _step1_g[n] = g;
+        _step1_b[n] = b;
         sumR += r;  ssR += r * r;
         sumG += g;  ssG += g * g;
         sumB += b;  ssB += b * b;
@@ -74,6 +77,9 @@ void EnlightCalibRoutine::step1() {
     // Sort phase values and take the median.
     qsort(phases, n, sizeof(uint32_t), cmp_u32);
     const uint32_t bestPhase = phases[n / 2];
+
+    // Store the number of runs for step2 processing.
+    _step1_n = n;
 
     // Persist and immediately apply the optimal phase offset.
     EnlightCalib cal;
@@ -105,6 +111,12 @@ void EnlightCalibRoutine::step1() {
 static int cmp_ll(const void* a, const void* b) {
     const long long x = *(const long long*)a;
     const long long y = *(const long long*)b;
+    return (x > y) - (x < y);
+}
+
+static int cmp_f(const void* a, const void* b) {
+    const float x = *(const float*)a;
+    const float y = *(const float*)b;
     return (x > y) - (x < y);
 }
 
@@ -169,6 +181,38 @@ void EnlightCalibRoutine::step2() {
     cal.rcalNear = (uint32_t)(sRN[mid] > 0 ? sRN[mid] / REPS : 0);
     cal.gcalNear = (uint32_t)(sGN[mid] > 0 ? sGN[mid] / REPS : 0);
     cal.bcalNear = (uint32_t)(sBN[mid] > 0 ? sBN[mid] / REPS : 0);
+
+    // Compute white-balance factors from step1 clear-target measurements.
+    // For each measurement: subtract baseline, compute rfact = g/r and bfact = g/b.
+    float rfact_arr[N_RUNS], bfact_arr[N_RUNS];
+    uint32_t rfact_count = 0, bfact_count = 0;
+    for (uint32_t i = 0; i < _step1_n; i++) {
+        long long r = _step1_r[i] - cal.rcal;
+        long long g = _step1_g[i] - cal.gcal;
+        long long b = _step1_b[i] - cal.bcal;
+        if (r > 0) {
+            rfact_arr[rfact_count++] = (float)g / (float)r;
+        }
+        if (b > 0) {
+            bfact_arr[bfact_count++] = (float)g / (float)b;
+        }
+    }
+
+    // Sort and find medians of rfact and bfact.
+    if (rfact_count > 0) {
+        qsort(rfact_arr, rfact_count, sizeof(float), cmp_f);
+        cal.rfact = rfact_arr[rfact_count / 2];
+    } else {
+        cal.rfact = 1.0f;
+    }
+
+    if (bfact_count > 0) {
+        qsort(bfact_arr, bfact_count, sizeof(float), cmp_f);
+        cal.bfact = bfact_arr[bfact_count / 2];
+    } else {
+        cal.bfact = 1.0f;
+    }
+
     enlight_calib_save(cal);
 
     // Compute averages and stdevs for display.
