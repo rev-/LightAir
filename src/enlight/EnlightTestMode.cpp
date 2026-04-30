@@ -7,6 +7,8 @@ static const char* TAG = "TestMode";
 // Key state tracking for test mode input
 static KeyState gPrevKeyState[256] = {};
 static uint32_t gLastHeldReturn[256] = {};
+static bool gAPressed = false;  // Track if A (O) is pressed/held
+static bool gBPressed = false;  // Track if B (X) is pressed/held
 
 EnlightTestMode::EnlightTestMode(Enlight&            e,
                                  LightAir_Display&   disp,
@@ -22,6 +24,8 @@ void EnlightTestMode::run() {
     _lastHeldTime = 0;
     memset(gPrevKeyState, 0, sizeof(gPrevKeyState));
     memset(gLastHeldReturn, 0, sizeof(gLastHeldReturn));
+    gAPressed = false;
+    gBPressed = false;
 
     bool showResult = false;
     char resultText[32] = "";
@@ -46,9 +50,28 @@ void EnlightTestMode::run() {
             KeyState prevState = gPrevKeyState[(uint8_t)key];
             gPrevKeyState[(uint8_t)key] = state;
 
-            // A (O) = return to menu, B (X) = return to menu
-            if ((key == 'A' || key == 'B') && state == KeyState::PRESSED) {
-                return;
+            // Track A (O) and B (X) press/hold states
+            if (key == 'A') {
+                if (state == KeyState::PRESSED || state == KeyState::HELD) {
+                    gAPressed = true;
+                } else if (state == KeyState::RELEASED || state == KeyState::RELEASED_HELD) {
+                    gAPressed = false;
+                    // Exit if both were pressed and now both are released
+                    if (!gBPressed) {
+                        return;
+                    }
+                }
+            }
+            if (key == 'B') {
+                if (state == KeyState::PRESSED || state == KeyState::HELD) {
+                    gBPressed = true;
+                } else if (state == KeyState::RELEASED || state == KeyState::RELEASED_HELD) {
+                    gBPressed = false;
+                    // Exit if both were pressed and now both are released
+                    if (!gAPressed) {
+                        return;
+                    }
+                }
             }
 
             // < and > to adjust repetitions
