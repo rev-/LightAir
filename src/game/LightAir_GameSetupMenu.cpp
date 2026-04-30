@@ -301,8 +301,8 @@ void LightAir_GameSetupMenu::runTestMode() {
     const uint32_t MIN_REPS = 1, MAX_REPS = 100;
     uint32_t litMessageTime = 0;
     char litMessageColor[4] = "";
-    KeyState prevLeftState = KeyState::RELEASED;
-    KeyState prevRightState = KeyState::RELEASED;
+
+    resetKeyStates();
 
     while (true) {
         // Render current state
@@ -319,7 +319,7 @@ void LightAir_GameSetupMenu::runTestMode() {
             _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, msgLine);
         }
 
-        printLegend("<>Reps  TRIG1:Test", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
+        printLegend("<>Reps  O:Test", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
         printLegend("X:Back", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
@@ -333,51 +333,29 @@ void LightAir_GameSetupMenu::runTestMode() {
             }
         }
 
-        // Input handling
-        const InputReport& rep = _input.poll();
+        // Wait for and handle input
+        MenuKeyEvent ev = waitForKey();
+        char key = ev.key;
+        KeyState state = ev.state;
 
-        // Process buttons (TRIG_1, TRIG_2)
-        for (uint8_t i = 0; i < rep.buttonCount; i++) {
-            if (rep.buttons[i].id == InputDefaults::TRIG_1_ID &&
-                rep.buttons[i].state == ButtonState::PRESSED) {
-                if (_enlight) {
-                    _enlight->setRepetitions(reps);
-                    _enlight->run();
-                }
-            }
-            if (rep.buttons[i].id == InputDefaults::TRIG_2_ID &&
-                rep.buttons[i].state == ButtonState::PRESSED) {
-                return;
-            }
+        // Action buttons (A, B) only respond to PRESS
+        if ((key == 'A' || key == 'B') && state != KeyState::PRESSED) continue;
+
+        if (key == 'B') return;
+
+        if (key == '<' && (state == KeyState::PRESSED || state == KeyState::HELD)) {
+            reps = (reps > MIN_REPS) ? (reps - 1) : MIN_REPS;
+        }
+        if (key == '>' && (state == KeyState::PRESSED || state == KeyState::HELD)) {
+            reps = (reps < MAX_REPS) ? (reps + 1) : MAX_REPS;
         }
 
-        // Process keypad keys
-        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
-            const InputReport::KeyEntry& ke = rep.keyEvents[i];
-            if (ke.keypadId != _keypadId) continue;
-
-            if (ke.key == '<') {
-                if (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD) {
-                    if (prevLeftState != KeyState::HELD) {
-                        reps = (reps > MIN_REPS) ? (reps - 1) : MIN_REPS;
-                    }
-                }
-                prevLeftState = ke.state;
-            }
-            if (ke.key == '>') {
-                if (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD) {
-                    if (prevRightState != KeyState::HELD) {
-                        reps = (reps < MAX_REPS) ? (reps + 1) : MAX_REPS;
-                    }
-                }
-                prevRightState = ke.state;
-            }
-            if (ke.key == 'B' && ke.state == KeyState::PRESSED) {
-                return;
+        if (key == 'A' && state == KeyState::PRESSED) {
+            if (_enlight) {
+                _enlight->setRepetitions(reps);
+                _enlight->run();
             }
         }
-
-        delay(10);
     }
 }
 
