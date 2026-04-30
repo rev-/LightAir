@@ -331,16 +331,6 @@ void LightAir_GameSetupMenu::runTestMode() {
         printLegend("X:Back", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
-        // Poll Enlight for results from any ongoing test
-        if (_enlight && _enlight->isActive()) {
-            EnlightResult res = _enlight->poll();
-            if (res.status == EnlightStatus::PLAYER_HIT && res.id < PlayerDefs::MAX_PLAYER_ID) {
-                snprintf(litMessageColor, sizeof(litMessageColor), "%s", PlayerDefs::playerShort[res.id]);
-                litMessageTime = millis() + 2000;
-                _uiCtrl->trigger(LightAir_UICtrl::UIEvent::Lit);
-            }
-        }
-
         // Wait for and handle input
         MenuKeyEvent ev = waitForKey();
         const char key = ev.key;
@@ -359,6 +349,21 @@ void LightAir_GameSetupMenu::runTestMode() {
             if (_enlight) {
                 _enlight->setRepetitions(reps);
                 _enlight->run();
+
+                // Wait for Enlight to finish, keeping the display updated.
+                EnlightResult res;
+                do {
+                    res = _enlight->poll();
+                    delay(GameDefaults::LOOP_MS);
+                } while (res.status == EnlightStatus::RUNNING);
+
+                if (res.status == EnlightStatus::PLAYER_HIT &&
+                    res.id < PlayerDefs::MAX_PLAYER_ID) {
+                    snprintf(litMessageColor, sizeof(litMessageColor),
+                             "%s", PlayerDefs::playerShort[res.id]);
+                    litMessageTime = millis() + 2000;
+                    if (_uiCtrl) _uiCtrl->trigger(LightAir_UICtrl::UIEvent::Lit);
+                }
             }
         }
     }
