@@ -75,34 +75,26 @@ void EnlightCalibRoutine::step1() {
     qsort(phases, n, sizeof(uint32_t), cmp_u32);
     const uint32_t bestPhase = phases[n / 2];
 
-    // Compute per-channel averages; derive white-balance factors so that
-    // rfact*R = G and bfact*B = G for a spectrally-flat (Clear) target.
-    const long long avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
-    const float rfact = (avgR > 0) ? (float)avgG / (float)avgR : 1.0f;
-    const float bfact = (avgB > 0) ? (float)avgG / (float)avgB : 1.0f;
-
-    // Persist phase offset and white-balance factors; apply phase immediately.
+    // Persist and immediately apply the optimal phase offset.
     EnlightCalib cal;
     enlight_calib_load(cal);
     cal.phaseOff = bestPhase;
-    cal.rfact    = rfact;
-    cal.bfact    = bfact;
     enlight_calib_save(cal);
     _e.buildSintab(bestPhase);
 
     // Show results.
+    const long long avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
     const float sdR = sqrtf(fmaxf(0.f, (float)(ssR / n) - (float)(avgR * avgR)));
     const float sdG = sqrtf(fmaxf(0.f, (float)(ssG / n) - (float)(avgG * avgG)));
     const float sdB = sqrtf(fmaxf(0.f, (float)(ssB / n) - (float)(avgB * avgB)));
 
-    char l0[24], l1[24], l2[24], l3[24], l4[24], l5[24];
+    char l0[24], l1[24], l2[24], l3[24], l4[24];
     snprintf(l0, sizeof(l0), "R:%.0f G:%.0f", (double)avgR, (double)avgG);
-    snprintf(l1, sizeof(l1), "B:%.0f Ph:%lu", (double)avgB, (unsigned long)bestPhase);
+    snprintf(l1, sizeof(l1), "B:%.0f", (double)avgB);
     snprintf(l2, sizeof(l2), "sR:%.0f sG:%.0f", (double)sdR, (double)sdG);
     snprintf(l3, sizeof(l3), "sB:%.0f", (double)sdB);
-    snprintf(l4, sizeof(l4), "rfact:%.4g", (double)rfact);
-    snprintf(l5, sizeof(l5), "bfact:%.4g next", (double)bfact);
-    showLines(l0, l1, l2, l3, l4, l5);
+    snprintf(l4, sizeof(l4), "Phase: %lu", (unsigned long)bestPhase);
+    showLines(l0, l1, l2, l3, l4, "TRIG2: next");
     waitTrig(TRIG_2_ID);
 }
 
@@ -216,7 +208,7 @@ void EnlightCalibRoutine::step3() {
               "TRIG1 to start.");
     waitTrig(TRIG_1_ID);
 
-    uint32_t maxNear = 0, maxFar = 0, maxRawPerCycle = 0;
+    uint32_t maxNear = 0, maxFar = 0;
     uint32_t n = 0;
 
     while (n < N_RUNS) {
@@ -230,32 +222,24 @@ void EnlightCalibRoutine::step3() {
 
         const uint32_t nearPow = (uint32_t)(llabs(m.rnear) + llabs(m.gnear) + llabs(m.bnear));
         const uint32_t farPow  = (uint32_t)(llabs(m.rout)  + llabs(m.gout)  + llabs(m.bout));
-        // Raw sum per cycle: divide by REPS so limpow is independent of repetition count.
-        const uint32_t rawPerCycle = (m.rawsum > 0) ? (uint32_t)(m.rawsum / REPS) : 0;
 
-        if (nearPow     > maxNear)         maxNear        = nearPow;
-        if (farPow      > maxFar)          maxFar         = farPow;
-        if (rawPerCycle > maxRawPerCycle)  maxRawPerCycle = rawPerCycle;
+        if (nearPow > maxNear) maxNear = nearPow;
+        if (farPow  > maxFar)  maxFar  = farPow;
         n++;
     }
 
-    // Persist Max Near White, Max Far White, and limpow.
-    // limpow is the highest per-cycle raw ADC sum seen over the white surface;
-    // classify() compares _rawsum against limpow * cycles so the threshold
-    // scales automatically with the in-game repetition count.
+    // Persist Max Near White and Max Far White.
     EnlightCalib cal;
     enlight_calib_load(cal);
     cal.maxNearWhite = maxNear;
     cal.maxFarWhite  = maxFar;
-    cal.limpow       = maxRawPerCycle;
     enlight_calib_save(cal);
 
     // Show results.
-    char l0[24], l1[24], l2[24];
+    char l0[24], l1[24];
     snprintf(l0, sizeof(l0), "NearMax: %lu", (unsigned long)maxNear);
     snprintf(l1, sizeof(l1), "FarMax:  %lu", (unsigned long)maxFar);
-    snprintf(l2, sizeof(l2), "limpow:  %lu", (unsigned long)maxRawPerCycle);
-    showLines(l0, l1, l2, nullptr, nullptr, "TRIG2: done");
+    showLines(l0, l1, nullptr, nullptr, nullptr, "TRIG2: done");
     waitTrig(TRIG_2_ID);
 }
 
