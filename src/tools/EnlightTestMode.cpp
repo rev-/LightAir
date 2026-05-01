@@ -1,6 +1,7 @@
 #include "EnlightTestMode.h"
 #include "../config.h"
 #include <stdio.h>
+#include <string.h>
 
 static inline char buttonVirtualKey(uint8_t id) { return (char)(0x01 + id); }
 
@@ -20,21 +21,21 @@ EnlightTestMode::KeyEvent EnlightTestMode::pollKey() {
         if (ke.keypadId != _keypadId) continue;
 
         uint8_t prev = _prevKeyState[(uint8_t)ke.key];
-        _prevKeyState[(uint8_t)ke.key] = ke.state;
+        _prevKeyState[(uint8_t)ke.key] = (uint8_t)ke.state;
 
         if (ke.state == KeyState::RELEASED || ke.state == KeyState::RELEASED_HELD)
-            _prevKeyState[(uint8_t)ke.key] = KeyState::OFF;
+            _prevKeyState[(uint8_t)ke.key] = (uint8_t)KeyState::OFF;
 
-        if (ke.state == KeyState::PRESSED && prev == KeyState::OFF) {
+        if (ke.state == KeyState::PRESSED && (KeyState)prev == KeyState::OFF) {
             _lastHeldReturn[(uint8_t)ke.key] = millis();
             return {ke.key, (uint8_t)KeyState::PRESSED};
         }
-        if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
+        if (ke.state == KeyState::HELD && (KeyState)prev == KeyState::PRESSED) {
             _lastHeldReturn[(uint8_t)ke.key] = millis();
             return {ke.key, (uint8_t)KeyState::HELD};
         }
         if (ke.key != 'A' && ke.key != 'B') {
-            if (ke.state == KeyState::HELD && prev == KeyState::HELD) {
+            if (ke.state == KeyState::HELD && (KeyState)prev == KeyState::HELD) {
                 uint32_t now = millis();
                 if (now - _lastHeldReturn[(uint8_t)ke.key] >= InputDefaults::HELD_REPEAT_MS) {
                     _lastHeldReturn[(uint8_t)ke.key] = now;
@@ -56,15 +57,15 @@ EnlightTestMode::KeyEvent EnlightTestMode::pollKey() {
             _prevButtonState[be.id] = (uint8_t)ButtonState::OFF;
 
         const char vk = buttonVirtualKey(be.id);
-        if (be.state == ButtonState::PRESSED && prev == (uint8_t)ButtonState::OFF) {
+        if (be.state == ButtonState::PRESSED && (ButtonState)prev == ButtonState::OFF) {
             _lastButtonHeld[be.id] = millis();
             return {vk, (uint8_t)KeyState::PRESSED};
         }
-        if (be.state == ButtonState::HELD && prev == (uint8_t)ButtonState::PRESSED) {
+        if (be.state == ButtonState::HELD && (ButtonState)prev == ButtonState::PRESSED) {
             _lastButtonHeld[be.id] = millis();
             return {vk, (uint8_t)KeyState::HELD};
         }
-        if (be.state == ButtonState::HELD && prev == (uint8_t)ButtonState::HELD) {
+        if (be.state == ButtonState::HELD && (ButtonState)prev == ButtonState::HELD) {
             uint32_t now = millis();
             if (now - _lastButtonHeld[be.id] >= InputDefaults::HELD_REPEAT_MS) {
                 _lastButtonHeld[be.id] = now;
