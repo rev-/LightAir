@@ -305,7 +305,6 @@ void LightAir_GameSetupMenu::runIdSettings() {
 }
 
 void LightAir_GameSetupMenu::runTestMode() {
-    // Verify prerequisites
     if (!_enlight || !_uiCtrl) {
         showMessage2("Test mode requires", "setEnlightAndUI()", "to be called.", "");
         waitForKey();
@@ -314,77 +313,85 @@ void LightAir_GameSetupMenu::runTestMode() {
 
     uint32_t reps = 5;
     const uint32_t MIN_REPS = 1, MAX_REPS = 100;
-    uint32_t litMessageTime = 0;
-    char litMessageColor[4] = "";
-    char lastKeyDebug[16] = "none";
+
+    // Last measurement diagnostics — displayed persistently after each shot
+    char diagColor[12] = "--";   // player name or "--"
+    char diagRa[12]    = "--";   // "r:X.XX a:X.XX"
+    char diagSs[12]    = "--";   // "S:NNNN sat:NNN"
 
     resetKeyStates();
 
     while (true) {
-        // Render current state
+        // ---- Render ----
         _display.clear();
         _display.setColor(true);
-        _display.print(0, 0, "-- Test Mode --");
-        char repLine[20];
-        snprintf(repLine, sizeof(repLine), "Reps: %lu", (unsigned long)reps);
-        _display.print(0, DisplayDefaults::FONT_HEIGHT, repLine);
 
-        if (millis() < litMessageTime) {
-            char msgLine[20];
-            snprintf(msgLine, sizeof(msgLine), "LIT %s", litMessageColor);
-            _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, msgLine);
-        }
+        char line0[22];
+        snprintf(line0, sizeof(line0), "Test  reps:%lu", (unsigned long)reps);
+        _display.print(0, 0, line0);
 
-        char dbgLine[16];
-        snprintf(dbgLine, sizeof(dbgLine), "Key: %s", lastKeyDebug);
-        _display.print(0, DisplayDefaults::FONT_HEIGHT * 3, dbgLine);
+        // Row 1: last hit color
+        char line1[22];
+        snprintf(line1, sizeof(line1), "Hit: %s", diagColor);
+        _display.print(0, DisplayDefaults::FONT_HEIGHT, line1);
 
-        printLegend("<>Reps  TRIG1:Test", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
+        // Row 2: outr, outang
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, diagRa);
+
+        // Row 3: sum>>20, satCount
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * 3, diagSs);
+
+        printLegend("<>:Reps  T1:Fire", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
         printLegend("X:Back", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
 
-        // Wait for and handle input
+        // ---- Input ----
         MenuKeyEvent ev = waitForKey();
         const char key = ev.key;
         const KeyState state = ev.state;
 
-        // Debug output
-        if (key == '<') snprintf(lastKeyDebug, sizeof(lastKeyDebug), "<");
-        else if (key == '>') snprintf(lastKeyDebug, sizeof(lastKeyDebug), ">");
-        else if (key == 'A') snprintf(lastKeyDebug, sizeof(lastKeyDebug), "A");
-        else if (key == 'B') snprintf(lastKeyDebug, sizeof(lastKeyDebug), "B");
-        else if (key == buttonVirtualKey(InputDefaults::TRIG_1_ID)) snprintf(lastKeyDebug, sizeof(lastKeyDebug), "TRIG1");
-        else if (key == buttonVirtualKey(InputDefaults::TRIG_2_ID)) snprintf(lastKeyDebug, sizeof(lastKeyDebug), "TRIG2");
-        else snprintf(lastKeyDebug, sizeof(lastKeyDebug), "?%d", (int)(unsigned char)key);
-
         if (key == 'B' && state == KeyState::PRESSED) return;
 
-        if (key == '<' && (state == KeyState::PRESSED || state == KeyState::HELD)) {
+        if (key == '<' && (state == KeyState::PRESSED || state == KeyState::HELD))
             reps = (reps > MIN_REPS) ? (reps - 1) : MIN_REPS;
-        }
-        if (key == '>' && (state == KeyState::PRESSED || state == KeyState::HELD)) {
+        if (key == '>' && (state == KeyState::PRESSED || state == KeyState::HELD))
             reps = (reps < MAX_REPS) ? (reps + 1) : MAX_REPS;
-        }
 
         if (key == buttonVirtualKey(InputDefaults::TRIG_1_ID) && state == KeyState::PRESSED) {
-            if (_enlight) {
-                _enlight->setRepetitions(reps);
-                _enlight->run();
+            _enlight->setRepetitions(reps);
+            _enlight->run();
 
-                // Wait for Enlight to finish, keeping the display updated.
-                EnlightResult res;
-                do {
-                    res = _enlight->poll();
-                    delay(GameDefaults::LOOP_MS);
-                } while (res.status == EnlightStatus::RUNNING);
+            EnlightResult res;
+            do {
+                res = _enlight->poll();
+                delay(GameDefaults::LOOP_MS);
+            } while (res.status == EnlightStatus::RUNNING);
 
-                if (res.status == EnlightStatus::PLAYER_HIT &&
-                    res.id < PlayerDefs::MAX_PLAYER_ID) {
-                    snprintf(litMessageColor, sizeof(litMessageColor),
-                             "%s", PlayerDefs::playerShort[res.id]);
-                    litMessageTime = millis() + 2000;
-                    if (_uiCtrl) _uiCtrl->trigger(LightAir_UICtrl::UIEvent::Lit);
-                }
+            // Compute outr / outang exactly as Enlight does internally
+            EnlightRawMeasure raw = _enlight->rawMeasure();
+            const EnlightCalib& cal = _enlight->calib();
+            float rw = (float)raw.rout * cal.rfact;
+            float gw = (float)raw.gout;
+            float bw = (float)raw.bout * cal.bfact;
+            float s  = rw + gw + bw;
+            float outr_n = (s > 0.f) ? (rw / s) : 0.f;
+            float outang  = (s > 0.f && outr_n < 1.f) ? (gw / s) / (1.f - outr_n) : 0.f;
+
+            long long rawSum = raw.rout + raw.gout + raw.bout;
+            long long sumShr = rawSum >> 20;
+
+            snprintf(diagRa, sizeof(diagRa), "r:%.2f a:%.2f",
+                     (double)outr_n, (double)outang);
+            snprintf(diagSs, sizeof(diagSs), "S:%lld sat:%lu",
+                     (long long)sumShr, (unsigned long)raw.satCount);
+
+            if (res.status == EnlightStatus::PLAYER_HIT &&
+                res.id < PlayerDefs::MAX_PLAYER_ID) {
+                snprintf(diagColor, sizeof(diagColor), "%s",
+                         PlayerDefs::playerShort[res.id]);
+                _uiCtrl->trigger(LightAir_UICtrl::UIEvent::Lit);
+            } else {
+                snprintf(diagColor, sizeof(diagColor), "none(%d)", (int)res.status);
             }
         }
     }

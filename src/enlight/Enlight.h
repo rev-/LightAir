@@ -118,6 +118,7 @@ public:
     // Valid to call immediately after poll() returns a non-RUNNING status.
     // Values are reset by run(), so call this before the next run().
     EnlightRawMeasure rawMeasure() const;
+    const EnlightCalib& calib() const { return _cal; }
 
     // Access to the raw ADC DMA buffer from the last completed DMA cycle.
     // Only the last cycle is retained; call before the next run().
