@@ -8,6 +8,7 @@
 #include "../config.h"
 
 class EnlightCalibRoutine;
+class EnlightTestMode;
 
 // ----------------------------------------------------------------
 // Config blob format (used by game_serialize_config / game_apply_config):
@@ -87,16 +88,13 @@ public:
     // Blocking.  Returns Confirmed or Cancelled.
     MenuResult run();
 
-    // Optional: register a calibration routine accessible from Settings → Calibration.
+    // Optional: register a calibration tool accessible from Settings → Calibration.
     // Must be called before run().
-    void setCalibRoutine(EnlightCalibRoutine& r) { _calibRoutine = &r; }
+    void setCalibTool(EnlightCalibRoutine& t) { _calibTool = &t; }
 
-    // Optional: register Enlight and UICtrl for Test mode.
+    // Optional: register a test mode tool accessible from Settings → Test Mode.
     // Must be called before run().
-    void setEnlightAndUI(class Enlight& e, class LightAir_UICtrl& ui) {
-        _enlight = &e;
-        _uiCtrl = &ui;
-    }
+    void setTestTool(EnlightTestMode& t) { _testTool = &t; }
 
     // Valid after Confirmed return.
     const LightAir_Game& selectedGame() const { return *_game; }
@@ -110,9 +108,8 @@ private:
     LightAir_Radio&       _radio;
     uint8_t               _msgType;
 
-    EnlightCalibRoutine* _calibRoutine = nullptr;
-    class Enlight*       _enlight = nullptr;
-    class LightAir_UICtrl* _uiCtrl = nullptr;
+    EnlightCalibRoutine* _calibTool = nullptr;
+    EnlightTestMode*     _testTool  = nullptr;
     bool                 _isDm   = false;
     const LightAir_Game* _game   = nullptr;
     uint8_t              _gameIdx = 0;
@@ -135,7 +132,6 @@ private:
     // ---- Home / Settings ----
     void runSettingsMenu();
     void runIdSettings();
-    void runTestMode();
     void saveIsDm(bool val);
     bool loadIsDm();
 

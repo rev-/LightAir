@@ -25,7 +25,8 @@
 #define LOG_LEVEL LOG_LEVEL_INFO
 #endif 
 
-#include <enlight/EnlightCalibRoutine.h>
+#include <tools/EnlightCalibRoutine.h>
+#include <tools/EnlightTestMode.h>
 
 // ----------------------------------------------------------------
 // Enlight global pointer
@@ -60,6 +61,7 @@ static LightAir_TotemDriver*     driver = nullptr;
 static EnlightCalib       enlightCalib;
 static Enlight*           enlight      = nullptr;
 static EnlightCalibRoutine* calibRoutine = nullptr;
+static EnlightTestMode*   testMode     = nullptr;
 
 // EnlightConfig: pin values come from player_pins.h;
 // timing/frequency constants come from EnlightDefaults (src/config.h).
@@ -173,6 +175,8 @@ void _setup() {
         enlightPtr   = enlight;
         calibRoutine = new EnlightCalibRoutine(*enlight, rawDisplay, input,
                                                InputDefaults::KEYPAD_ID);
+        testMode = new EnlightTestMode(*enlight, playerUi, rawDisplay, input,
+                                       InputDefaults::KEYPAD_ID);
         if (!enlight->begin()) {
             Serial.println("Enlight init FAILED — halting");
             while (true) delay(1000);
@@ -205,8 +209,8 @@ void _setup() {
                                     rawDisplay, input,
                                     InputDefaults::KEYPAD_ID,
                                     *radio);
-        menu.setCalibRoutine(*calibRoutine);
-        menu.setEnlightAndUI(*enlight, playerUi);
+        menu.setCalibTool(*calibRoutine);
+        menu.setTestTool(*testMode);
         if (menu.run() != MenuResult::Confirmed) {
             Log.infoln("Setup menu cancelled — rebooting");
             ESP.restart();
