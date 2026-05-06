@@ -1,5 +1,5 @@
 #pragma once
-#include "Enlight.h"
+#include "../enlight/Enlight.h"
 #include "../ui/player/display/LightAir_Display.h"
 #include "../input/LightAir_InputCtrl.h"
 
@@ -72,15 +72,15 @@ private:
     // released.  Polls at ~10 ms intervals.
     void waitTrig(uint8_t trigId);
 
-    Enlight&            _e;
-    LightAir_Display&   _disp;
-    LightAir_InputCtrl& _input;
-    uint8_t             _keypadId;
-
     static constexpr uint32_t N_RUNS     = 50;    // valid runs to collect per step
     static constexpr uint32_t REPS       = 5;     // run() repetitions per measurement
     static constexpr uint32_t DELAY_MS   = 100;   // ms between measurements
     static constexpr float    SAT_THRESH = 0.10f; // discard if > 10 % saturated
+
+    Enlight&            _e;
+    LightAir_Display&   _disp;
+    LightAir_InputCtrl& _input;
+    uint8_t             _keypadId;
 
     long long           _step1_r[N_RUNS];  // RGB values from step1 for each run
     long long           _step1_g[N_RUNS];

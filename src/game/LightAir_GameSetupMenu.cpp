@@ -1,7 +1,6 @@
 #include "LightAir_GameSetupMenu.h"
-#include "../enlight/Enlight.h"
-#include "../enlight/EnlightCalibRoutine.h"
-#include "../ui/player/LightAir_UICtrl.h"
+#include "../tools/EnlightCalibRoutine.h"
+#include "../tools/EnlightTestMode.h"
 #include "../nvs_config.h"
 #include "../totem-rulesets/TotemRoleIds.h"
 #include <Arduino.h>
@@ -244,9 +243,9 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
         if (key == '^' && sel > 0) { sel--; continue; }
         if (key == 'V' && sel < kCount - 1) { sel++; continue; }
         if (key == 'A') {
-            if (sel == 0 && _calibRoutine) _calibRoutine->run();
+            if (sel == 0 && _calibTool) _calibTool->run();
             if (sel == 1) runIdSettings();
-            if (sel == 2) runTestMode();
+            if (sel == 2 && _testTool) _testTool->run();
         }
     }
 }
@@ -300,66 +299,6 @@ void LightAir_GameSetupMenu::runIdSettings() {
                 waitForKey();
             }
             return;
-        }
-    }
-}
-
-void LightAir_GameSetupMenu::runTestMode() {
-    uint32_t reps = 5;
-    const uint32_t MIN_REPS = 1, MAX_REPS = 100;
-    uint32_t litMessageTime = 0;
-    char litMessageColor[4] = "";
-
-    resetKeyStates();
-
-    while (true) {
-        // Render current state
-        _display.clear();
-        _display.setColor(true);
-        _display.print(0, 0, "-- Test Mode --");
-        char repLine[20];
-        snprintf(repLine, sizeof(repLine), "Reps: %lu", (unsigned long)reps);
-        _display.print(0, DisplayDefaults::FONT_HEIGHT, repLine);
-
-        if (millis() < litMessageTime) {
-            char msgLine[20];
-            snprintf(msgLine, sizeof(msgLine), "LIT %s", litMessageColor);
-            _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, msgLine);
-        }
-
-        printLegend("<>Reps  TRIG1:Test", DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT);
-        printLegend("X:Back", DisplayDefaults::BOTTOM_LINE_Y);
-        _display.flush();
-
-        // Poll Enlight for results from any ongoing test
-        if (_enlight && _enlight->isActive()) {
-            EnlightResult res = _enlight->poll();
-            if (res.status == EnlightStatus::PLAYER_HIT && res.id < PlayerDefs::MAX_PLAYER_ID) {
-                snprintf(litMessageColor, sizeof(litMessageColor), "%s", PlayerDefs::playerShort[res.id]);
-                litMessageTime = millis() + 2000;
-                _uiCtrl->trigger(LightAir_UICtrl::UIEvent::Lit);
-            }
-        }
-
-        // Wait for and handle input
-        MenuKeyEvent ev = waitForKey();
-        const char key = ev.key;
-        const KeyState state = ev.state;
-
-        if (key == 'B' && state == KeyState::PRESSED) return;
-
-        if (key == '<' && (state == KeyState::PRESSED || state == KeyState::HELD)) {
-            reps = (reps > MIN_REPS) ? (reps - 1) : MIN_REPS;
-        }
-        if (key == '>' && (state == KeyState::PRESSED || state == KeyState::HELD)) {
-            reps = (reps < MAX_REPS) ? (reps + 1) : MAX_REPS;
-        }
-
-        if (key == buttonVirtualKey(InputDefaults::TRIG_1_ID) && state == KeyState::PRESSED) {
-            if (_enlight) {
-                _enlight->setRepetitions(reps);
-                _enlight->run();
-            }
         }
     }
 }
