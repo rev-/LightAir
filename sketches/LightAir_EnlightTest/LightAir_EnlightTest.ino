@@ -96,8 +96,8 @@ static const EnlightConfig enlightCfg = {
     /* afeOn         */ EnlightDefaults::AFE_ON,
     /* taskCore      */ EnlightDefaults::TASK_CORE,
     /* afeStartupUs  */ EnlightDefaults::AFE_STARTUP_MICROS,
-    /* satHigh       */ 4085,  // Saturation threshold (high)
-    /* satLow        */ 10,    // Saturation threshold (low)
+    /* satHigh       */ EnlightDefaults::SAT_HIGH,
+    /* satLow        */ EnlightDefaults::SAT_LOW,
 };
 
 static WiFiServer tcpServer(TCP_PORT);
