@@ -81,9 +81,10 @@ void EnlightTestMode::run() {
     uint32_t reps = 5;
     const uint32_t MIN_REPS = 1, MAX_REPS = 100;
 
-    char diagColor[12] = "--";
-    char diagRa[12]    = "--";
-    char diagSs[12]    = "--";
+    char diagColor[12]         = "--";
+    char diagRgb[24]           = "--";
+    char diagColorCoord[24]    = "--";
+    char diagSs[24]            = "--";
 
     // Initialize state tracking
     memset(_prevKeyState, (uint8_t)KeyState::OFF, sizeof(_prevKeyState));
@@ -103,15 +104,9 @@ void EnlightTestMode::run() {
         snprintf(line1, sizeof(line1), "Hit: %s", diagColor);
         _disp.print(0, DisplayDefaults::FONT_HEIGHT, line1);
 
-        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 2, diagRa);
-        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 3, diagSs);
-
-        uint16_t legendW = _disp.textWidth("<>:Reps  T1:Fire");
-        uint8_t  legendX = (legendW < DisplayDefaults::SCREEN_WIDTH)
-                         ? (uint8_t)((DisplayDefaults::SCREEN_WIDTH - legendW) / 2)
-                         : 0;
-        _disp.print(legendX, DisplayDefaults::BOTTOM_LINE_Y - DisplayDefaults::FONT_HEIGHT,
-                    "<>:Reps  T1:Fire");
+        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 2, diagRgb);
+        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 3, diagColorCoord);
+        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 4, diagSs);
 
         legendW = _disp.textWidth("X:Back");
         legendX = (legendW < DisplayDefaults::SCREEN_WIDTH)
@@ -150,19 +145,33 @@ void EnlightTestMode::run() {
 
             EnlightRawMeasure raw = _e.rawMeasure();
             const EnlightCalib& cal = _e.calib();
-            float rw = (float)raw.rout * cal.rfact;
-            float gw = (float)raw.gout;
-            float bw = (float)raw.bout * cal.bfact;
+            long long r = raw.rout;
+            long long g = raw.gout;
+            long long b = raw.bout;
+            float rw = (float)r * cal.rfact;
+            float gw = (float)g;
+            float bw = (float)b * cal.bfact;
             float s  = rw + gw + bw;
             float outr_n = (s > 0.f) ? (rw / s) : 0.f;
             float outang  = (s > 0.f && outr_n < 1.f) ? (gw / s) / (1.f - outr_n) : 0.f;
 
-            long long rawSum = raw.rout + raw.gout + raw.bout;
-            long long sumShr = rawSum >> 20;
+            long long rawSum = r+g+b;
+            long long sumShr = rawSum;
+            int bitCount = 0;
+            while (sumShr>1024){
+                sumShr>>=1;
+                bitCount++;
+            }
 
-            snprintf(diagRa, sizeof(diagRa), "r:%.2f a:%.2f",
+            r >>= bitCount;
+            g >>= bitCount;
+            b >>= bitCount;
+
+            snprintf(diagRgb, sizeof(diagRgb), "r:%lld g:%lld b:%lld >>%d",
+                     r, g, b, bitCount);
+            snprintf(diagColorCoord, sizeof(diagColorCoord), "r:%.2f a:%.2f",
                      (double)outr_n, (double)outang);
-            snprintf(diagSs, sizeof(diagSs), "S:%lld sat:%lu",
+            snprintf(diagSs, sizeof(diagSs), "SUM:%lld sat:%lu",
                      (long long)sumShr, (unsigned long)raw.satCount);
 
             if (res.status == EnlightStatus::PLAYER_HIT &&
