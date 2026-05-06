@@ -168,7 +168,7 @@ void EnlightTestMode::run() {
             g >>= bitCount;
             b >>= bitCount;
 
-            snprintf(diagRgb, sizeof(diagRgb), "r:%04lld g:%04lld b:%04lld >>%d",
+            snprintf(diagRgb, sizeof(diagRgb), "r:%03lld g:%03lld b:%03lld >>%d",
                      r, g, b, bitCount);
             snprintf(diagColorCoord, sizeof(diagColorCoord), "r:%.2f a:%.2f",
                      (double)outr_n, (double)outang);
