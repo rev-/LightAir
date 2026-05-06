@@ -105,8 +105,8 @@ void EnlightTestMode::run() {
         snprintf(line1, sizeof(line1), "Hit: %s", diagColor);
         _disp.print(0, DisplayDefaults::FONT_HEIGHT, line1);
 
-        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 2, diagRgb);
-        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 3, diagColorCoord);
+        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 2, diagColorCoord);
+        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 3, diagRgb);
         _disp.print(0, DisplayDefaults::FONT_HEIGHT * 4, diagSs);
 
         legendW = _disp.textWidth("X:Back");
@@ -168,7 +168,7 @@ void EnlightTestMode::run() {
             g >>= bitCount;
             b >>= bitCount;
 
-            snprintf(diagRgb, sizeof(diagRgb), "r:%lld g:%lld b:%lld >>%d",
+            snprintf(diagRgb, sizeof(diagRgb), "r:%04lld g:%04lld b:%04lld >>%d",
                      r, g, b, bitCount);
             snprintf(diagColorCoord, sizeof(diagColorCoord), "r:%.2f a:%.2f",
                      (double)outr_n, (double)outang);
