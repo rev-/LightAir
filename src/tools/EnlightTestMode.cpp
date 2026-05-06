@@ -79,6 +79,7 @@ EnlightTestMode::KeyEvent EnlightTestMode::pollKey() {
 
 void EnlightTestMode::run() {
     uint32_t reps = 5;
+    uint32_t legendW = 0, legendX = 0;
     const uint32_t MIN_REPS = 1, MAX_REPS = 100;
 
     char diagColor[12]         = "--";
