@@ -8,7 +8,10 @@ It tries to make new game definitions as easy as possible, with the scope to pro
 It has to be compiled for ESP32-S3 and is written to be flashed using Arduino IDE, which is more simple than ESP-IDF.
 
 ## Build instruction
-In order to compile you need `make` and `arduino-cli` installed.
+You'll need the following programs installed to successfully build the sketch:
+- `make`
+- `arduino-cli`
+- `swig`
 
 ```sh
 make build/debug/LightAir.ino.bin
@@ -31,7 +34,7 @@ After uploading the sketch, the test output will be printed on the serial monito
 
 ### Build for WOKWI simulator
 
-You can produce a binary targeting [WOWKI](https://wokwi.com/projects/new/esp32-s3) by using the corresponding profile:
+You can produce a binary targeting [WOKWI](https://wokwi.com/projects/new/esp32-s3) by using the corresponding profile:
 ```sh
 PROFILE=ESP32-S3-WROOM-1-WOKWI make build/debug/LightAir.ino.bin
 ```

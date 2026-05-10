@@ -5,8 +5,12 @@ ADDITIONAL_DEFINES?=
 SKETCH_NAME?=LightAir
 # Leave blank for default profile
 PROFILE?=
+SWIG_INTERFACES = $(shell find . -name "*.i")
+SWIG_WRAPPERS   = $(SWIG_INTERFACES:.i=_wrap.cpp)
+SRCS = $(wildcard *.ino) $(wildcard src/**/*.cpp) $(wildcard src/**/*.h) $(wildcard src/**/*.c) $(SWIG_WRAPPERS)
 
-SRCS = $(wildcard *.ino) $(wildcard src/**/*.cpp) $(wildcard src/**/*.h) $(wildcard src/**/*.c)
+%_wrap.cpp: %.i
+	swig -Wall -Wextra -Wallkw -cppext cpp -c++ -lua $<
 
 build/debug/$(SKETCH_NAME).ino.bin: $(SRCS)
 	arduino-cli compile --optimize-for-debug --profile "$(PROFILE)" -v --jobs 0 --build-path ./build/debug . --build-property "compiler.cpp.extra_flags=$(INCLUDES) $(FLAGS) $(DEFINES) $(ADDITIONAL_DEFINES)"
@@ -15,4 +19,5 @@ build/test/unit/$(SKETCH_NAME).ino.bin: $(SRCS)
 	arduino-cli compile --optimize-for-debug --profile "$(PROFILE)" -v --jobs 0 --build-path ./build/test/unit . --build-property "compiler.cpp.extra_flags=$(INCLUDES) $(FLAGS) $(DEFINES) $(ADDITIONAL_DEFINES) -DTEST_UNIT"
 
 clean:
-	rm -rf build 
+	rm -rf build
+	rm -f $(SWIG_WRAPPERS)
