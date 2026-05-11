@@ -315,10 +315,8 @@ void Enlight::buildAdcTxBuffer() {
  *   ------------------
  *   When any R/G/B channel clips, the triple is excluded from both
  *   accumulators and its phase bucket is recorded in _satPhaseCount[idx].
- *   classify() later weights this per-phase count by sin²[j] to correct
- *   the far baseline and by cos²[j] to correct the near baseline.
- *   The squared-kernel weighting provides automatic attribution: a saturation
- *   at the cosine peak (sin[j] = 0) contributes nothing to the far correction.
+ *   classify() later weights this per-phase count to correct the near baseline.
+ *   
  * ============================================================ */
 void Enlight::processAdcCycle() {
     const uint32_t triples = _adcConvsPerCycle / ADC_CHANNELS;
@@ -359,74 +357,70 @@ void Enlight::processAdcCycle() {
  *   samples present.  When saturated triples are excluded in processAdcCycle()
  *   the accumulators are smaller, so subtracting the full baseline over-
  *   subtracts and produces false zeroes.
+ *   Also, the baseline offset is supposed to be canceled in an int number
+ *   of periods of the modulator, but the saturation factually removes
+ *   some samples, falsifying this hypotesis. A baseline correction is required.
  *
  *   Correction principle
- *   Each sample at phase j contributes to rcal proportionally to sintab[j]²
- *   (kernel power ≈ sin²).  The fraction of baseline energy lost through
- *   excluded samples is therefore:
+ *   Removal of saturated samples may be modeled as a subtraction from the unsaturated output value:
+ *     
+ *      R_SAT = R - integral_SAT{[s(x)+v(x)+k]*m(x)}
  *
- *     frac = Σ_j satPhaseCount[j] × sin²[j]  /  (N_per_phase × Σ_j sin²[j])
+ *     where:
+ *     R_SAT = calculated value for channel R considering saturation (removed samples)
+ *     R = calculated value for channel R if saturation wouldn't happen
+ *     integral_SAT = sum over the samples that are saturated
+ *     s(x) = efficient signal function (cos(x/T*2*pi)-1)*A
+ *     v(x) = void signal function (cos(x/T*2*pi)-1)*v
+ *     k = baseline channel value, supposed constant
+ *     m(x) = modulation signal (cos(x/T*2*pi))*M
+ *     
+ *   after a bit of calculus and manipulation starting from this equation we get to:
  *
- *   where N_per_phase = _arrayiter / GP is the number of times each phase
- *   was visited (exact, since each period contains exactly one of each phase).
- *   The corrected baseline is  cal × (1 − frac) = cal − cal × frac.
+ *   R = [ R_SAT + k* integral_SAT{m(x)} ]/[ 1+ (2/(T*(M^2)))* integral_SAT{m(x)*[M-m(x)]} ] 
  *
- *   The SAME _satPhaseCount array is used for both far and near channels,
- *   weighted by sin²[j] and cos²[j] respectively.  Because Σ sin²[j] = Σ cos²[j]
- *   over a full period, the denominator is identical and is precomputed as
- *   _sin2total in buildSintab().
+ *     where:
+ *     T = total number of samples in one sine period
+ *     other symbols have the same meaning as above
  *
- *   Integer arithmetic (Q16 fixed-point, no float)
- *   -----------------------------------------------
- *   frac_q16 = (sin2_sat << 16) / denom     ∈ [0, 65536]
- *   corr     = (cal × frac_q16 + (1<<15)) >> 16   (rounded)
+ *   This basically allows us to estimate the R value starting from the R_SAT information,
+ *   that is the actual output value after removal of SAT samples and accumulation with modulation function.
+ *   Logically, it is a 2 step compensation:
+ *   STEP1 = correct for missing baseline samples : add k* integral_SAT{m(x)}
+ *   STEP2 = multiplication factor to cosider missing samples in signal and void : divide by 1+ (2/(T*(M^2)))* integral_SAT{m(x)*[M-m(x)]}
  *
- *   Overflow check (worst case, all phases always saturated):
- *     sin2_sat   ≤ N_per_phase × _sin2total  →  sin2_sat << 16 fits in int64
- *     cal × frac_q16  ≤ UINT32_MAX × 65536 ≈ 2.8 × 10¹⁴  →  fits in int64
+ *   we name the correction addend : c_(R,G,B) = k_(R,G,B) * integral_SAT{m(x)}
+ *   we name the correction dividend: gamma = 1+ (2/(T*(M^2)))* integral_SAT{m(x)*[M-m(x)]}
+ *
+ *   it's worth noting k is channel-dependent, so in general we have separate k_r , k_g , k_b and separate c_R, c_G, c_B
+ *   on the other hand, m(x) does not depend on the channel, so gamma is the same value for all the channels.
+ *
+ *
  * ============================================================ */
 EnlightResult Enlight::classify() {
-    // Accumulate sin²-weighted and cos²-weighted saturation counts.
-    long long sin2_sat = 0, cos2_sat = 0;
+    // Accumulate correction factors
+    uint32_t gammaSatCorr_far = 0, cSatCorr_far = 0;
+    uint32_t gammaSatCorr_near = 0, cSatCorr_near = 0;
     if (_satPhaseCount && _sin2total > 0) {
         for (uint32_t j = 0; j < _goertzPeriod; j++) {
             if (!_satPhaseCount[j]) continue;
-            const long long sj = _sintab[j];
-            const long long cj = _sintab[(j + _cosOffset) % _goertzPeriod];
-            sin2_sat += (long long)_satPhaseCount[j] * sj * sj;
-            cos2_sat += (long long)_satPhaseCount[j] * cj * cj;
+            const uint32_t sj = _sintab[j];
+            const uint32_t cj = _sintab[(j + _cosOffset) % _goertzPeriod];
+            
+            gammaSatCorr_far += _satPhaseCount[j] * sj * (SIN_MAG-sj);
+            cSatCorr_far += _satPhaseCount[j] * sj;
+            gammaSatCorr_near += _satPhaseCount[j] * cj * (SIN_MAG-cj);
+            cSatCorr_near += _satPhaseCount[j] * cj;
         }
+        float gammaF_far = 1+(2/(SIN_MAG*_goertzPeriod))*gammaSatCorr_far;
+        float gammaF_near = 1+(2/(SIN_MAG*_goertzPeriod))*gammaSatCorr_near;
+        _rout = (long long)((_rout + k_R*cSatCorr_far)/gammaF_far);
+        _gout = (long long)((_gout + k_G*cSatCorr_far)/gammaF_far);
+        _bout = (long long)((_bout + k_B*cSatCorr_far)/gammaF_far);
+        _rnear = (long long)((_rnear + k_R*cSatCorr_near)/gammaF_near);
+        _gnear = (long long)((_gnear + k_G*cSatCorr_near)/gammaF_near);
+        _bnear = (long long)((_bnear + k_B*cSatCorr_near)/gammaF_near);
     }
-
-    // denom = N_per_phase × Σ sin²[j]  (total expected sin²-weighted sample count).
-    // The first period of every DMA cycle is skipped (photodiode re-settling), so
-    // only (_periodsPerCycle - 1) periods per cycle contributed to the accumulators.
-    const long long cycles      = (long long)(_arrayiter / (_goertzPeriod * _periodsPerCycle));
-    const long long n_per_phase = (long long)(_periodsPerCycle - 1) * cycles;
-    const long long denom       = n_per_phase * _sin2total;
-
-    // Q16 correction fractions: 0 = no saturation, 65536 = all samples excluded.
-    const long long frac_far_q16  = (denom > 0) ? (sin2_sat << 16) / denom : 0LL;
-    const long long frac_near_q16 = (denom > 0) ? (cos2_sat << 16) / denom : 0LL;
-
-    // Corrected baselines: cal - round(cal × frac).  Clamped so they can't go negative.
-    // The + (1<<15) term rounds to nearest rather than truncating.
-#define CORR(cal, frac_q16) \
-    ((long long)(cal) - (((long long)(cal) * (frac_q16) + (1LL<<15)) >> 16))
-#define EFF(cal, frac_q16) \
-    (CORR(cal, frac_q16) > 0 ? CORR(cal, frac_q16) : 0LL)
-
-    // Scale the single-cycle calibration baselines by the number of cycles so
-    // they match the accumulated correlator sums, then apply saturation correction.
-    const long long eff_rcal     = EFF(_cal.rcal     * cycles, frac_far_q16);
-    const long long eff_gcal     = EFF(_cal.gcal     * cycles, frac_far_q16);
-    const long long eff_bcal     = EFF(_cal.bcal     * cycles, frac_far_q16);
-    const long long eff_rcalNear = EFF(_cal.rcalNear * cycles, frac_near_q16);
-    const long long eff_gcalNear = EFF(_cal.gcalNear * cycles, frac_near_q16);
-    const long long eff_bcalNear = EFF(_cal.bcalNear * cycles, frac_near_q16);
-
-#undef EFF
-#undef CORR
 
     const long long rout = (_rout  > eff_rcal)     ? _rout  - eff_rcal     : 0LL;
     const long long gout = (_gout  > eff_gcal)     ? _gout  - eff_gcal     : 0LL;
