@@ -57,9 +57,6 @@
 #define ENLIGHT_REPS  1
 // ------------------------------------------------------------------------
 
-// Saturation thresholds (must match Enlight.cpp)
-static constexpr uint16_t kSatHigh = 4085;
-static constexpr uint16_t kSatLow  = 10;
 
 // ================================================================
 // Hardware objects  (pin constants come from player_pins.h via LightAir.h)
@@ -76,29 +73,6 @@ static LightAir_InputCtrl input;
 
 static EnlightCalib  enlightCalib;
 static Enlight*      enlight = nullptr;
-
-static const EnlightConfig enlightCfg = {
-    /* adcHost     */ EnlightDefaults::ADC_HOST,
-    /* adcClk      */ EnlightDefaults::ADC_CLK,
-    /* adcSdo      */ EnlightDefaults::ADC_SDO,
-    /* adcSdi      */ EnlightDefaults::ADC_SDI,
-    /* adcCs       */ EnlightDefaults::ADC_CS,
-    /* adcClockHz  */ EnlightDefaults::ADC_CLOCK_HZ,
-    /* adcCmdR     */ EnlightDefaults::ADC_CMD_R,
-    /* adcCmdG     */ EnlightDefaults::ADC_CMD_G,
-    /* adcCmdB     */ EnlightDefaults::ADC_CMD_B,
-    /* ledHost     */ EnlightDefaults::LED_HOST,
-    /* ledSdo      */ EnlightDefaults::LED_SDO,
-    /* ledSdiOut   */ EnlightDefaults::LED_SDI_OUT,
-    /* ledClockHz  */ EnlightDefaults::LED_CLOCK_HZ,
-    /* ledFreqHz   */ EnlightDefaults::LED_FREQ_HZ,
-    /* pdmAmpOff   */ EnlightDefaults::PDM_AMP_OFFSET,
-    /* afeOn         */ EnlightDefaults::AFE_ON,
-    /* taskCore      */ EnlightDefaults::TASK_CORE,
-    /* afeStartupUs  */ EnlightDefaults::AFE_STARTUP_MICROS,
-    /* satHigh       */ EnlightDefaults::SAT_HIGH,
-    /* satLow        */ EnlightDefaults::SAT_LOW,
-};
 
 static WiFiServer tcpServer(TCP_PORT);
 static WiFiClient tcpClient;
@@ -409,9 +383,9 @@ static void takeMeasurement() {
             const uint16_t rv = adcSample(buf, base);
             const uint16_t gv = adcSample(buf, base + 1);
             const uint16_t bv = adcSample(buf, base + 2);
-            const int sat = (rv >= kSatHigh || rv <= kSatLow ||
-                             gv >= kSatHigh || gv <= kSatLow ||
-                             bv >= kSatHigh || bv <= kSatLow) ? 1 : 0;
+            const int sat = (rv >= EnlightDefaults::SAT_HIGH || rv <= EnlightDefaults::SAT_LOW ||
+                             gv >= EnlightDefaults::SAT_HIGH || gv <= EnlightDefaults::SAT_LOW ||
+                             bv >= EnlightDefaults::SAT_HIGH || bv <= EnlightDefaults::SAT_LOW) ? 1 : 0;
             const int32_t sinVal = sintab ? sintab[t % gp] : 0;
             snprintf(line, sizeof(line), "SAMPLE,%lu,%lu,%u,%u,%u,%d,%ld\n",
                      (unsigned long)ts, (unsigned long)t, rv, gv, bv, sat, (long)sinVal);
@@ -477,7 +451,7 @@ void setup() {
 
     // Enlight init
     enlight_calib_load(enlightCalib);
-    enlight = new Enlight(enlightCfg, enlightCalib);
+    enlight = new Enlight(enlightCalib);
     if (!enlight->begin()) {
         dispBegin();
         dispRow(0, "Enlight init");

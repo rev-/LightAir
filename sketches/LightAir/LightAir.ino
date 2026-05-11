@@ -149,7 +149,7 @@ void _setup() {
 
         // Enlight
         enlight_calib_load(enlightCalib);
-        enlight      = new Enlight(EnlightDefaults::kConfig, enlightCalib);
+        enlight      = new Enlight(enlightCalib);
         enlightPtr   = enlight;
         calibRoutine = new EnlightCalibRoutine(*enlight, rawDisplay, input,
                                                InputDefaults::KEYPAD_ID);
