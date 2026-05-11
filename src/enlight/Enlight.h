@@ -177,9 +177,9 @@ private:
     uint16_t*   _satPhaseCount = nullptr;
     long long   _sin2total     = 0;  // Σ_j sintab[j]² = Σ_j cos[j]²; precomputed in buildSintab()
 
-    // Per-cycle ADC baseline samples captured at the FAR LED trough (t = 3*GP/4, phase 3π/2)
-    // within the settling window of each DMA cycle.  At that phase the FAR LED is at minimum
-    // intensity (0.22 duty), minimising LED contribution to the reading.
+    // Per-cycle ADC baseline samples captured at the phase where the ADC is maximum
+    // (minimum LED contribution at the photodiode, which is inverted: more light → lower ADC).
+    // Sampling index: t = (GP/4 + GP − phaseOff) % GP — the sintab peak, calibrated via phaseOff.
     // _satK[i][ch] = raw 12-bit ADC reading for channel ch in DMA cycle i (up to 64 cycles).
     // _satKCount = number of valid rows.  classify() takes the per-channel median as k_R/G/B.
     uint16_t  _satK[64][ADC_CHANNELS] = {};

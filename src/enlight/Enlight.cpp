@@ -326,15 +326,23 @@ void Enlight::processAdcCycle() {
         return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
     };
 
-    // Capture one R/G/B triple at the FAR LED trough (t = 3*GP/4, phase 3π/2) within
-    // the first settling period of this DMA cycle.  At θ=3π/2 the sine is –1, so the
-    // FAR LED is at its minimum intensity (0.22 duty, vs 0.98 at peak and 0.60 at t=0),
-    // giving the best in-DMA estimate of the per-channel ambient background for k_R/G/B.
-    // Requires _goertzPeriod % 4 == 0 (checked in buildSintab()).
+    // Capture one R/G/B triple at the ADC maximum — the phase where the FAR LED
+    // contributes least to the photodiode (inverted: more light → lower ADC).
+    //
+    // The correlator is calibrated with phaseOff so that sintab peaks exactly where
+    // the ADC peaks.  sintab[t] = SIN_MAG·sin(2π·(t+phaseOff)/GP); sintab maximum
+    // at t = GP/4 − phaseOff (mod GP).  That is also where ADC(t) is maximum
+    // (LED at photodiode is at its minimum, d = GP/2 − phaseOff samples after emission).
+    //
+    // t_trough = (GP/4 + GP − phaseOff) % GP
+    //          = (50 + 200 − 42) % 200 = 8  at V6R2 defaults.
+    // This lies inside the settling window (first GP triples), so it never disturbs
+    // the correlator accumulators.
     const uint32_t cycle_idx = _repetitions - _repsRemaining;
     if (cycle_idx < 64) {
-        const uint32_t t_trough = (3 * _goertzPeriod) / 4;
-        const uint32_t fb       = t_trough * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+        const uint32_t t_trough = (_goertzPeriod / 4 + _goertzPeriod - _cal.phaseOff)
+                                  % _goertzPeriod;
+        const uint32_t fb = t_trough * ADC_CHANNELS + ADC_PIPELINE_DELAY;
         _satK[cycle_idx][0] = r12(fb);
         _satK[cycle_idx][1] = r12(fb + 1);
         _satK[cycle_idx][2] = r12(fb + 2);
