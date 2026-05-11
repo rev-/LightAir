@@ -337,7 +337,13 @@ void Enlight::processAdcCycle() {
         if (rv >= EnlightDefaults::SAT_HIGH || rv <= EnlightDefaults::SAT_LOW ||
             gv >= EnlightDefaults::SAT_HIGH || gv <= EnlightDefaults::SAT_LOW ||
             bv >= EnlightDefaults::SAT_HIGH || bv <= EnlightDefaults::SAT_LOW) {
-            // Record which phase bucket was lost; classify() uses this for baseline correction.
+            // Record which phase bucket was lost; classify() uses this for saturation correction.
+            // For the same reason, also record the baseline value
+            if (_satK[_arrayiter / _goertzPeriod,0]==0) {
+                _satK[_arrayiter / _goertzPeriod,0]==r12((t * ADC_CHANNELS + ADC_PIPELINE_DELAY)/_goertzPeriod);
+                _satK[_arrayiter / _goertzPeriod,1]==r12((t * ADC_CHANNELS + ADC_PIPELINE_DELAY+1)/_goertzPeriod);
+                _satK[_arrayiter / _goertzPeriod,2]==r12((t * ADC_CHANNELS + ADC_PIPELINE_DELAY+1)/_goertzPeriod);
+            }
             _satPhaseCount[idx]++;
             _satCount++;
         } else {
@@ -346,6 +352,10 @@ void Enlight::processAdcCycle() {
         }
         _arrayiter++;
     }
+    if (_satCount>0){
+        _satK[0,0]; //median of baseline values for channel R
+        _satK[0,1]; //median of baseline values for channel R
+        _satK[0,2]; //median of baseline values for channel R
 }
 
 /* ============================================================
@@ -437,6 +447,14 @@ EnlightResult Enlight::classify() {
             _gnear = (long long)(((float)_gnear + k_G * (float)cSatCorr_near) / gammaF_near);
             _bnear = (long long)(((float)_bnear + k_B * (float)cSatCorr_near) / gammaF_near);
         }
+        float gammaF_far = 1+(2/(SIN_MAG*_goertzPeriod))*gammaSatCorr_far;
+        float gammaF_near = 1+(2/(SIN_MAG*_goertzPeriod))*gammaSatCorr_near;
+        _rout = (long long)((_rout + _satK[0,0]*cSatCorr_far)/gammaF_far);
+        _gout = (long long)((_gout + _satK[0,1]*cSatCorr_far)/gammaF_far);
+        _bout = (long long)((_bout + _satK[0,2]*cSatCorr_far)/gammaF_far);
+        _rnear = (long long)((_rnear + _satK[0,0]*cSatCorr_near)/gammaF_near);
+        _gnear = (long long)((_gnear + _satK[0,1]*cSatCorr_near)/gammaF_near);
+        _bnear = (long long)((_bnear + _satK[0,2]*cSatCorr_near)/gammaF_near);
     }
 
     // Scale single-cycle calibration baselines to match the multi-cycle accumulators.
