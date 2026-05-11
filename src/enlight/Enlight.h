@@ -28,9 +28,12 @@ static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 // ledFreqHz and ledClockHz are chosen accordingly.
 static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 
-static constexpr float    PDM_AMPLITUDE = 0.95f;
-static constexpr int32_t  SIN_MAG       = 2048;
+static constexpr float    PDM_AMPLITUDE  = 0.95f;
+static constexpr int32_t  SIN_MAG        = 2048;
 static constexpr int      GRID_MAX_THRESH = CALIB_MAX_PLAYERS * 2;
+// Maximum number of DMA repetitions supported by the _satK baseline buffer.
+// Raise if setRepetitions() is called with a value above this.
+static constexpr uint32_t ENLIGHT_MAX_REPS = 100;
 
 // Result type
 enum class EnlightStatus : uint8_t {
@@ -176,6 +179,14 @@ private:
     // cosine peak (sin[j] = 0) contributes zero to the far correction and maximum to the near.
     uint16_t*   _satPhaseCount = nullptr;
     long long   _sin2total     = 0;  // Σ_j sintab[j]² = Σ_j cos[j]²; precomputed in buildSintab()
+
+    // Per-cycle ADC baseline samples captured at the LED trough (minimum intensity)
+    // within the first settling period of each DMA cycle.
+    // _satK[i][ch] = raw 12-bit ADC reading for channel ch in DMA cycle i.
+    // _satKCount = number of valid rows (= number of completed DMA cycles this run).
+    // Used in classify() to compute k_R/G/B for the STEP1 saturation correction.
+    uint16_t  _satK[ENLIGHT_MAX_REPS][ADC_CHANNELS] = {};
+    uint32_t  _satKCount = 0;
 
     // LED DIO SPI
     spi_device_handle_t _ledDevice   = nullptr;
