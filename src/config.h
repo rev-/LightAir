@@ -191,6 +191,14 @@ namespace EnlightDefaults {
     constexpr uint32_t AFE_STARTUP_MICROS = 2000;
     constexpr uint16_t SAT_HIGH = 4085;
     constexpr uint16_t SAT_LOW  = 10;
+
+    constexpr EnlightConfig kConfig = {
+        ADC_HOST, ADC_CLK, ADC_SDO, ADC_SDI, ADC_CS,
+        ADC_CLOCK_HZ, ADC_CMD_R, ADC_CMD_G, ADC_CMD_B,
+        LED_HOST, LED_SDO, LED_SDI_OUT, LED_CLOCK_HZ, LED_FREQ_HZ,
+        PDM_AMP_OFFSET, AFE_ON, TASK_CORE, AFE_STARTUP_MICROS,
+        SAT_HIGH, SAT_LOW,
+    };
 }
 
 // ---------------------------------------------------------------

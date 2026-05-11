@@ -63,30 +63,6 @@ static Enlight*           enlight      = nullptr;
 static EnlightCalibRoutine* calibRoutine = nullptr;
 static EnlightTestMode*   testMode     = nullptr;
 
-// EnlightConfig: pin values come from player_pins.h;
-// timing/frequency constants come from EnlightDefaults (src/config.h).
-static const EnlightConfig enlightCfg = {
-    /* adcHost     */ EnlightDefaults::ADC_HOST,
-    /* adcClk      */ PLAYER_ADC_CLK,
-    /* adcSdo      */ PLAYER_ADC_SDO,
-    /* adcSdi      */ PLAYER_ADC_SDI,
-    /* adcCs       */ PLAYER_ADC_CS,
-    /* adcClockHz  */ EnlightDefaults::ADC_CLOCK_HZ,
-    /* adcCmdR     */ EnlightDefaults::ADC_CMD_R,
-    /* adcCmdG     */ EnlightDefaults::ADC_CMD_G,
-    /* adcCmdB     */ EnlightDefaults::ADC_CMD_B,
-    /* ledHost     */ EnlightDefaults::LED_HOST,
-    /* ledSdo      */ PLAYER_LED_SDO,
-    /* ledSdiOut   */ PLAYER_LED_SDI_OUT,
-    /* ledClockHz  */ EnlightDefaults::LED_CLOCK_HZ,
-    /* ledFreqHz   */ EnlightDefaults::LED_FREQ_HZ,
-    /* pdmAmpOff   */ EnlightDefaults::PDM_AMP_OFFSET,
-    /* afeOn         */ PLAYER_AFE_ON,
-    /* taskCore      */ EnlightDefaults::TASK_CORE,
-    /* afeStartupUs  */ EnlightDefaults::AFE_STARTUP_MICROS,
-    /* satHigh       */ EnlightDefaults::SAT_HIGH,
-    /* satLow        */ EnlightDefaults::SAT_LOW,
-};
 
 // ---- Display ----
 static LightAir_SSD1306Display rawDisplay(PLAYER_I2C_SDA, PLAYER_I2C_SCL);
@@ -173,7 +149,7 @@ void _setup() {
 
         // Enlight
         enlight_calib_load(enlightCalib);
-        enlight      = new Enlight(enlightCfg, enlightCalib);
+        enlight      = new Enlight(EnlightDefaults::kConfig, enlightCalib);
         enlightPtr   = enlight;
         calibRoutine = new EnlightCalibRoutine(*enlight, rawDisplay, input,
                                                InputDefaults::KEYPAD_ID);
