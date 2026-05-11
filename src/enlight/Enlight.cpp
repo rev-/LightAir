@@ -10,7 +10,7 @@
 
 static const char* TAG = "Enlight";
 
-Enlight::Enlight(const EnlightConfig& cfg, const EnlightCalib& cal) : _cfg(cfg), _cal(cal) {}
+Enlight::Enlight(const EnlightCalib& cal) : _cal(cal) {}
 Enlight::~Enlight() {
     heap_caps_free(_ledTxBuf);
     heap_caps_free(_adcTxBuf);
@@ -29,14 +29,14 @@ Enlight::~Enlight() {
  *   4. Fill ADC TX buffer (fixed command stream).
  * ============================================================ */
 bool Enlight::generateWaveform() {
-    if (_cfg.ledFreqHz == 0 || _cfg.ledClockHz == 0) return false;
+    if (EnlightDefaults::LED_FREQ_HZ == 0 || EnlightDefaults::LED_CLOCK_HZ == 0) return false;
 
-    const float    idealClocks = (float)_cfg.ledClockHz / (float)_cfg.ledFreqHz;
+    const float    idealClocks = (float)EnlightDefaults::LED_CLOCK_HZ / (float)EnlightDefaults::LED_FREQ_HZ;
     const uint32_t grains      = (uint32_t)fmaxf(1.0f, roundf(idealClocks / GOERTZ_GRAIN));
     _periodClocks  = grains * GOERTZ_GRAIN;
     _waveformBytes = _periodClocks / PDM_CLKS_PER_BYTE;
     _goertzPeriod  = _periodClocks / GOERTZ_GRAIN;
-    _actualFreqHz  = (float)_cfg.ledClockHz / (float)_periodClocks;
+    _actualFreqHz  = (float)EnlightDefaults::LED_CLOCK_HZ / (float)_periodClocks;
 
     _periodsPerCycle  = (uint32_t)(ENLIGHT_SPI_MAX_DMA_LEN / _waveformBytes);
     if (_periodsPerCycle == 0) {
@@ -47,13 +47,13 @@ bool Enlight::generateWaveform() {
     _adcConvsPerCycle = _periodsPerCycle * (_periodClocks / ADC_CLKS_PER_CONV);
     _adcBufBytes      = (_adcConvsPerCycle + ADC_PIPELINE_DELAY) * ADC_BYTES_PER_CONV;
 
-    const float cycleMs = (float)(_periodsPerCycle * _periodClocks) / (float)_cfg.ledClockHz * 1000.0f;
+    const float cycleMs = (float)(_periodsPerCycle * _periodClocks) / (float)EnlightDefaults::LED_CLOCK_HZ * 1000.0f;
     ESP_LOGI(TAG, "PDM: req=%.1fHz actual=%.4fHz period=%lu clocks/%lu bytes "
              "GP=%lu perCycle=%lu cycleMs=%.3f pdmOff=%.3f",
-             (double)_cfg.ledFreqHz, (double)_actualFreqHz,
+             (double)EnlightDefaults::LED_FREQ_HZ, (double)_actualFreqHz,
              (unsigned long)_periodClocks, (unsigned long)_waveformBytes,
              (unsigned long)_goertzPeriod, (unsigned long)_periodsPerCycle,
-             (double)cycleMs, (double)_cfg.pdmAmpOffset);
+             (double)cycleMs, (double)EnlightDefaults::PDM_AMP_OFFSET);
 
     _ledTxBuf = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
     _adcTxBuf = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
@@ -63,7 +63,7 @@ bool Enlight::generateWaveform() {
     }
     memset(_adcRxBuf, 0, _adcBufBytes);
 
-    const float base = 0.5f + _cfg.pdmAmpOffset, swing = 0.5f - _cfg.pdmAmpOffset;
+    const float base = 0.5f + EnlightDefaults::PDM_AMP_OFFSET, swing = 0.5f - EnlightDefaults::PDM_AMP_OFFSET;
     const float twoPiOverT = 2.0f * (float)M_PI / (float)_periodClocks;
     float acc_sin = 0.0f, acc_cos = 0.0f;
     for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
@@ -170,33 +170,33 @@ bool Enlight::begin() {
     buildGrid();
 
     gpio_config_t gc={};
-    gc.pin_bit_mask=1ULL<<_cfg.afeOn;
+    gc.pin_bit_mask=1ULL<<EnlightDefaults::AFE_ON;
     gc.mode=GPIO_MODE_OUTPUT;
     gpio_config(&gc);
-    gpio_set_level((gpio_num_t)_cfg.afeOn, 0);
+    gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON, 0);
 
     spi_bus_config_t lb={};
-    lb.mosi_io_num=_cfg.ledSdo;
-    lb.miso_io_num=_cfg.ledSdiOut;
+    lb.mosi_io_num=EnlightDefaults::LED_SDO;
+    lb.miso_io_num=EnlightDefaults::LED_SDI_OUT;
     lb.sclk_io_num=-1;
     lb.quadwp_io_num=-1;
     lb.quadhd_io_num=-1;
     lb.max_transfer_sz=_ledBufBytes;
 
-    if (spi_bus_initialize((spi_host_device_t)_cfg.ledHost,&lb,SPI_DMA_CH_AUTO)!=ESP_OK) {
+    if (spi_bus_initialize((spi_host_device_t)EnlightDefaults::LED_HOST,&lb,SPI_DMA_CH_AUTO)!=ESP_OK) {
         ESP_LOGE(TAG,"LED bus init failed"); return false; }
     spi_device_interface_config_t ld={};
-    ld.clock_speed_hz=(int)_cfg.ledClockHz;
+    ld.clock_speed_hz=(int)EnlightDefaults::LED_CLOCK_HZ;
     ld.mode=0;
     ld.spics_io_num=-1;
     ld.queue_size=1;
     ld.flags=SPI_DEVICE_HALFDUPLEX;
 
-    if (spi_bus_add_device((spi_host_device_t)_cfg.ledHost,&ld,&_ledDevice)!=ESP_OK) {
+    if (spi_bus_add_device((spi_host_device_t)EnlightDefaults::LED_HOST,&ld,&_ledDevice)!=ESP_OK) {
         ESP_LOGE(TAG,"LED dev add failed"); return false; }
-    const int lp[2]={_cfg.ledSdo,_cfg.ledSdiOut};
-    const int ls[2]={(int)spi_periph_signal[(spi_host_device_t)_cfg.ledHost].spid_out,
-                     (int)spi_periph_signal[(spi_host_device_t)_cfg.ledHost].spiq_out};
+    const int lp[2]={EnlightDefaults::LED_SDO,EnlightDefaults::LED_SDI_OUT};
+    const int ls[2]={(int)spi_periph_signal[(spi_host_device_t)EnlightDefaults::LED_HOST].spid_out,
+                     (int)spi_periph_signal[(spi_host_device_t)EnlightDefaults::LED_HOST].spiq_out};
     for (int n=0;n<2;n++) {
         gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[lp[n]],PIN_FUNC_GPIO);
         gpio_set_direction((gpio_num_t)lp[n],GPIO_MODE_OUTPUT);
@@ -204,18 +204,18 @@ bool Enlight::begin() {
     }
 
     spi_bus_config_t ab={};
-    ab.mosi_io_num=_cfg.adcSdo;
-    ab.miso_io_num=_cfg.adcSdi;
-    ab.sclk_io_num=_cfg.adcClk;
+    ab.mosi_io_num=EnlightDefaults::ADC_SDO;
+    ab.miso_io_num=EnlightDefaults::ADC_SDI;
+    ab.sclk_io_num=EnlightDefaults::ADC_CLK;
     ab.quadwp_io_num=-1;
     ab.quadhd_io_num=-1;
     ab.max_transfer_sz=_adcBufBytes;
 
-    if (spi_bus_initialize((spi_host_device_t)_cfg.adcHost,&ab,SPI_DMA_CH_AUTO)!=ESP_OK) {
+    if (spi_bus_initialize((spi_host_device_t)EnlightDefaults::ADC_HOST,&ab,SPI_DMA_CH_AUTO)!=ESP_OK) {
         ESP_LOGE(TAG,"ADC bus init failed"); return false; }
     spi_device_interface_config_t ad={};
-    ad.clock_speed_hz=(int)_cfg.adcClockHz; ad.mode=0; ad.spics_io_num=_cfg.adcCs; ad.queue_size=1;
-    if (spi_bus_add_device((spi_host_device_t)_cfg.adcHost,&ad,&_adcDevice)!=ESP_OK) {
+    ad.clock_speed_hz=(int)EnlightDefaults::ADC_CLOCK_HZ; ad.mode=0; ad.spics_io_num=EnlightDefaults::ADC_CS; ad.queue_size=1;
+    if (spi_bus_add_device((spi_host_device_t)EnlightDefaults::ADC_HOST,&ad,&_adcDevice)!=ESP_OK) {
         ESP_LOGE(TAG,"ADC dev add failed"); return false; }
 
     memset(&_ledTrans,0,sizeof(_ledTrans));
@@ -249,7 +249,7 @@ bool Enlight::run() {
     _resultDelivered = false;
     _active=true;
     _firstCycle=true;
-    gpio_set_level((gpio_num_t)_cfg.afeOn,1);
+    gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,1);
     spawnCycle();
     return true;
 }
@@ -288,7 +288,7 @@ EnlightResult Enlight::poll() {
  *   buildAdcTxBuffer() -- filled once at begin()
  * ============================================================ */
 void Enlight::buildAdcTxBuffer() {
-    const uint8_t cmds[ADC_CHANNELS]={_cfg.adcCmdR,_cfg.adcCmdG,_cfg.adcCmdB};
+    const uint8_t cmds[ADC_CHANNELS]={EnlightDefaults::ADC_CMD_R,EnlightDefaults::ADC_CMD_G,EnlightDefaults::ADC_CMD_B};
     const uint32_t slots=_adcConvsPerCycle+ADC_PIPELINE_DELAY;
     for (uint32_t i=0;i<slots;i++) {
         _adcTxBuf[i*2]=(i<_adcConvsPerCycle)?cmds[i%ADC_CHANNELS]:0x00;
@@ -336,9 +336,9 @@ void Enlight::processAdcCycle() {
         const int32_t  ks  = _sintab[idx];
         const int32_t  kc  = _sintab[(idx + _cosOffset) % _goertzPeriod];
 
-        if (rv >= _cfg.satHigh || rv <= _cfg.satLow ||
-            gv >= _cfg.satHigh || gv <= _cfg.satLow ||
-            bv >= _cfg.satHigh || bv <= _cfg.satLow) {
+        if (rv >= EnlightDefaults::SAT_HIGH || rv <= EnlightDefaults::SAT_LOW ||
+            gv >= EnlightDefaults::SAT_HIGH || gv <= EnlightDefaults::SAT_LOW ||
+            bv >= EnlightDefaults::SAT_HIGH || bv <= EnlightDefaults::SAT_LOW) {
             // Record which phase bucket was lost; classify() uses this for baseline correction.
             _satPhaseCount[idx]++;
             _satCount++;
@@ -477,14 +477,14 @@ EnlightResult Enlight::classifyNear() {
 void Enlight::spawnCycle() {
     _taskArgs={this};
     xTaskCreatePinnedToCore(dmaTask,"EnlightDMA",4096,&_taskArgs,
-                            configMAX_PRIORITIES-1,&_taskHandle,_cfg.taskCore);
+                            configMAX_PRIORITIES-1,&_taskHandle,EnlightDefaults::TASK_CORE);
 }
 
 void Enlight::onCycleDone() {
     processAdcCycle();
     _repsRemaining--;
     if (_repsRemaining==0) {
-        gpio_set_level((gpio_num_t)_cfg.afeOn,0);
+        gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
         EnlightResult r=classify();
         taskENTER_CRITICAL(&_mux);
         _latestResult=r;
@@ -500,7 +500,7 @@ void Enlight::dmaTask(void* arg) {
     if (s->_firstCycle) {
         s->_firstCycle=false;
         const int64_t t0=esp_timer_get_time();
-        while (esp_timer_get_time()-t0 < (int64_t)s->_cfg.afeStartupUs) {}
+        while (esp_timer_get_time()-t0 < (int64_t)EnlightDefaults::AFE_STARTUP_MICROS) {}
     }
     spi_device_queue_trans(s->_ledDevice,&s->_ledTrans,portMAX_DELAY);
     spi_device_queue_trans(s->_adcDevice,&s->_adcTrans,portMAX_DELAY);

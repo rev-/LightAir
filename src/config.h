@@ -141,31 +141,6 @@ enum class DeviceHardware : uint8_t {
     TOTEM  = 1,   // static game object (base, flag, control point)
 };
 
-// ---------------------------------------------------------------
-// Enlight hardware configuration
-//
-// SDO (FSPI MOSI)             -> FAR  LED, sine   waveform, focal-point emitter.
-// SDI_out (FSPI MISO repurp.) -> NEAR LED, cosine waveform, wide-cone emitter.
-// Sine/cosine orthogonality lets a single photodiode separate both channels:
-//   correlate ADC with sintab              -> far  (rout/gout/bout)
-//   correlate ADC with sintab + _cosOffset -> near (rnear/gnear/bnear)
-// ---------------------------------------------------------------
-struct EnlightConfig {
-    uint8_t  adcHost;       // spi_host_device_t; cast when used
-    int      adcClk, adcSdo, adcSdi, adcCs;
-    uint32_t adcClockHz;
-    uint8_t  adcCmdR, adcCmdG, adcCmdB;
-    uint8_t  ledHost;       // spi_host_device_t; cast when used
-    int      ledSdo;        // sine  / FAR  LED (FSPI MOSI)
-    int      ledSdiOut;     // cosine / NEAR LED (FSPI MISO repurposed)
-    uint32_t ledClockHz, ledFreqHz;
-    float    pdmAmpOffset;  // [0.0, 0.5)
-    int      afeOn;
-    uint8_t  taskCore;
-    uint32_t afeStartupUs;  // busy-wait after AFE power-on before first DMA cycle
-    uint16_t satHigh;
-    uint16_t satLow;
-};
 
 namespace EnlightDefaults {
     constexpr uint8_t  ADC_HOST      = 1;        // SPI2_HOST

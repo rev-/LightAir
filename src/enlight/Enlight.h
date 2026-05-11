@@ -71,7 +71,7 @@ struct GridClassifier {
 class Enlight
 {
 public:
-    Enlight(const EnlightConfig& cfg, const EnlightCalib& cal);
+    Enlight(const EnlightCalib& cal);
     ~Enlight();
 
     // One-time hardware init, waveform generation, classifier build.
@@ -141,7 +141,6 @@ public:
     void buildSintab(uint32_t phase);
 
 private:
-    EnlightConfig   _cfg;
     EnlightCalib    _cal;
 
     // Waveform / cycle geometry
