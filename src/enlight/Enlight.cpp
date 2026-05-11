@@ -408,19 +408,44 @@ void Enlight::processAdcCycle() {
  *
  * ============================================================ */
 EnlightResult Enlight::classify() {
-    // Accumulate correction factors
-    uint32_t gammaSatCorr_far = 0, cSatCorr_far = 0;
-    uint32_t gammaSatCorr_near = 0, cSatCorr_near = 0;
+    // Accumulate correction factors.
+    // gammaSatCorr = Σ_j satPhaseCount[j] * sintab[j] * (SIN_MAG - sintab[j])
+    // cSatCorr     = Σ_j satPhaseCount[j] * sintab[j]
+    //
+    // KNOWN ISSUE: sintab[j] ∈ [-SIN_MAG, +SIN_MAG]; the product
+    // sintab[j]*(SIN_MAG-sintab[j]) is negative for sintab[j] < 0 (~50% of phases).
+    // For typical (uniform) saturation gammaSatCorr ≈ -N*_sin2total, making
+    // gammaF ≪ 0 (sign-flips all channels).  The gammaF>0 guard below prevents
+    // the flip, but the correction then has no effect.  The formula derivation
+    // assumes m(x) ∈ [0, M]; revisit once re-derived for the signed correlator kernel.
+    long long gammaSatCorr_far = 0, cSatCorr_far = 0;
+    long long gammaSatCorr_near = 0, cSatCorr_near = 0;
     if (_satPhaseCount && _sin2total > 0) {
         for (uint32_t j = 0; j < _goertzPeriod; j++) {
             if (!_satPhaseCount[j]) continue;
-            const uint32_t sj = _sintab[j];
-            const uint32_t cj = _sintab[(j + _cosOffset) % _goertzPeriod];
-            
-            gammaSatCorr_far += _satPhaseCount[j] * sj * (SIN_MAG-sj);
-            cSatCorr_far += _satPhaseCount[j] * sj;
-            gammaSatCorr_near += _satPhaseCount[j] * cj * (SIN_MAG-cj);
-            cSatCorr_near += _satPhaseCount[j] * cj;
+            const int32_t sj = _sintab[j];
+            const int32_t cj = _sintab[(j + _cosOffset) % _goertzPeriod];
+            gammaSatCorr_far  += (long long)_satPhaseCount[j] * sj * (SIN_MAG - sj);
+            cSatCorr_far      += (long long)_satPhaseCount[j] * sj;
+            gammaSatCorr_near += (long long)_satPhaseCount[j] * cj * (SIN_MAG - cj);
+            cSatCorr_near     += (long long)_satPhaseCount[j] * cj;
+        }
+        // k_R/G/B = per-sample ADC baseline (DC level) for each channel.
+        // Not yet stored in calibration; 0.0f disables STEP1 (k*cSatCorr addend).
+        // Add k_r, k_g, k_b to EnlightCalib and calibration routines when available.
+        const float k_R = 0.0f, k_G = 0.0f, k_B = 0.0f;
+        const float invGammaDenom = 2.0f / ((float)SIN_MAG * (float)_goertzPeriod);
+        const float gammaF_far  = 1.0f + invGammaDenom * (float)gammaSatCorr_far;
+        const float gammaF_near = 1.0f + invGammaDenom * (float)gammaSatCorr_near;
+        if (gammaF_far > 0.0f) {
+            _rout  = (long long)(((float)_rout  + k_R * (float)cSatCorr_far)  / gammaF_far);
+            _gout  = (long long)(((float)_gout  + k_G * (float)cSatCorr_far)  / gammaF_far);
+            _bout  = (long long)(((float)_bout  + k_B * (float)cSatCorr_far)  / gammaF_far);
+        }
+        if (gammaF_near > 0.0f) {
+            _rnear = (long long)(((float)_rnear + k_R * (float)cSatCorr_near) / gammaF_near);
+            _gnear = (long long)(((float)_gnear + k_G * (float)cSatCorr_near) / gammaF_near);
+            _bnear = (long long)(((float)_bnear + k_B * (float)cSatCorr_near) / gammaF_near);
         }
         float gammaF_far = 1+(2/(SIN_MAG*_goertzPeriod))*gammaSatCorr_far;
         float gammaF_near = 1+(2/(SIN_MAG*_goertzPeriod))*gammaSatCorr_near;
@@ -432,6 +457,17 @@ EnlightResult Enlight::classify() {
         _bnear = (long long)((_bnear + _satK[0,2]*cSatCorr_near)/gammaF_near);
     }
 
+    // Scale single-cycle calibration baselines to match the multi-cycle accumulators.
+    // The saturation correction above adjusts _rout/_rnear toward the full no-saturation
+    // values, so we use the uncorrected (full-cycle) baselines here.
+    const long long cycles      = (long long)(_arrayiter / (_goertzPeriod * _periodsPerCycle));
+    const long long eff_rcal     = (long long)_cal.rcal     * cycles;
+    const long long eff_gcal     = (long long)_cal.gcal     * cycles;
+    const long long eff_bcal     = (long long)_cal.bcal     * cycles;
+    const long long eff_rcalNear = (long long)_cal.rcalNear * cycles;
+    const long long eff_gcalNear = (long long)_cal.gcalNear * cycles;
+    const long long eff_bcalNear = (long long)_cal.bcalNear * cycles;
+
     const long long rout = (_rout  > eff_rcal)     ? _rout  - eff_rcal     : 0LL;
     const long long gout = (_gout  > eff_gcal)     ? _gout  - eff_gcal     : 0LL;
     const long long bout = (_bout  > eff_bcal)     ? _bout  - eff_bcal     : 0LL;
@@ -439,10 +475,9 @@ EnlightResult Enlight::classify() {
     _gnear = (_gnear > eff_gcalNear) ? _gnear - eff_gcalNear : 0LL;
     _bnear = (_bnear > eff_bcalNear) ? _bnear - eff_bcalNear : 0LL;
 
-    ESP_LOGD(TAG, "rawsum=%lld far=(%lld,%lld,%lld) near=(%lld,%lld,%lld) "
-                  "sat=%lu frac_far_q16=%lld frac_near_q16=%lld",
+    ESP_LOGD(TAG, "rawsum=%lld far=(%lld,%lld,%lld) near=(%lld,%lld,%lld) sat=%lu",
              _rawsum, rout, gout, bout, _rnear, _gnear, _bnear,
-             (unsigned long)_satCount, frac_far_q16, frac_near_q16);
+             (unsigned long)_satCount);
 
     if (_rawsum <= (long long)_cal.limpow) return {EnlightStatus::LOW_POW, 0};
 
