@@ -326,15 +326,12 @@ void Enlight::processAdcCycle() {
         return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
     };
 
-    // Capture one R/G/B triple at the LED trough (t = 3*GP/4) within the first
-    // settling period of this DMA cycle.  At phase θ = 3π/2 the sine is –1, so
-    // the LED is at its minimum intensity (~10 % of peak), giving the best
-    // in-DMA estimate of the ambient background level used as k_R/G/B in classify().
-    // Requires _goertzPeriod % 4 == 0 (already checked in buildSintab()).
+    // Capture one R/G/B triple at t=0 (phase 0/2π, the start of each DMA cycle).
+    // At the cycle boundary the FAR LED modulation is at minimum, giving the best
+    // in-DMA estimate of the per-channel ambient background used as k_R/G/B in classify().
     const uint32_t cycle_idx = _repetitions - _repsRemaining;
-    if (cycle_idx < ENLIGHT_MAX_REPS) {
-        const uint32_t t_trough = (3 * _goertzPeriod) / 4;
-        const uint32_t fb       = t_trough * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+    if (cycle_idx < 64) {
+        const uint32_t fb = ADC_PIPELINE_DELAY;  // t=0: 0*ADC_CHANNELS + delay
         _satK[cycle_idx][0] = r12(fb);
         _satK[cycle_idx][1] = r12(fb + 1);
         _satK[cycle_idx][2] = r12(fb + 2);
@@ -356,13 +353,6 @@ void Enlight::processAdcCycle() {
         if (rv >= EnlightDefaults::SAT_HIGH || rv <= EnlightDefaults::SAT_LOW ||
             gv >= EnlightDefaults::SAT_HIGH || gv <= EnlightDefaults::SAT_LOW ||
             bv >= EnlightDefaults::SAT_HIGH || bv <= EnlightDefaults::SAT_LOW) {
-            // Record which phase bucket was lost; classify() uses this for saturation correction.
-            // For the same reason, also record the baseline value
-            if (_satK[_arrayiter / _goertzPeriod,0]==0) {
-                _satK[_arrayiter / _goertzPeriod,0]==r12((t * ADC_CHANNELS + ADC_PIPELINE_DELAY)/_goertzPeriod);
-                _satK[_arrayiter / _goertzPeriod,1]==r12((t * ADC_CHANNELS + ADC_PIPELINE_DELAY+1)/_goertzPeriod);
-                _satK[_arrayiter / _goertzPeriod,2]==r12((t * ADC_CHANNELS + ADC_PIPELINE_DELAY+1)/_goertzPeriod);
-            }
             _satPhaseCount[idx]++;
             _satCount++;
         } else {
@@ -371,10 +361,6 @@ void Enlight::processAdcCycle() {
         }
         _arrayiter++;
     }
-    if (_satCount>0){
-        _satK[0,0]; //median of baseline values for channel R
-        _satK[0,1]; //median of baseline values for channel R
-        _satK[0,2]; //median of baseline values for channel R
 }
 
 /* ============================================================
@@ -449,19 +435,24 @@ EnlightResult Enlight::classify() {
             gammaSatCorr_near += (long long)_satPhaseCount[j] * cj * (SIN_MAG - cj);
             cSatCorr_near     += (long long)_satPhaseCount[j] * cj;
         }
-        // Average the per-cycle baseline samples captured at the LED trough.
-        // These give the best in-DMA estimate of the per-channel DC baseline (k_R/G/B).
+        // Compute per-channel DC baseline (k_R/G/B) as median of per-cycle trough samples.
         float k_R = 0.0f, k_G = 0.0f, k_B = 0.0f;
         if (_satKCount > 0) {
-            uint32_t sumR = 0, sumG = 0, sumB = 0;
-            for (uint32_t i = 0; i < _satKCount; i++) {
-                sumR += _satK[i][0];
-                sumG += _satK[i][1];
-                sumB += _satK[i][2];
-            }
-            k_R = (float)sumR / (float)_satKCount;
-            k_G = (float)sumG / (float)_satKCount;
-            k_B = (float)sumB / (float)_satKCount;
+            uint16_t tmp[64];
+            auto med16 = [&](int ch) -> float {
+                const uint32_t n = _satKCount;
+                for (uint32_t i = 0; i < n; i++) tmp[i] = _satK[i][ch];
+                for (uint32_t i = 1; i < n; i++) {
+                    uint16_t v = tmp[i]; uint32_t j = i;
+                    while (j > 0 && tmp[j-1] > v) { tmp[j] = tmp[j-1]; j--; }
+                    tmp[j] = v;
+                }
+                return (n & 1) ? (float)tmp[n/2]
+                               : 0.5f * ((float)tmp[n/2 - 1] + (float)tmp[n/2]);
+            };
+            k_R = med16(0);
+            k_G = med16(1);
+            k_B = med16(2);
         }
         const float invGammaDenom = 2.0f / ((float)SIN_MAG * (float)_goertzPeriod);
         const float gammaF_far  = 1.0f + invGammaDenom * (float)gammaSatCorr_far;
@@ -476,14 +467,6 @@ EnlightResult Enlight::classify() {
             _gnear = (long long)(((float)_gnear + k_G * (float)cSatCorr_near) / gammaF_near);
             _bnear = (long long)(((float)_bnear + k_B * (float)cSatCorr_near) / gammaF_near);
         }
-        float gammaF_far = 1+(2/(SIN_MAG*_goertzPeriod))*gammaSatCorr_far;
-        float gammaF_near = 1+(2/(SIN_MAG*_goertzPeriod))*gammaSatCorr_near;
-        _rout = (long long)((_rout + _satK[0,0]*cSatCorr_far)/gammaF_far);
-        _gout = (long long)((_gout + _satK[0,1]*cSatCorr_far)/gammaF_far);
-        _bout = (long long)((_bout + _satK[0,2]*cSatCorr_far)/gammaF_far);
-        _rnear = (long long)((_rnear + _satK[0,0]*cSatCorr_near)/gammaF_near);
-        _gnear = (long long)((_gnear + _satK[0,1]*cSatCorr_near)/gammaF_near);
-        _bnear = (long long)((_bnear + _satK[0,2]*cSatCorr_near)/gammaF_near);
     }
 
     // Scale single-cycle calibration baselines to match the multi-cycle accumulators.
