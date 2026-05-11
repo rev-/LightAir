@@ -326,12 +326,15 @@ void Enlight::processAdcCycle() {
         return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
     };
 
-    // Capture one R/G/B triple at t=0 (phase 0/2π, the start of each DMA cycle).
-    // At the cycle boundary the FAR LED modulation is at minimum, giving the best
-    // in-DMA estimate of the per-channel ambient background used as k_R/G/B in classify().
+    // Capture one R/G/B triple at the FAR LED trough (t = 3*GP/4, phase 3π/2) within
+    // the first settling period of this DMA cycle.  At θ=3π/2 the sine is –1, so the
+    // FAR LED is at its minimum intensity (0.22 duty, vs 0.98 at peak and 0.60 at t=0),
+    // giving the best in-DMA estimate of the per-channel ambient background for k_R/G/B.
+    // Requires _goertzPeriod % 4 == 0 (checked in buildSintab()).
     const uint32_t cycle_idx = _repetitions - _repsRemaining;
     if (cycle_idx < 64) {
-        const uint32_t fb = ADC_PIPELINE_DELAY;  // t=0: 0*ADC_CHANNELS + delay
+        const uint32_t t_trough = (3 * _goertzPeriod) / 4;
+        const uint32_t fb       = t_trough * ADC_CHANNELS + ADC_PIPELINE_DELAY;
         _satK[cycle_idx][0] = r12(fb);
         _satK[cycle_idx][1] = r12(fb + 1);
         _satK[cycle_idx][2] = r12(fb + 2);
