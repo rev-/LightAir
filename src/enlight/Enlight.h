@@ -28,8 +28,8 @@ static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 // ledFreqHz and ledClockHz are chosen accordingly.
 static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 
-static constexpr float    PDM_AMPLITUDE = 0.95f;
-static constexpr int32_t  SIN_MAG       = 2048;
+static constexpr float    PDM_AMPLITUDE  = 0.95f;
+static constexpr int32_t  SIN_MAG        = 2048;
 static constexpr int      GRID_MAX_THRESH = CALIB_MAX_PLAYERS * 2;
 
 // Result type
@@ -176,6 +176,14 @@ private:
     // cosine peak (sin[j] = 0) contributes zero to the far correction and maximum to the near.
     uint16_t*   _satPhaseCount = nullptr;
     long long   _sin2total     = 0;  // Σ_j sintab[j]² = Σ_j cos[j]²; precomputed in buildSintab()
+
+    // Per-cycle ADC baseline samples captured at the phase where the ADC is maximum
+    // (minimum LED contribution at the photodiode, which is inverted: more light → lower ADC).
+    // Sampling index: t = (GP/4 + GP − phaseOff) % GP — the sintab peak, calibrated via phaseOff.
+    // _satK[i][ch] = raw 12-bit ADC reading for channel ch in DMA cycle i (up to 64 cycles).
+    // _satKCount = number of valid rows.  classify() takes the per-channel median as k_R/G/B.
+    uint16_t  _satK[64][ADC_CHANNELS] = {};
+    uint32_t  _satKCount = 0;
 
     // LED DIO SPI
     spi_device_handle_t _ledDevice   = nullptr;
