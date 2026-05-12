@@ -321,78 +321,14 @@ void Enlight::buildAdcTxBuffer() {
  *   
  * ============================================================ */
 void Enlight::processAdcCycle() {
-    // r12 is used both for the baseline capture below and inside the main loop.
     auto r12 = [&](uint32_t s) -> uint16_t {
         return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
     };
 
     const uint32_t triples = _adcConvsPerCycle / ADC_CHANNELS;
 
-    // ── Per-period DC baseline (k) estimation ────────────────────────────────
-    // Signal model: s(x) = k − A·[1−cos(2πx/T)] − B·[1+sin(2πx/T)]
-    // where x is measured from the ADC maximum (sintab peak, minimum LED contribution).
-    // At x=0: FAR term = 0, but NEAR term = B, so s(0) = k − B ≠ k.
-    // Using the odd symmetry of the NEAR term around x=0:
-    //   [s(−x₀) − s(x₀)] / (2·sin(2π·x₀/GP)) = B
-    //   → k = s(0) + [s(−x₀) − s(x₀)] / (2·sin(2π·x₀/GP))
-    //
-    // x₀: furthest symmetric unsaturated pair within ±GP/4 of the ADC peak.
-    //
-    // Discard conditions (whole period skipped for all channels):
-    //   • s(0) saturated on any channel
-    //   • x₀ < 10 (sin denominator too small; also catches settling period p=0
-    //     since t_adc_peak_in_period = 8 < 10 for typical phaseOff)
-    {
-        // t₀: ADC-peak position within each period (same for all periods/cycles)
-        const uint32_t t0p    = (_goertzPeriod / 4 + _goertzPeriod - _cal.phaseOff)
-                                % _goertzPeriod;
-        const uint32_t max_x0 = _goertzPeriod / 4;  // ±π/2 span
-
-        auto ch_sat = [](uint16_t v) -> bool {
-            return v >= EnlightDefaults::SAT_HIGH || v <= EnlightDefaults::SAT_LOW;
-        };
-
-        for (uint32_t p = 0; p < _periodsPerCycle; p++) {
-            const uint32_t tc = p * _goertzPeriod + t0p;
-
-            // Guard: both scan directions must stay inside the buffer.
-            // This also discards p=0 when t0p < max_x0 (settling period).
-            if (tc < max_x0 || tc + max_x0 >= triples) continue;
-
-            // Read s(0) for every channel; discard period if any channel is saturated.
-            uint16_t s0[ADC_CHANNELS];
-            bool bad = false;
-            for (int ch = 0; ch < ADC_CHANNELS; ch++) {
-                s0[ch] = r12(tc * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
-                if (ch_sat(s0[ch])) { bad = true; break; }
-            }
-            if (bad) continue;
-
-            // Find x₀: scan outward until any channel on either side saturates.
-            uint32_t x0 = 0;
-            for (uint32_t x = 1; x <= max_x0; x++) {
-                bool any_sat = false;
-                for (int ch = 0; ch < ADC_CHANNELS && !any_sat; ch++) {
-                    if (ch_sat(r12((tc - x) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch)) ||
-                        ch_sat(r12((tc + x) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch)))
-                        any_sat = true;
-                }
-                if (any_sat) break;
-                x0 = x;
-            }
-            if (x0 < 10) continue;
-
-            // Accumulate k estimate for each channel.
-            const float inv2sin = 1.0f / (2.0f * sinf(2.0f * (float)M_PI
-                                                       * (float)x0 / (float)_goertzPeriod));
-            for (int ch = 0; ch < ADC_CHANNELS; ch++) {
-                const float sm = (float)r12((tc - x0) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
-                const float sp = (float)r12((tc + x0) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
-                _satKSum[ch]  += (float)s0[ch] + (sm - sp) * inv2sin;
-                _satKValidCount[ch]++;
-            }
-        }
-    }
+    // ── Goertzel correlator ──────────────────────────────────────────────────
+    uint32_t cycle_sat = 0;
     for (uint32_t t = 0; t < triples; t++) {
         if (t < _goertzPeriod) { _arrayiter++; continue; }
 
@@ -409,11 +345,71 @@ void Enlight::processAdcCycle() {
             bv >= EnlightDefaults::SAT_HIGH || bv <= EnlightDefaults::SAT_LOW) {
             _satPhaseCount[idx]++;
             _satCount++;
+            cycle_sat++;
         } else {
             _rout  += (long long)rv*ks; _gout  += (long long)gv*ks; _bout  += (long long)bv*ks;
             _rnear += (long long)rv*kc; _gnear += (long long)gv*kc; _bnear += (long long)bv*kc;
         }
         _arrayiter++;
+    }
+
+    // ── Per-period DC baseline (k) estimation ────────────────────────────────
+    // Only runs when this cycle had at least one saturated triple; cycles without
+    // saturation do not contribute to (or clear) the accumulators.
+    //
+    // Signal model: s(x) = k − A·[1−cos(2πx/T)] − B·[1+sin(2πx/T)]
+    // where x is measured from the ADC maximum (sintab peak, phaseOff-corrected).
+    // At x=0: FAR term = 0, NEAR term = B  →  s(0) = k − B.
+    // NEAR is odd about x=0, so:
+    //   k = s(0) + [s(−x₀) − s(x₀)] / (2·sin(2π·x₀/GP))
+    //
+    // x₀: furthest unsaturated symmetric pair within ±GP/4 of the peak.
+    // Discard conditions (whole period skipped for all channels):
+    //   • any channel saturated at s(0)
+    //   • x₀ < 10  (also catches settling period p=0: t0p≈8 < max_x0=50, fails buffer guard)
+    if (cycle_sat > 0) {
+        const uint32_t t0p    = (_goertzPeriod / 4 + _goertzPeriod - _cal.phaseOff)
+                                % _goertzPeriod;
+        const uint32_t max_x0 = _goertzPeriod / 4;
+
+        auto ch_sat = [](uint16_t v) -> bool {
+            return v >= EnlightDefaults::SAT_HIGH || v <= EnlightDefaults::SAT_LOW;
+        };
+
+        for (uint32_t p = 0; p < _periodsPerCycle; p++) {
+            const uint32_t tc = p * _goertzPeriod + t0p;
+            if (tc < max_x0 || tc + max_x0 >= triples) continue;
+
+            uint16_t s0[ADC_CHANNELS];
+            bool bad = false;
+            for (int ch = 0; ch < ADC_CHANNELS; ch++) {
+                s0[ch] = r12(tc * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
+                if (ch_sat(s0[ch])) { bad = true; break; }
+            }
+            if (bad) continue;
+
+            uint32_t x0 = 0;
+            for (uint32_t x = 1; x <= max_x0; x++) {
+                bool any_sat = false;
+                for (int ch = 0; ch < ADC_CHANNELS && !any_sat; ch++) {
+                    if (ch_sat(r12((tc - x) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch)) ||
+                        ch_sat(r12((tc + x) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch)))
+                        any_sat = true;
+                }
+                if (any_sat) break;
+                x0 = x;
+            }
+            if (x0 < 10) continue;
+
+            const float inv2sin = 1.0f / (2.0f * sinf(2.0f * (float)M_PI
+                                                       * (float)x0 / (float)_goertzPeriod));
+            for (int ch = 0; ch < ADC_CHANNELS; ch++) {
+                const float sm = (float)r12((tc - x0) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
+                const float sp = (float)r12((tc + x0) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
+                _satKSum[ch]  += (float)s0[ch] + (sm - sp) * inv2sin;
+                _satKValidCount[ch]++;
+            }
+        }
     }
 }
 
