@@ -315,7 +315,7 @@ void Enlight::buildAdcTxBuffer() {
  *   ------------------
  *   When any R/G/B channel clips, the triple is excluded from both
  *   accumulators and its phase bucket is recorded in _satPhaseCount[idx].
- *   classify() later weights this per-phase count to correct the near baseline.
+ *   
  *   
  * ============================================================ */
 void Enlight::processAdcCycle() {
@@ -335,11 +335,10 @@ void Enlight::processAdcCycle() {
     uint32_t cycle_sat = 0;
 
     for (uint32_t t = 0; t < triples; t++) {
-        if (t < _goertzPeriod) { _arrayiter++; continue; }
+        if (t < _goertzPeriod) { _arrayiter++; continue; }    // skip first period since the first readings are not settled
 
         const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
         const uint16_t rv = r12(base), gv = r12(base+1), bv = r12(base+2);
-        _rawsum += rv + gv + bv;
 
         const uint32_t idx = _arrayiter % _goertzPeriod;
         const int32_t  ks  = _sintab[idx];
@@ -354,6 +353,7 @@ void Enlight::processAdcCycle() {
         } else {
             rout_c  += (long long)rv*ks; gout_c  += (long long)gv*ks; bout_c  += (long long)bv*ks;
             rnear_c += (long long)rv*kc; gnear_c += (long long)gv*kc; bnear_c += (long long)bv*kc;
+            _rawsum += rv + gv + bv;
         }
         _arrayiter++;
     }
@@ -362,10 +362,10 @@ void Enlight::processAdcCycle() {
     // k must be estimated from _adcRxBuf, which is overwritten on the next cycle.
     // Correction formula (per cycle, n = _periodsPerCycle real periods):
     //   R = (R_SAT + k · Σ_SAT{m}) / gammaF
-    //   gammaF = 1 + (2/(M²·T·n)) · Σ_SAT{m·(M−m)}
+    //   gammaF = 1 + (2/(M²·T)) · Σ_SAT{m·(M−m)}
     // Signal model: s(x) = k − A·[1−cos(2πx/T)] − B·[1+sin(2πx/T)], x from ADC peak.
     // k = s(0) + [s(−x₀) − s(x₀)] / (2·sin(2π·x₀/GP))  (cancels odd NEAR contribution).
-    if (cycle_sat > 0 && _satPhaseCount && _sin2total > 0) {
+    if (cycle_sat > 0 ) {
         // ── k estimation from current DMA buffer ────────────────────────────
         float satKSum[ADC_CHANNELS]        = {};
         uint32_t satKValidCount[ADC_CHANNELS] = {};
@@ -379,7 +379,7 @@ void Enlight::processAdcCycle() {
         };
 
         for (uint32_t p = 0; p < _periodsPerCycle; p++) {
-            const uint32_t tc = p * _goertzPeriod + t0p;
+            const uint32_t tc = p * _goertzPeriod;
             if (tc < max_x0 || tc + max_x0 >= triples) continue;
 
             uint16_t s0[ADC_CHANNELS];
@@ -401,7 +401,7 @@ void Enlight::processAdcCycle() {
                 if (any_sat) break;
                 x0 = x;
             }
-            if (x0 < 10) continue;
+            if (x0 < 5) continue;
 
             const float inv2sin = 1.0f / (2.0f * sinf(2.0f * (float)M_PI
                                                        * (float)x0 / (float)_goertzPeriod));
