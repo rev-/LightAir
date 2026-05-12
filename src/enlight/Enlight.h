@@ -177,13 +177,15 @@ private:
     uint16_t*   _satPhaseCount = nullptr;
     long long   _sin2total     = 0;  // Σ_j sintab[j]² = Σ_j cos[j]²; precomputed in buildSintab()
 
-    // Per-cycle ADC baseline samples captured at the phase where the ADC is maximum
-    // (minimum LED contribution at the photodiode, which is inverted: more light → lower ADC).
-    // Sampling index: t = (GP/4 + GP − phaseOff) % GP — the sintab peak, calibrated via phaseOff.
-    // _satK[i][ch] = raw 12-bit ADC reading for channel ch in DMA cycle i (up to 64 cycles).
-    // _satKCount = number of valid rows.  classify() takes the per-channel median as k_R/G/B.
-    uint16_t  _satK[64][ADC_CHANNELS] = {};
-    uint32_t  _satKCount = 0;
+    // Per-period per-channel DC baseline accumulators for saturation correction.
+    // In processAdcCycle(), each sine period (except settling p=0 and periods where
+    // s(0) saturates or x₀ < 10) contributes one k estimate per channel via:
+    //   k = s(0) + [s(−x₀) − s(x₀)] / (2·sin(2π·x₀/GP))
+    // where x=0 is the ADC peak (sintab maximum), x₀ is the furthest unsaturated
+    // symmetric pair within ±GP/4 of that peak.
+    // classify() uses  k_ch = _satKSum[ch] / _satKValidCount[ch]  per channel.
+    float    _satKSum[ADC_CHANNELS]        = {};
+    uint32_t _satKValidCount[ADC_CHANNELS] = {};
 
     // LED DIO SPI
     spi_device_handle_t _ledDevice   = nullptr;
