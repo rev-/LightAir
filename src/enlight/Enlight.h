@@ -177,16 +177,6 @@ private:
     uint16_t*   _satPhaseCount = nullptr;
     long long   _sin2total     = 0;  // Σ_j sintab[j]² = Σ_j cos[j]²; precomputed in buildSintab()
 
-    // Per-period per-channel DC baseline accumulators for saturation correction.
-    // In processAdcCycle(), each sine period (except settling p=0 and periods where
-    // s(0) saturates or x₀ < 10) contributes one k estimate per channel via:
-    //   k = s(0) + [s(−x₀) − s(x₀)] / (2·sin(2π·x₀/GP))
-    // where x=0 is the ADC peak (sintab maximum), x₀ is the furthest unsaturated
-    // symmetric pair within ±GP/4 of that peak.
-    // classify() uses  k_ch = _satKSum[ch] / _satKValidCount[ch]  per channel.
-    float    _satKSum[ADC_CHANNELS]        = {};
-    uint32_t _satKValidCount[ADC_CHANNELS] = {};
-
     // LED DIO SPI
     spi_device_handle_t _ledDevice   = nullptr;
     uint8_t*            _ledTxBuf    = nullptr;
