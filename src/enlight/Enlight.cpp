@@ -443,15 +443,17 @@ void Enlight::processAdcCycle() {
         gnear_c = (long long)((float)gnear_c + k_G * (float)cSatCorr_near);
         bnear_c = (long long)((float)bnear_c + k_B * (float)cSatCorr_near);
 
-        // STEP2: gamma correction — skip near singularity (gammaF ≈ 0).
+        // STEP2: gamma correction — only apply when gammaF is safely positive.
+        // Negative gammaF (extreme saturation) would flip the sign of the output
+        // when k is imperfect; skipping correction is safer than sign-flipping.
         const float gammaF_far  = 1.0f + invGammaDenom * (float)gammaSatCorr_far;
         const float gammaF_near = 1.0f + invGammaDenom * (float)gammaSatCorr_near;
-        if (fabsf(gammaF_far) > 0.05f) {
+        if (gammaF_far > 0.05f) {
             rout_c = (long long)((float)rout_c / gammaF_far);
             gout_c = (long long)((float)gout_c / gammaF_far);
             bout_c = (long long)((float)bout_c / gammaF_far);
         }
-        if (fabsf(gammaF_near) > 0.05f) {
+        if (gammaF_near > 0.05f) {
             rnear_c = (long long)((float)rnear_c / gammaF_near);
             gnear_c = (long long)((float)gnear_c / gammaF_near);
             bnear_c = (long long)((float)bnear_c / gammaF_near);
