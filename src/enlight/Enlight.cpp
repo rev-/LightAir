@@ -246,8 +246,8 @@ bool Enlight::run() {
     _rout=_gout=_bout=_rnear=_gnear=_bnear=_rawsum=0;
     _arrayiter=_satCount=0;
     if (_satPhaseCount) memset(_satPhaseCount, 0, _goertzPeriod * sizeof(uint16_t));
-    memset(_satK, 0, sizeof(_satK));
-    _satKCount = 0;
+    memset(_satKSum, 0, sizeof(_satKSum));
+    memset(_satKValidCount, 0, sizeof(_satKValidCount));
     _resultDelivered = false;
     _active=true;
     _firstCycle=true;
@@ -326,30 +326,73 @@ void Enlight::processAdcCycle() {
         return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
     };
 
-    // Capture one R/G/B triple at the ADC maximum — the phase where the FAR LED
-    // contributes least to the photodiode (inverted: more light → lower ADC).
-    //
-    // The correlator is calibrated with phaseOff so that sintab peaks exactly where
-    // the ADC peaks.  sintab[t] = SIN_MAG·sin(2π·(t+phaseOff)/GP); sintab maximum
-    // at t = GP/4 − phaseOff (mod GP).  That is also where ADC(t) is maximum
-    // (LED at photodiode is at its minimum, d = GP/2 − phaseOff samples after emission).
-    //
-    // t_adc_peak = (GP/4 + GP − phaseOff) % GP
-    //            = (50 + 200 − 42) % 200 = 8  at V6R2 defaults.
-    // This lies inside the settling window (first GP triples), so it never disturbs
-    // the correlator accumulators.
-    const uint32_t cycle_idx = _repetitions - _repsRemaining;
-    if (cycle_idx < 64) {
-        const uint32_t t_adc_peak = (_goertzPeriod / 4 + _goertzPeriod - _cal.phaseOff)
-                                    % _goertzPeriod;
-        const uint32_t fb = t_adc_peak * ADC_CHANNELS + ADC_PIPELINE_DELAY;
-        _satK[cycle_idx][0] = r12(fb);
-        _satK[cycle_idx][1] = r12(fb + 1);
-        _satK[cycle_idx][2] = r12(fb + 2);
-        _satKCount = cycle_idx + 1;
-    }
-
     const uint32_t triples = _adcConvsPerCycle / ADC_CHANNELS;
+
+    // ── Per-period DC baseline (k) estimation ────────────────────────────────
+    // Signal model: s(x) = k − A·[1−cos(2πx/T)] − B·[1+sin(2πx/T)]
+    // where x is measured from the ADC maximum (sintab peak, minimum LED contribution).
+    // At x=0: FAR term = 0, but NEAR term = B, so s(0) = k − B ≠ k.
+    // Using the odd symmetry of the NEAR term around x=0:
+    //   [s(−x₀) − s(x₀)] / (2·sin(2π·x₀/GP)) = B
+    //   → k = s(0) + [s(−x₀) − s(x₀)] / (2·sin(2π·x₀/GP))
+    //
+    // x₀: furthest symmetric unsaturated pair within ±GP/4 of the ADC peak.
+    //
+    // Discard conditions (whole period skipped for all channels):
+    //   • s(0) saturated on any channel
+    //   • x₀ < 10 (sin denominator too small; also catches settling period p=0
+    //     since t_adc_peak_in_period = 8 < 10 for typical phaseOff)
+    {
+        // t₀: ADC-peak position within each period (same for all periods/cycles)
+        const uint32_t t0p    = (_goertzPeriod / 4 + _goertzPeriod - _cal.phaseOff)
+                                % _goertzPeriod;
+        const uint32_t max_x0 = _goertzPeriod / 4;  // ±π/2 span
+
+        auto ch_sat = [](uint16_t v) -> bool {
+            return v >= EnlightDefaults::SAT_HIGH || v <= EnlightDefaults::SAT_LOW;
+        };
+
+        for (uint32_t p = 0; p < _periodsPerCycle; p++) {
+            const uint32_t tc = p * _goertzPeriod + t0p;
+
+            // Guard: both scan directions must stay inside the buffer.
+            // This also discards p=0 when t0p < max_x0 (settling period).
+            if (tc < max_x0 || tc + max_x0 >= triples) continue;
+
+            // Read s(0) for every channel; discard period if any channel is saturated.
+            uint16_t s0[ADC_CHANNELS];
+            bool bad = false;
+            for (int ch = 0; ch < ADC_CHANNELS; ch++) {
+                s0[ch] = r12(tc * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
+                if (ch_sat(s0[ch])) { bad = true; break; }
+            }
+            if (bad) continue;
+
+            // Find x₀: scan outward until any channel on either side saturates.
+            uint32_t x0 = 0;
+            for (uint32_t x = 1; x <= max_x0; x++) {
+                bool any_sat = false;
+                for (int ch = 0; ch < ADC_CHANNELS && !any_sat; ch++) {
+                    if (ch_sat(r12((tc - x) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch)) ||
+                        ch_sat(r12((tc + x) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch)))
+                        any_sat = true;
+                }
+                if (any_sat) break;
+                x0 = x;
+            }
+            if (x0 < 10) continue;
+
+            // Accumulate k estimate for each channel.
+            const float inv2sin = 1.0f / (2.0f * sinf(2.0f * (float)M_PI
+                                                       * (float)x0 / (float)_goertzPeriod));
+            for (int ch = 0; ch < ADC_CHANNELS; ch++) {
+                const float sm = (float)r12((tc - x0) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
+                const float sp = (float)r12((tc + x0) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
+                _satKSum[ch]  += (float)s0[ch] + (sm - sp) * inv2sin;
+                _satKValidCount[ch]++;
+            }
+        }
+    }
     for (uint32_t t = 0; t < triples; t++) {
         if (t < _goertzPeriod) { _arrayiter++; continue; }
 
@@ -446,25 +489,10 @@ EnlightResult Enlight::classify() {
             gammaSatCorr_near += (long long)_satPhaseCount[j] * cj * (SIN_MAG - cj);
             cSatCorr_near     += (long long)_satPhaseCount[j] * cj;
         }
-        // Compute per-channel DC baseline (k_R/G/B) as median of per-cycle trough samples.
-        float k_R = 0.0f, k_G = 0.0f, k_B = 0.0f;
-        if (_satKCount > 0) {
-            uint16_t tmp[64];
-            auto med16 = [&](int ch) -> float {
-                const uint32_t n = _satKCount;
-                for (uint32_t i = 0; i < n; i++) tmp[i] = _satK[i][ch];
-                for (uint32_t i = 1; i < n; i++) {
-                    uint16_t v = tmp[i]; uint32_t j = i;
-                    while (j > 0 && tmp[j-1] > v) { tmp[j] = tmp[j-1]; j--; }
-                    tmp[j] = v;
-                }
-                return (n & 1) ? (float)tmp[n/2]
-                               : 0.5f * ((float)tmp[n/2 - 1] + (float)tmp[n/2]);
-            };
-            k_R = med16(0);
-            k_G = med16(1);
-            k_B = med16(2);
-        }
+        // Average all valid per-period k estimates into per-channel baselines.
+        const float k_R = _satKValidCount[0] ? _satKSum[0] / (float)_satKValidCount[0] : 0.0f;
+        const float k_G = _satKValidCount[1] ? _satKSum[1] / (float)_satKValidCount[1] : 0.0f;
+        const float k_B = _satKValidCount[2] ? _satKSum[2] / (float)_satKValidCount[2] : 0.0f;
         const float invGammaDenom = 2.0f / ((float)SIN_MAG * (float)_goertzPeriod);
         const float gammaF_far  = 1.0f + invGammaDenom * (float)gammaSatCorr_far;
         const float gammaF_near = 1.0f + invGammaDenom * (float)gammaSatCorr_near;
