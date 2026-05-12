@@ -334,15 +334,15 @@ void Enlight::processAdcCycle() {
     // at t = GP/4 − phaseOff (mod GP).  That is also where ADC(t) is maximum
     // (LED at photodiode is at its minimum, d = GP/2 − phaseOff samples after emission).
     //
-    // t_trough = (GP/4 + GP − phaseOff) % GP
-    //          = (50 + 200 − 42) % 200 = 8  at V6R2 defaults.
+    // t_adc_peak = (GP/4 + GP − phaseOff) % GP
+    //            = (50 + 200 − 42) % 200 = 8  at V6R2 defaults.
     // This lies inside the settling window (first GP triples), so it never disturbs
     // the correlator accumulators.
     const uint32_t cycle_idx = _repetitions - _repsRemaining;
     if (cycle_idx < 64) {
-        const uint32_t t_trough = (_goertzPeriod / 4 + _goertzPeriod - _cal.phaseOff)
-                                  % _goertzPeriod;
-        const uint32_t fb = t_trough * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+        const uint32_t t_adc_peak = (_goertzPeriod / 4 + _goertzPeriod - _cal.phaseOff)
+                                    % _goertzPeriod;
+        const uint32_t fb = t_adc_peak * ADC_CHANNELS + ADC_PIPELINE_DELAY;
         _satK[cycle_idx][0] = r12(fb);
         _satK[cycle_idx][1] = r12(fb + 1);
         _satK[cycle_idx][2] = r12(fb + 2);
