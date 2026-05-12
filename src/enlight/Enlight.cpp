@@ -490,17 +490,28 @@ EnlightResult Enlight::classify() {
         const float k_G = _satKValidCount[1] ? _satKSum[1] / (float)_satKValidCount[1] : 0.0f;
         const float k_B = _satKValidCount[2] ? _satKSum[2] / (float)_satKValidCount[2] : 0.0f;
         const float invGammaDenom = 2.0f / ((float)SIN_MAG * (float)_goertzPeriod);
+        // STEP1: k correction — always apply when saturation exists.
+        // Restores the missing DC contribution from saturated samples.
+        _rout  = (long long)((float)_rout  + k_R * (float)cSatCorr_far);
+        _gout  = (long long)((float)_gout  + k_G * (float)cSatCorr_far);
+        _bout  = (long long)((float)_bout  + k_B * (float)cSatCorr_far);
+        _rnear = (long long)((float)_rnear + k_R * (float)cSatCorr_near);
+        _gnear = (long long)((float)_gnear + k_G * (float)cSatCorr_near);
+        _bnear = (long long)((float)_bnear + k_B * (float)cSatCorr_near);
+        // STEP2: gamma correction — only when the factor is positive (formula valid).
+        // gammaF ≤ 0 means saturation dominated a phase where sintab < 0; skip rather
+        // than sign-flip the accumulator.
         const float gammaF_far  = 1.0f + invGammaDenom * (float)gammaSatCorr_far;
         const float gammaF_near = 1.0f + invGammaDenom * (float)gammaSatCorr_near;
         if (gammaF_far > 0.0f) {
-            _rout  = (long long)(((float)_rout  + k_R * (float)cSatCorr_far)  / gammaF_far);
-            _gout  = (long long)(((float)_gout  + k_G * (float)cSatCorr_far)  / gammaF_far);
-            _bout  = (long long)(((float)_bout  + k_B * (float)cSatCorr_far)  / gammaF_far);
+            _rout  = (long long)((float)_rout  / gammaF_far);
+            _gout  = (long long)((float)_gout  / gammaF_far);
+            _bout  = (long long)((float)_bout  / gammaF_far);
         }
         if (gammaF_near > 0.0f) {
-            _rnear = (long long)(((float)_rnear + k_R * (float)cSatCorr_near) / gammaF_near);
-            _gnear = (long long)(((float)_gnear + k_G * (float)cSatCorr_near) / gammaF_near);
-            _bnear = (long long)(((float)_bnear + k_B * (float)cSatCorr_near) / gammaF_near);
+            _rnear = (long long)((float)_rnear / gammaF_near);
+            _gnear = (long long)((float)_gnear / gammaF_near);
+            _bnear = (long long)((float)_bnear / gammaF_near);
         }
     }
 
