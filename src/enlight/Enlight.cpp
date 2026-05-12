@@ -245,9 +245,7 @@ bool Enlight::run() {
     taskEXIT_CRITICAL(&_mux);
     _rout=_gout=_bout=_rnear=_gnear=_bnear=_rawsum=0;
     _arrayiter=_satCount=0;
-    if (_satPhaseCount) memset(_satPhaseCount, 0, _goertzPeriod * sizeof(uint16_t));
-    memset(_satKSum, 0, sizeof(_satKSum));
-    memset(_satKValidCount, 0, sizeof(_satKValidCount));
+    // _satPhaseCount is reset at the start of each processAdcCycle() call.
     _resultDelivered = false;
     _active=true;
     _firstCycle=true;
@@ -327,8 +325,15 @@ void Enlight::processAdcCycle() {
 
     const uint32_t triples = _adcConvsPerCycle / ADC_CHANNELS;
 
-    // ── Goertzel correlator ──────────────────────────────────────────────────
+    // Reset per-cycle saturation phase counts (DMA buffer is overwritten each cycle,
+    // so saturation correction must be applied before this function returns).
+    if (_satPhaseCount) memset(_satPhaseCount, 0, _goertzPeriod * sizeof(uint16_t));
+
+    // ── Goertzel correlator (cycle-local accumulators) ───────────────────────
+    long long rout_c = 0, gout_c = 0, bout_c = 0;
+    long long rnear_c = 0, gnear_c = 0, bnear_c = 0;
     uint32_t cycle_sat = 0;
+
     for (uint32_t t = 0; t < triples; t++) {
         if (t < _goertzPeriod) { _arrayiter++; continue; }
 
@@ -347,27 +352,24 @@ void Enlight::processAdcCycle() {
             _satCount++;
             cycle_sat++;
         } else {
-            _rout  += (long long)rv*ks; _gout  += (long long)gv*ks; _bout  += (long long)bv*ks;
-            _rnear += (long long)rv*kc; _gnear += (long long)gv*kc; _bnear += (long long)bv*kc;
+            rout_c  += (long long)rv*ks; gout_c  += (long long)gv*ks; bout_c  += (long long)bv*ks;
+            rnear_c += (long long)rv*kc; gnear_c += (long long)gv*kc; bnear_c += (long long)bv*kc;
         }
         _arrayiter++;
     }
 
-    // ── Per-period DC baseline (k) estimation ────────────────────────────────
-    // Only runs when this cycle had at least one saturated triple; cycles without
-    // saturation do not contribute to (or clear) the accumulators.
-    //
-    // Signal model: s(x) = k − A·[1−cos(2πx/T)] − B·[1+sin(2πx/T)]
-    // where x is measured from the ADC maximum (sintab peak, phaseOff-corrected).
-    // At x=0: FAR term = 0, NEAR term = B  →  s(0) = k − B.
-    // NEAR is odd about x=0, so:
-    //   k = s(0) + [s(−x₀) − s(x₀)] / (2·sin(2π·x₀/GP))
-    //
-    // x₀: furthest unsaturated symmetric pair within ±GP/4 of the peak.
-    // Discard conditions (whole period skipped for all channels):
-    //   • any channel saturated at s(0)
-    //   • x₀ < 10  (also catches settling period p=0: t0p≈8 < max_x0=50, fails buffer guard)
-    if (cycle_sat > 0) {
+    // ── Saturation correction (applied per-cycle while DMA buffer is live) ───
+    // k must be estimated from _adcRxBuf, which is overwritten on the next cycle.
+    // Correction formula (per cycle, n = _periodsPerCycle real periods):
+    //   R = (R_SAT + k · Σ_SAT{m}) / gammaF
+    //   gammaF = 1 + (2/(M²·T·n)) · Σ_SAT{m·(M−m)}
+    // Signal model: s(x) = k − A·[1−cos(2πx/T)] − B·[1+sin(2πx/T)], x from ADC peak.
+    // k = s(0) + [s(−x₀) − s(x₀)] / (2·sin(2π·x₀/GP))  (cancels odd NEAR contribution).
+    if (cycle_sat > 0 && _satPhaseCount && _sin2total > 0) {
+        // ── k estimation from current DMA buffer ────────────────────────────
+        float satKSum[ADC_CHANNELS]        = {};
+        uint32_t satKValidCount[ADC_CHANNELS] = {};
+
         const uint32_t t0p    = (_goertzPeriod / 4 + _goertzPeriod - _cal.phaseOff)
                                 % _goertzPeriod;
         const uint32_t max_x0 = _goertzPeriod / 4;
@@ -406,11 +408,59 @@ void Enlight::processAdcCycle() {
             for (int ch = 0; ch < ADC_CHANNELS; ch++) {
                 const float sm = (float)r12((tc - x0) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
                 const float sp = (float)r12((tc + x0) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
-                _satKSum[ch]  += (float)s0[ch] + (sm - sp) * inv2sin;
-                _satKValidCount[ch]++;
+                satKSum[ch]  += (float)s0[ch] + (sm - sp) * inv2sin;
+                satKValidCount[ch]++;
             }
         }
+
+        // ── Compute correction factors from this cycle's satPhaseCount ───────
+        long long gammaSatCorr_far = 0, cSatCorr_far = 0;
+        long long gammaSatCorr_near = 0, cSatCorr_near = 0;
+        for (uint32_t j = 0; j < _goertzPeriod; j++) {
+            if (!_satPhaseCount[j]) continue;
+            const int32_t sj = _sintab[j];
+            const int32_t cj = _sintab[(j + _cosOffset) % _goertzPeriod];
+            gammaSatCorr_far  += (long long)_satPhaseCount[j] * sj * (SIN_MAG - sj);
+            cSatCorr_far      += (long long)_satPhaseCount[j] * sj;
+            gammaSatCorr_near += (long long)_satPhaseCount[j] * cj * (SIN_MAG - cj);
+            cSatCorr_near     += (long long)_satPhaseCount[j] * cj;
+        }
+
+        const float k_R = satKValidCount[0] ? satKSum[0] / (float)satKValidCount[0] : 0.0f;
+        const float k_G = satKValidCount[1] ? satKSum[1] / (float)satKValidCount[1] : 0.0f;
+        const float k_B = satKValidCount[2] ? satKSum[2] / (float)satKValidCount[2] : 0.0f;
+
+        // T = _goertzPeriod (samples per period), n = _periodsPerCycle (periods per cycle).
+        const float invGammaDenom = 2.0f / ((float)SIN_MAG * (float)SIN_MAG
+                                            * (float)_goertzPeriod
+                                            * (float)_periodsPerCycle);
+
+        // STEP1: restore missing baseline contribution of saturated samples.
+        rout_c  = (long long)((float)rout_c  + k_R * (float)cSatCorr_far);
+        gout_c  = (long long)((float)gout_c  + k_G * (float)cSatCorr_far);
+        bout_c  = (long long)((float)bout_c  + k_B * (float)cSatCorr_far);
+        rnear_c = (long long)((float)rnear_c + k_R * (float)cSatCorr_near);
+        gnear_c = (long long)((float)gnear_c + k_G * (float)cSatCorr_near);
+        bnear_c = (long long)((float)bnear_c + k_B * (float)cSatCorr_near);
+
+        // STEP2: gamma correction — skip near singularity (gammaF ≈ 0).
+        const float gammaF_far  = 1.0f + invGammaDenom * (float)gammaSatCorr_far;
+        const float gammaF_near = 1.0f + invGammaDenom * (float)gammaSatCorr_near;
+        if (fabsf(gammaF_far) > 0.05f) {
+            rout_c = (long long)((float)rout_c / gammaF_far);
+            gout_c = (long long)((float)gout_c / gammaF_far);
+            bout_c = (long long)((float)bout_c / gammaF_far);
+        }
+        if (fabsf(gammaF_near) > 0.05f) {
+            rnear_c = (long long)((float)rnear_c / gammaF_near);
+            gnear_c = (long long)((float)gnear_c / gammaF_near);
+            bnear_c = (long long)((float)bnear_c / gammaF_near);
+        }
     }
+
+    // Accumulate this cycle's (corrected) values into the run totals.
+    _rout  += rout_c;  _gout  += gout_c;  _bout  += bout_c;
+    _rnear += rnear_c; _gnear += gnear_c; _bnear += bnear_c;
 }
 
 /* ============================================================
@@ -463,67 +513,11 @@ void Enlight::processAdcCycle() {
  *
  * ============================================================ */
 EnlightResult Enlight::classify() {
-    // Accumulate correction factors.
-    // gammaSatCorr = Σ_j satPhaseCount[j] * sintab[j] * (SIN_MAG - sintab[j])
-    // cSatCorr     = Σ_j satPhaseCount[j] * sintab[j]
-    //
-    // gammaF = 1 + (2/(T·M²))·gammaSatCorr  is an exact result (not an approximation).
-    // It equals R·gammaF = R_SAT + k·cSatCorr for any saturation pattern.
-    // gammaF can legitimately be negative for heavy saturation at negative-sintab phases
-    // (> T/4 worst-phase samples saturated); the numerator has matching sign so the
-    // ratio still recovers R.  Guard is |gammaF| > threshold to avoid amplifying noise
-    // near the singularity (gammaF = 0 ↔ exactly T/4 worst-phase samples saturated).
-    long long gammaSatCorr_far = 0, cSatCorr_far = 0;
-    long long gammaSatCorr_near = 0, cSatCorr_near = 0;
-    if (_satPhaseCount && _sin2total > 0) {
-        for (uint32_t j = 0; j < _goertzPeriod; j++) {
-            if (!_satPhaseCount[j]) continue;
-            const int32_t sj = _sintab[j];
-            const int32_t cj = _sintab[(j + _cosOffset) % _goertzPeriod];
-            gammaSatCorr_far  += (long long)_satPhaseCount[j] * sj * (SIN_MAG - sj);
-            cSatCorr_far      += (long long)_satPhaseCount[j] * sj;
-            gammaSatCorr_near += (long long)_satPhaseCount[j] * cj * (SIN_MAG - cj);
-            cSatCorr_near     += (long long)_satPhaseCount[j] * cj;
-        }
-        // Average all valid per-period k estimates into per-channel baselines.
-        const float k_R = _satKValidCount[0] ? _satKSum[0] / (float)_satKValidCount[0] : 0.0f;
-        const float k_G = _satKValidCount[1] ? _satKSum[1] / (float)_satKValidCount[1] : 0.0f;
-        const float k_B = _satKValidCount[2] ? _satKSum[2] / (float)_satKValidCount[2] : 0.0f;
-        // invGammaDenom = 2 / (M² · T · n_periods)
-        // M = SIN_MAG, T = _goertzPeriod (samples per period),
-        // n_periods = _repetitions * _periodsPerCycle (total real periods in this run).
-        // satPhaseCount accumulates over ALL periods, so the denominator must scale
-        // with the total samples processed, not just one period.
-        const float invGammaDenom = 2.0f / ((float)SIN_MAG * (float)SIN_MAG
-                                            * (float)_goertzPeriod
-                                            * (float)(_repetitions * _periodsPerCycle));
-        // STEP1: k correction — always apply when saturation exists.
-        // Restores the missing DC contribution from saturated samples.
-        _rout  = (long long)((float)_rout  + k_R * (float)cSatCorr_far);
-        _gout  = (long long)((float)_gout  + k_G * (float)cSatCorr_far);
-        _bout  = (long long)((float)_bout  + k_B * (float)cSatCorr_far);
-        _rnear = (long long)((float)_rnear + k_R * (float)cSatCorr_near);
-        _gnear = (long long)((float)_gnear + k_G * (float)cSatCorr_near);
-        _bnear = (long long)((float)_bnear + k_B * (float)cSatCorr_near);
-        // STEP2: gamma correction — skip only near the singularity (gammaF ≈ 0).
-        // Negative gammaF is valid: numerator and denominator have matching sign.
-        const float gammaF_far  = 1.0f + invGammaDenom * (float)gammaSatCorr_far;
-        const float gammaF_near = 1.0f + invGammaDenom * (float)gammaSatCorr_near;
-        if (fabsf(gammaF_far) > 0.05f) {
-            _rout  = (long long)((float)_rout  / gammaF_far);
-            _gout  = (long long)((float)_gout  / gammaF_far);
-            _bout  = (long long)((float)_bout  / gammaF_far);
-        }
-        if (fabsf(gammaF_near) > 0.05f) {
-            _rnear = (long long)((float)_rnear / gammaF_near);
-            _gnear = (long long)((float)_gnear / gammaF_near);
-            _bnear = (long long)((float)_bnear / gammaF_near);
-        }
-    }
+    // Saturation correction is applied per DMA cycle in processAdcCycle() while
+    // the ADC buffer is live.  _rout/_gout/_bout/_rnear/_gnear/_bnear already
+    // contain corrected, accumulated values here.
 
     // Scale single-cycle calibration baselines to match the multi-cycle accumulators.
-    // The saturation correction above adjusts _rout/_rnear toward the full no-saturation
-    // values, so we use the uncorrected (full-cycle) baselines here.
     const long long cycles      = (long long)(_arrayiter / (_goertzPeriod * _periodsPerCycle));
     const long long eff_rcal     = (long long)_cal.rcal     * cycles;
     const long long eff_gcal     = (long long)_cal.gcal     * cycles;
