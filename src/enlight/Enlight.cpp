@@ -489,7 +489,14 @@ EnlightResult Enlight::classify() {
         const float k_R = _satKValidCount[0] ? _satKSum[0] / (float)_satKValidCount[0] : 0.0f;
         const float k_G = _satKValidCount[1] ? _satKSum[1] / (float)_satKValidCount[1] : 0.0f;
         const float k_B = _satKValidCount[2] ? _satKSum[2] / (float)_satKValidCount[2] : 0.0f;
-        const float invGammaDenom = 2.0f / ((float)SIN_MAG * (float)SIN_MAG * (float)_goertzPeriod);
+        // invGammaDenom = 2 / (M² · T · n_periods)
+        // M = SIN_MAG, T = _goertzPeriod (samples per period),
+        // n_periods = _repetitions * _periodsPerCycle (total real periods in this run).
+        // satPhaseCount accumulates over ALL periods, so the denominator must scale
+        // with the total samples processed, not just one period.
+        const float invGammaDenom = 2.0f / ((float)SIN_MAG * (float)SIN_MAG
+                                            * (float)_goertzPeriod
+                                            * (float)(_repetitions * _periodsPerCycle));
         // STEP1: k correction — always apply when saturation exists.
         // Restores the missing DC contribution from saturated samples.
         _rout  = (long long)((float)_rout  + k_R * (float)cSatCorr_far);
