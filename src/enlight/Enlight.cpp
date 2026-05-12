@@ -467,12 +467,12 @@ EnlightResult Enlight::classify() {
     // gammaSatCorr = Σ_j satPhaseCount[j] * sintab[j] * (SIN_MAG - sintab[j])
     // cSatCorr     = Σ_j satPhaseCount[j] * sintab[j]
     //
-    // KNOWN ISSUE: sintab[j] ∈ [-SIN_MAG, +SIN_MAG]; the product
-    // sintab[j]*(SIN_MAG-sintab[j]) is negative for sintab[j] < 0 (~50% of phases).
-    // For typical (uniform) saturation gammaSatCorr ≈ -N*_sin2total, making
-    // gammaF ≪ 0 (sign-flips all channels).  The gammaF>0 guard below prevents
-    // the flip, but the correction then has no effect.  The formula derivation
-    // assumes m(x) ∈ [0, M]; revisit once re-derived for the signed correlator kernel.
+    // gammaF = 1 + (2/(T·M²))·gammaSatCorr  is an exact result (not an approximation).
+    // It equals R·gammaF = R_SAT + k·cSatCorr for any saturation pattern.
+    // gammaF can legitimately be negative for heavy saturation at negative-sintab phases
+    // (> T/4 worst-phase samples saturated); the numerator has matching sign so the
+    // ratio still recovers R.  Guard is |gammaF| > threshold to avoid amplifying noise
+    // near the singularity (gammaF = 0 ↔ exactly T/4 worst-phase samples saturated).
     long long gammaSatCorr_far = 0, cSatCorr_far = 0;
     long long gammaSatCorr_near = 0, cSatCorr_near = 0;
     if (_satPhaseCount && _sin2total > 0) {
@@ -498,17 +498,16 @@ EnlightResult Enlight::classify() {
         _rnear = (long long)((float)_rnear + k_R * (float)cSatCorr_near);
         _gnear = (long long)((float)_gnear + k_G * (float)cSatCorr_near);
         _bnear = (long long)((float)_bnear + k_B * (float)cSatCorr_near);
-        // STEP2: gamma correction — only when the factor is positive (formula valid).
-        // gammaF ≤ 0 means saturation dominated a phase where sintab < 0; skip rather
-        // than sign-flip the accumulator.
+        // STEP2: gamma correction — skip only near the singularity (gammaF ≈ 0).
+        // Negative gammaF is valid: numerator and denominator have matching sign.
         const float gammaF_far  = 1.0f + invGammaDenom * (float)gammaSatCorr_far;
         const float gammaF_near = 1.0f + invGammaDenom * (float)gammaSatCorr_near;
-        if (gammaF_far > 0.0f) {
+        if (fabsf(gammaF_far) > 0.05f) {
             _rout  = (long long)((float)_rout  / gammaF_far);
             _gout  = (long long)((float)_gout  / gammaF_far);
             _bout  = (long long)((float)_bout  / gammaF_far);
         }
-        if (gammaF_near > 0.0f) {
+        if (fabsf(gammaF_near) > 0.05f) {
             _rnear = (long long)((float)_rnear / gammaF_near);
             _gnear = (long long)((float)_gnear / gammaF_near);
             _bnear = (long long)((float)_bnear / gammaF_near);
