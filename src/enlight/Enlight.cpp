@@ -334,10 +334,23 @@ void Enlight::processAdcCycle() {
 
     const uint32_t triples = _adcConvsPerCycle / ADC_CHANNELS;
 
-    // ── k estimation — one pass over the DMA buffer before the main loop ─────
+    // Quick saturation scan (skip first period, mirrors the correlator skip).
+    // Early exit keeps the no-saturation path to a single cheap pass.
+    bool cycle_has_sat = false;
+    for (uint32_t t = _goertzPeriod; t < triples && !cycle_has_sat; t++) {
+        const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+        const uint16_t rv = r12(base), gv = r12(base+1), bv = r12(base+2);
+        if (rv >= EnlightDefaults::SAT_HIGH || rv <= EnlightDefaults::SAT_LOW ||
+            gv >= EnlightDefaults::SAT_HIGH || gv <= EnlightDefaults::SAT_LOW ||
+            bv >= EnlightDefaults::SAT_HIGH || bv <= EnlightDefaults::SAT_LOW)
+            cycle_has_sat = true;
+    }
+
+    // ── k estimation — only when saturation is present ───────────────────────
     // Uses antisymmetry around the start of each period (t0p = 0).
     // Period 0 and any period whose neighbourhood is saturated are skipped.
     float k_ch[ADC_CHANNELS] = {};
+    if (cycle_has_sat)
     {
         float    satKSum[ADC_CHANNELS] = {};
         uint32_t satKCnt[ADC_CHANNELS] = {};
