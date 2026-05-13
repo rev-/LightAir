@@ -370,8 +370,7 @@ void Enlight::processAdcCycle() {
         float satKSum[ADC_CHANNELS]        = {};
         uint32_t satKValidCount[ADC_CHANNELS] = {};
 
-        const uint32_t t0p    = (_goertzPeriod / 4 + _goertzPeriod - _cal.phaseOff)
-                                % _goertzPeriod;
+        const uint32_t t0p    = 0
         const uint32_t max_x0 = _goertzPeriod / 4;
 
         auto ch_sat = [](uint16_t v) -> bool {
@@ -380,8 +379,8 @@ void Enlight::processAdcCycle() {
 
         for (uint32_t p = 0; p < _periodsPerCycle; p++) {
             const uint32_t tc = p * _goertzPeriod;
-            if (tc < max_x0 || tc + max_x0 >= triples) continue;
 
+            // If value at 0 (period begin) is SAT, continue --> do not compute satKSum[ch], drop the whole cycle
             uint16_t s0[ADC_CHANNELS];
             bool bad = false;
             for (int ch = 0; ch < ADC_CHANNELS; ch++) {
@@ -390,6 +389,8 @@ void Enlight::processAdcCycle() {
             }
             if (bad) continue;
 
+            // Find larger symmetrical non-saturated range around 0 per period, considering all channels
+            // Continue if the range is smaller than 5 samples (SAT too intense) --> do not compute satKSum[ch], drop the whole cycle
             uint32_t x0 = 0;
             for (uint32_t x = 1; x <= max_x0; x++) {
                 bool any_sat = false;
@@ -401,7 +402,7 @@ void Enlight::processAdcCycle() {
                 if (any_sat) break;
                 x0 = x;
             }
-            if (x0 < 5) continue;
+            if(x0<5) continue;
 
             const float inv2sin = 1.0f / (2.0f * sinf(2.0f * (float)M_PI
                                                        * (float)x0 / (float)_goertzPeriod));
@@ -426,6 +427,7 @@ void Enlight::processAdcCycle() {
             cSatCorr_near     += (long long)_satPhaseCount[j] * cj;
         }
 
+        // ***** It seems a per-period variable satKsum is used in a per-cycle context
         const float k_R = satKValidCount[0] ? satKSum[0] / (float)satKValidCount[0] : 0.0f;
         const float k_G = satKValidCount[1] ? satKSum[1] / (float)satKValidCount[1] : 0.0f;
         const float k_B = satKValidCount[2] ? satKSum[2] / (float)satKValidCount[2] : 0.0f;
