@@ -86,7 +86,7 @@ void EnlightCalibRoutine::step1() {
     enlight_calib_load(cal);
     cal.phaseOff = bestPhase;
     enlight_calib_save(cal);
-    _e.buildSintab(bestPhase);
+    _e.buildGoertzTab(bestPhase);
 
     // Show results.
     const long long avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
@@ -379,11 +379,11 @@ uint32_t EnlightCalibRoutine::computeBestPhase() {
     const uint8_t* buf      = _e.rawAdcBuf();
     const uint32_t nTriples = _e.adcConvsPerCycle() / ADC_CHANNELS;
 
-    // Precompute one period of integer sine values (same scale as Enlight's sintab).
+    // Precompute one period of integer cosine values (same scale as Enlight's goertzTab / FAR kernel).
     int32_t* sinLut = (int32_t*)malloc(gp * sizeof(int32_t));
     if (!sinLut) return 0;
     for (uint32_t i = 0; i < gp; i++)
-        sinLut[i] = (int32_t)roundf((float)SIN_MAG * sinf(2.0f * (float)M_PI * i / (float)gp));
+        sinLut[i] = (int32_t)roundf((float)KERN_MAG * cosf(2.0f * (float)M_PI * i / (float)gp));
 
     uint32_t  bestPhase = 0;
     long long bestVal   = 0;

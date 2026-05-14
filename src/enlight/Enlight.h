@@ -23,13 +23,13 @@ static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 // so that every period contains an exact integer number of R/G/B ADC triples.
 //
 // Additionally GOERTZ_PERIOD (_goertzPeriod) must be divisible by 4 so that
-// _cosOffset = GOERTZ_PERIOD/4 is an exact integer and sine/cosine remain
+// _nearOffset = 3*GOERTZ_PERIOD/4 is an exact integer and far/near kernels remain
 // orthogonal. begin() logs an error if this condition is violated. Ensure
 // ledFreqHz and ledClockHz are chosen accordingly.
 static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 
 static constexpr float    PDM_AMPLITUDE  = 0.95f;
-static constexpr int32_t  SIN_MAG        = 2048;
+static constexpr int32_t  KERN_MAG        = 2048;
 static constexpr int      GRID_MAX_THRESH = CALIB_MAX_PLAYERS * 2;
 
 // Result type
@@ -129,16 +129,16 @@ public:
     const uint8_t* rawAdcBuf()        const { return _adcRxBuf;        }
     uint32_t       adcConvsPerCycle() const { return _adcConvsPerCycle; }
 
-    // Raw sine lookup table used by the correlator (length = goertzPeriod()).
-    // sintab[t % goertzPeriod()] is the far-kernel weight for triple t.
-    // Cosine (near) kernel weight: sintab[(t % goertzPeriod() + cosOffset) % goertzPeriod()].
-    // Valid after begin() / buildSintab(); nullptr if allocation failed.
-    const int32_t* rawSintab() const { return _sintab; }
+    // Raw Goertzel kernel table used by the correlator (length = goertzPeriod()).
+    // goertzTab[t % goertzPeriod()] is the far-kernel weight for triple t.
+    // Near kernel weight: goertzTab[(t % goertzPeriod() + nearOffset) % goertzPeriod()].
+    // Valid after begin() / buildGoertzTab(); nullptr if allocation failed.
+    const int32_t* rawGoertzTab() const { return _goertzTab; }
 
-    // Rebuild the sine/cosine lookup table with the given phase offset.
-    // Also precomputes _sin2total and reallocates _satPhaseCount.
+    // Rebuild the Goertzel kernel table with the given phase offset.
+    // Also precomputes _kern2total and reallocates _satPhaseCount.
     // Safe to call outside of an active run().
-    void buildSintab(uint32_t phase);
+    void buildGoertzTab(uint32_t phase);
 
 private:
     EnlightCalib    _cal;
@@ -158,9 +158,9 @@ private:
     //Repetitions
     uint32_t    _repetitions        = 10;
 
-    // Correlator kernel. Cosine = sintab[(idx+_cosOffset)%_goertzPeriod]; no second array.
-    int32_t*    _sintab    = nullptr;
-    uint32_t    _cosOffset = 0;
+    // Correlator kernel. FAR = goertzTab[idx], NEAR = goertzTab[(idx+_nearOffset)%_goertzPeriod]; no second array.
+    int32_t*    _goertzTab  = nullptr;
+    uint32_t    _nearOffset = 0;
 
     // Per-phase saturation counter.
     // _satPhaseCount[j] is incremented whenever a triple at phase j = (_arrayiter % GP)
@@ -170,12 +170,12 @@ private:
     //
     // A single array is enough for both far and near corrections because classify() weights
     // it differently for each channel:
-    //   far  correction ← Σ_j satPhaseCount[j] × sintab[j]²          (sin² weight)
-    //   near correction ← Σ_j satPhaseCount[j] × sintab[(j+cosOffset)%GP]²  (cos² weight)
+    //   far  correction ← Σ_j satPhaseCount[j] × goertzTab[j]²                    (far²  weight)
+    //   near correction ← Σ_j satPhaseCount[j] × goertzTab[(j+nearOffset)%GP]²   (near² weight)
     // The squared-kernel weighting provides automatic phase attribution: a saturation at the
     // cosine peak (sin[j] = 0) contributes zero to the far correction and maximum to the near.
     uint16_t*   _satPhaseCount = nullptr;
-    long long   _sin2total     = 0;  // Σ_j sintab[j]² = Σ_j cos[j]²; precomputed in buildSintab()
+    long long   _kern2total    = 0;  // Σ_j goertzTab[j]²; precomputed in buildGoertzTab()
 
     // LED DIO SPI
     spi_device_handle_t _ledDevice   = nullptr;

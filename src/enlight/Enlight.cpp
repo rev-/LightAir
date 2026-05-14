@@ -15,7 +15,7 @@ Enlight::~Enlight() {
     heap_caps_free(_ledTxBuf);
     heap_caps_free(_adcTxBuf);
     heap_caps_free(_adcRxBuf);
-    heap_caps_free(_sintab);
+    heap_caps_free(_goertzTab);
     heap_caps_free(_satPhaseCount);
 }
 
@@ -65,18 +65,19 @@ bool Enlight::generateWaveform() {
 
     const float base = 0.5f + EnlightDefaults::PDM_AMP_OFFSET, swing = 0.5f - EnlightDefaults::PDM_AMP_OFFSET;
     const float twoPiOverT = 2.0f * (float)M_PI / (float)_periodClocks;
-    float acc_sin = 0.0f, acc_cos = 0.0f;
+    float acc_far = 0.0f, acc_near = 0.0f;
     for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
         uint8_t byte = 0;
         for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
             const float theta = twoPiOverT * (float)(i + j);
-            const float ds = base + swing * PDM_AMPLITUDE * sinf(theta);
-            const float dc = base + swing * PDM_AMPLITUDE * cosf(theta);
-            const uint8_t bs = (acc_sin >= 0.5f) ? 1u : 0u;
-            const uint8_t bc = (acc_cos >= 0.5f) ? 1u : 0u;
-            acc_sin += ds - (float)bs; acc_cos += dc - (float)bc;
+            const float d_far  = base + swing * PDM_AMPLITUDE * cosf(theta);
+            const float d_near = base + swing * PDM_AMPLITUDE * sinf(theta);
+            const uint8_t b_far  = (acc_far  >= 0.5f) ? 1u : 0u;
+            const uint8_t b_near = (acc_near >= 0.5f) ? 1u : 0u;
+            acc_far  += d_far  - (float)b_far;
+            acc_near += d_near - (float)b_near;
             const uint8_t sh = (uint8_t)(6u - j*2u);
-            byte |= (uint8_t)(bs << (sh+1u)); byte |= (uint8_t)(bc << sh);
+            byte |= (uint8_t)(b_far << (sh+1u)); byte |= (uint8_t)(b_near << sh);
         }
         _ledTxBuf[i / PDM_CLKS_PER_BYTE] = byte;
     }
@@ -88,28 +89,30 @@ bool Enlight::generateWaveform() {
 }
 
 /* ============================================================
- *   buildSintab()
- *   Cosine kernel uses sintab with offset _cosOffset = GP/4.
+ *   buildGoertzTab()
+ *   FAR kernel: goertzTab[idx] = KERN_MAG * cos(2π(idx+phase)/GP)
+ *   NEAR kernel: goertzTab[(idx + _nearOffset) % GP],  _nearOffset = 3*GP/4
+ *   cos(x + 3π/2) = sin(x), so the near kernel is sine — in phase with NEAR LED.
  *   REQUIREMENT: _goertzPeriod % 4 == 0 for orthogonality.
  * ============================================================ */
-void Enlight::buildSintab(uint32_t phase) {
-    heap_caps_free(_sintab);
+void Enlight::buildGoertzTab(uint32_t phase) {
+    heap_caps_free(_goertzTab);
     if (_goertzPeriod % 4 != 0)
         ESP_LOGE(TAG, "GOERTZ_PERIOD=%lu not divisible by 4 -- near/far broken",
                  (unsigned long)_goertzPeriod);
-    _cosOffset = _goertzPeriod / 4;
-    _sintab = (int32_t*)heap_caps_malloc(_goertzPeriod*sizeof(int32_t),
-                                          MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-    if (!_sintab) { ESP_LOGE(TAG, "sintab alloc failed"); return; }
+    _nearOffset = 3 * _goertzPeriod / 4;
+    _goertzTab = (int32_t*)heap_caps_malloc(_goertzPeriod*sizeof(int32_t),
+                                             MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    if (!_goertzTab) { ESP_LOGE(TAG, "goertzTab alloc failed"); return; }
     const float k = 2.0f * (float)M_PI / (float)_goertzPeriod;
     for (uint32_t i = 0; i < _goertzPeriod; i++)
-        _sintab[i] = (int32_t)roundf((float)SIN_MAG * sinf(k * (float)(i + phase)));
+        _goertzTab[i] = (int32_t)roundf((float)KERN_MAG * cosf(k * (float)(i + phase)));
 
-    // Precompute Σ sintab[j]² = Σ cos[j]² (they are equal over a full period).
-    // Used once in classify() as the denominator for both far and near corrections.
-    _sin2total = 0;
+    // Precompute Σ goertzTab[j]²; equal for far and near kernels over a full period.
+    // Used as the denominator for both far and near saturation corrections.
+    _kern2total = 0;
     for (uint32_t i = 0; i < _goertzPeriod; i++)
-        _sin2total += (long long)_sintab[i] * _sintab[i];
+        _kern2total += (long long)_goertzTab[i] * _goertzTab[i];
 
     // Allocate the per-phase saturation counter (one array, GP entries, uint16_t).
     // Zeroed here by calloc; zeroed again at the start of every run() via memset.
@@ -166,7 +169,7 @@ int Enlight::gridLookup(float outr, float outang) const {
  * ============================================================ */
 bool Enlight::begin() {
     if (!generateWaveform()) return false;
-    buildSintab(_cal.phaseOff); if (!_sintab) return false;
+    buildGoertzTab(_cal.phaseOff); if (!_goertzTab) return false;
     buildGrid();
 
     gpio_config_t gc={};
@@ -298,8 +301,8 @@ void Enlight::buildAdcTxBuffer() {
 
 /* ============================================================
  *   processAdcCycle()
- *   Far  kernel: sintab[idx]
- *   Near kernel: sintab[(idx+_cosOffset)%GP]
+ *   Far  kernel: goertzTab[idx]
+ *   Near kernel: goertzTab[(idx+_nearOffset)%GP]
  *
  *   First-period skip (per DMA cycle)
  *   ------------------------------------
@@ -316,7 +319,7 @@ void Enlight::buildAdcTxBuffer() {
  *   At the end of each period the correction
  *
  *     R_true_p = (R_meas_p + k · Σ_p{sj}) / gammaF_p
- *     gammaF_p = 1 − Σ_p{sj²} / sin2total
+ *     gammaF_p = 1 − Σ_p{sj²} / kern2total
  *
  *   is applied before adding the period result to the cycle totals.
  *   This is exact: the cycle-level single-gammaF formula is only equivalent
@@ -416,8 +419,8 @@ void Enlight::processAdcCycle() {
             const uint16_t rv = r12(base), gv = r12(base+1), bv = r12(base+2);
 
             const uint32_t idx = _arrayiter % _goertzPeriod;
-            const int32_t  ks  = _sintab[idx];
-            const int32_t  kc  = _sintab[(idx + _cosOffset) % _goertzPeriod];
+            const int32_t  ks  = _goertzTab[idx];
+            const int32_t  kc  = _goertzTab[(idx + _nearOffset) % _goertzPeriod];
 
             if (rv >= EnlightDefaults::SAT_HIGH || rv <= EnlightDefaults::SAT_LOW ||
                 gv >= EnlightDefaults::SAT_HIGH || gv <= EnlightDefaults::SAT_LOW ||
@@ -435,11 +438,11 @@ void Enlight::processAdcCycle() {
         }
 
         // Per-period correction: R_true_p = (R_meas_p + k·cSatF) / gammaF_p
-        // gammaF_p = 1 − satSj2F / sin2total  (per-period formula; sin2total covers one period).
+        // gammaF_p = 1 − satSj2F / kern2total  (per-period formula; kern2total covers one period).
         // STEP1 (k addend) and STEP2 (gamma divide) are one expression — skip both or neither.
-        if (sat_p > 0 && _sin2total > 0) {
-            const float gammaF = 1.0f - (float)satSj2F / (float)_sin2total;
-            const float gammaN = 1.0f - (float)satSj2N / (float)_sin2total;
+        if (sat_p > 0 && _kern2total > 0) {
+            const float gammaF = 1.0f - (float)satSj2F / (float)_kern2total;
+            const float gammaN = 1.0f - (float)satSj2N / (float)_kern2total;
             if (gammaF > 0.05f) {
                 rout_p = (long long)(((float)rout_p + k_ch[0]*(float)cSatF) / gammaF);
                 gout_p = (long long)(((float)gout_p + k_ch[1]*(float)cSatF) / gammaF);
