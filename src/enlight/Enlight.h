@@ -136,7 +136,6 @@ public:
     const int32_t* rawGoertzTab() const { return _goertzTab; }
 
     // Rebuild the Goertzel kernel table with the given phase offset.
-    // Also precomputes _kern2total and reallocates _satPhaseCount.
     // Safe to call outside of an active run().
     void buildGoertzTab(uint32_t phase);
 
@@ -162,20 +161,7 @@ private:
     int32_t*    _goertzTab  = nullptr;
     uint32_t    _nearOffset = 0;
 
-    // Per-phase saturation counter.
-    // _satPhaseCount[j] is incremented whenever a triple at phase j = (_arrayiter % GP)
-    // hits SAT_HIGH or SAT_LOW on any channel.  Maximum value per phase per run() call is
-    // repetitions × _periodsPerCycle (≤ 13 per DMA cycle at V6R2 defaults); uint16_t is
-    // sufficient for up to ~5000 repetitions before overflow.
-    //
-    // A single array is enough for both far and near corrections because classify() weights
-    // it differently for each channel:
-    //   far  correction ← Σ_j satPhaseCount[j] × goertzTab[j]²                    (far²  weight)
-    //   near correction ← Σ_j satPhaseCount[j] × goertzTab[(j+nearOffset)%GP]²   (near² weight)
-    // The squared-kernel weighting provides automatic phase attribution: a saturation at the
-    // cosine peak (sin[j] = 0) contributes zero to the far correction and maximum to the near.
-    uint16_t*   _satPhaseCount = nullptr;
-    long long   _kern2total    = 0;  // Σ_j goertzTab[j]²; precomputed in buildGoertzTab()
+    uint32_t    _activePeriods = 0;  // non-ditched, non-settling periods accumulated this run
 
     // LED DIO SPI
     spi_device_handle_t _ledDevice   = nullptr;
