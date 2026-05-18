@@ -164,8 +164,9 @@ namespace EnlightDefaults {
     // AFE needs ~3 sine periods to settle after power-on.
     // 3 × (1 / 1667 Hz) ≈ 1800 µs; 2000 µs gives a small margin.
     constexpr uint32_t AFE_STARTUP_MICROS = 2000;
-    constexpr uint16_t SAT_HIGH = 4085;
-    constexpr uint16_t SAT_LOW  = 10;
+    constexpr uint16_t SAT_HIGH      = 4085;
+    constexpr uint16_t SAT_LOW       = 10;
+    constexpr float    SAT_DITCH_FRAC = 0.95f; // ditch period if any channel has >95% saturated samples
 }
 
 // ---------------------------------------------------------------
