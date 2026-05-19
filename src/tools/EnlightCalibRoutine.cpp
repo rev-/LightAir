@@ -375,7 +375,7 @@ bool EnlightCalibRoutine::runOne(EnlightRawMeasure& out) {
 
 uint32_t EnlightCalibRoutine::computeBestPhase() {
     const uint32_t gp       = _e.goertzPeriod();
-    const uint32_t maxOff   = gp / 4;            // scan 0 … 90°
+    const uint32_t maxOff   = gp-1;                // scan all options
     const uint8_t* buf      = _e.rawAdcBuf();
     const uint32_t nTriples = _e.adcConvsPerCycle() / ADC_CHANNELS;
 
