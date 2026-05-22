@@ -94,6 +94,11 @@ bool Enlight::generateWaveform() {
  *   cos(x + 3π/2) = sin(x), so the near kernel is sine — in phase with NEAR LED.
  *   REQUIREMENT: _goertzPeriod % 4 == 0 for orthogonality.
  * ============================================================ */
+int32_t Enlight::kernelEntry(uint32_t gp, uint32_t phaseIdx) {
+    return (int32_t)roundf((float)KERN_MAG *
+                           cosf(2.0f * (float)M_PI * (float)phaseIdx / (float)gp));
+}
+
 void Enlight::buildGoertzTab(uint32_t phase) {
     heap_caps_free(_goertzTab);
     if (_goertzPeriod % 4 != 0)
@@ -103,9 +108,8 @@ void Enlight::buildGoertzTab(uint32_t phase) {
     _goertzTab = (int32_t*)heap_caps_malloc(_goertzPeriod*sizeof(int32_t),
                                              MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
     if (!_goertzTab) { ESP_LOGE(TAG, "goertzTab alloc failed"); return; }
-    const float k = 2.0f * (float)M_PI / (float)_goertzPeriod;
     for (uint32_t i = 0; i < _goertzPeriod; i++)
-        _goertzTab[i] = (int32_t)roundf((float)KERN_MAG * cosf(k * (float)(i + phase)));
+        _goertzTab[i] = kernelEntry(_goertzPeriod, i + phase);
 }
 
 /* ============================================================
