@@ -139,6 +139,12 @@ public:
     // Safe to call outside of an active run().
     void buildGoertzTab(uint32_t phase);
 
+    // Single source of truth for the FAR kernel formula.
+    // Returns KERN_MAG * cos(2π * phaseIdx / gp).  Used by buildGoertzTab()
+    // and by EnlightCalibRoutine::computeBestPhase() so both always use the
+    // same kernel shape.
+    static int32_t kernelEntry(uint32_t gp, uint32_t phaseIdx);
+
 private:
     EnlightCalib    _cal;
 

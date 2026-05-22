@@ -375,21 +375,22 @@ bool EnlightCalibRoutine::runOne(EnlightRawMeasure& out) {
 
 uint32_t EnlightCalibRoutine::computeBestPhase() {
     const uint32_t gp       = _e.goertzPeriod();
-    const uint32_t maxOff   = gp-1;                // scan all options
     const uint8_t* buf      = _e.rawAdcBuf();
     const uint32_t nTriples = _e.adcConvsPerCycle() / ADC_CHANNELS;
 
-    // Precompute one period of integer cosine values (same scale as Enlight's goertzTab / FAR kernel).
-    int32_t* sinLut = (int32_t*)malloc(gp * sizeof(int32_t));
-    if (!sinLut) return 0;
+    // Pre-build one period of the FAR kernel at phase 0 using the same formula
+    // as Enlight::buildGoertzTab() — Enlight::kernelEntry is the single source of
+    // truth so this scan always matches the kernel actually used in processing.
+    int32_t* kernelLut = (int32_t*)malloc(gp * sizeof(int32_t));
+    if (!kernelLut) return 0;
     for (uint32_t i = 0; i < gp; i++)
-        sinLut[i] = (int32_t)roundf((float)KERN_MAG * cosf(2.0f * (float)M_PI * i / (float)gp));
+        kernelLut[i] = Enlight::kernelEntry(gp, i);
 
     uint32_t  bestPhase = 0;
     long long bestVal   = 0;
     bool      found     = false;
 
-    for (uint32_t p = 0; p <= maxOff; p++) {
+    for (uint32_t p = 0; p < gp; p++) {
         long long sum = 0;
         for (uint32_t t = 0; t < nTriples; t++) {
             // Each DMA cycle holds an exact integer number of periods, so
@@ -398,7 +399,7 @@ uint32_t EnlightCalibRoutine::computeBestPhase() {
             const long long rv = (((uint16_t)buf[base*2]     << 8) | buf[base*2+1])     & 0x0FFF;
             const long long gv = (((uint16_t)buf[(base+1)*2] << 8) | buf[(base+1)*2+1]) & 0x0FFF;
             const long long bv = (((uint16_t)buf[(base+2)*2] << 8) | buf[(base+2)*2+1]) & 0x0FFF;
-            sum += (rv + gv + bv) * sinLut[(t % gp + p) % gp];
+            sum += (rv + gv + bv) * kernelLut[(t % gp + p) % gp];
         }
         if (!found || sum > bestVal) {
             bestVal   = sum;
@@ -407,7 +408,7 @@ uint32_t EnlightCalibRoutine::computeBestPhase() {
         }
     }
 
-    free(sinLut);
+    free(kernelLut);
     return bestPhase;
 }
 
