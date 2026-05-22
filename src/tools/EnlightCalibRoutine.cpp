@@ -365,6 +365,7 @@ void EnlightCalibRoutine::step4() {
  * ============================================================ */
 
 bool EnlightCalibRoutine::runOne(EnlightRawMeasure& out) {
+    _e.setRepetitions(REPS);
     _e.run();
     while (_e.poll().status == EnlightStatus::RUNNING)
         delay(1);
@@ -392,7 +393,13 @@ uint32_t EnlightCalibRoutine::computeBestPhase() {
 
     for (uint32_t p = 0; p < gp; p++) {
         long long sum = 0;
-        for (uint32_t t = 0; t < nTriples; t++) {
+        // Skip the first period (t = 0..gp-1): it contains the photodiode
+        // settling transient from the inter-cycle LED gap, exactly as
+        // processAdcCycle() does with its p==0 continue.  Including it biases
+        // the phase estimate toward the transient rather than the steady-state
+        // signal and produces wrong results when the DMA buffer comes from a
+        // cycle with a short gap (reps > 1).
+        for (uint32_t t = gp; t < nTriples; t++) {
             // Each DMA cycle holds an exact integer number of periods, so
             // triple t has phase (t % gp) within that cycle.
             const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
