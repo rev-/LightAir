@@ -419,11 +419,18 @@ void Enlight::processAdcCycle() {
                     deltaX_rad = (float)M_PI;
                     sum_ch     = (float)sum_nonsat[ch];
                 } else {
-                    const uint32_t w       = i_last[ch] - i_first[ch] + 1;
-                    const uint32_t deltaXs = (_goertzPeriod - w) / 2;
+                    // When the signal peak is near a period boundary (lt≈0 or lt≈GP-1),
+                    // the saturated zone wraps: i_first=0, i_last=GP-1 even though only
+                    // w_sat[ch] samples are actually saturated → w=GP → deltaXs=0 → A=0.
+                    // Detect wrap-around and use w_sat[ch] as the true saturated width.
+                    const bool     wrapping = (i_last[ch] - i_first[ch] + 1 > w_sat[ch]);
+                    const uint32_t w        = wrapping ? w_sat[ch] : (i_last[ch] - i_first[ch] + 1);
+                    const uint32_t deltaXs  = (_goertzPeriod - w) / 2;
                     deltaX_rad = (float)deltaXs * twoPiOverGP;
-                    // x0: centre of non-saturated arc (one sample past the saturated zone end)
-                    x0 = (i_last[ch] + 1 + deltaXs) % _goertzPeriod;
+                    // For wrapping: peak is at the period boundary, so the non-saturated
+                    // arc centre is at the antipodal point (GP/2).
+                    x0 = wrapping ? (_goertzPeriod / 2)
+                                  : (i_last[ch] + 1 + deltaXs) % _goertzPeriod;
 
                     // SUM over the symmetric non-saturated interval [x0-deltaXs, x0+deltaXs]
                     sum_ch = 0.0f;
