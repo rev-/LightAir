@@ -453,18 +453,19 @@ void Enlight::processAdcCycle() {
  *   classify()
  * ============================================================ */
 EnlightResult Enlight::classify() {
-    // Calibration baselines were measured with (_periodsPerCycle-1) active periods
-    // per DMA cycle.  Scale by _activePeriods / (expected active periods this run)
-    // so that ditched periods do not cause over-subtraction.
+    // cal.*cal values are per-DMA-cycle baselines (sRF[mid] / REPS from step2).
+    // Multiply by nCycles so the baseline scales with the number of repetitions,
+    // then scale for any ditched periods so over-subtraction is avoided.
     const long long nCycles = (long long)(_arrayiter / (_goertzPeriod * _periodsPerCycle));
     const float nd_f  = (float)(_periodsPerCycle - 1) * (float)nCycles;
     const float scale = (nd_f > 0.0f) ? ((float)_activePeriods / nd_f) : 1.0f;
-    const long long eff_rcal     = (long long)roundf((float)_cal.rcal     * scale);
-    const long long eff_gcal     = (long long)roundf((float)_cal.gcal     * scale);
-    const long long eff_bcal     = (long long)roundf((float)_cal.bcal     * scale);
-    const long long eff_rcalNear = (long long)roundf((float)_cal.rcalNear * scale);
-    const long long eff_gcalNear = (long long)roundf((float)_cal.gcalNear * scale);
-    const long long eff_bcalNear = (long long)roundf((float)_cal.bcalNear * scale);
+    const float baseScale = scale * (float)nCycles;
+    const long long eff_rcal     = (long long)roundf((float)_cal.rcal     * baseScale);
+    const long long eff_gcal     = (long long)roundf((float)_cal.gcal     * baseScale);
+    const long long eff_bcal     = (long long)roundf((float)_cal.bcal     * baseScale);
+    const long long eff_rcalNear = (long long)roundf((float)_cal.rcalNear * baseScale);
+    const long long eff_gcalNear = (long long)roundf((float)_cal.gcalNear * baseScale);
+    const long long eff_bcalNear = (long long)roundf((float)_cal.bcalNear * baseScale);
 
     const long long rout = (_rout  > eff_rcal)     ? _rout  - eff_rcal     : 0LL;
     const long long gout = (_gout  > eff_gcal)     ? _gout  - eff_gcal     : 0LL;

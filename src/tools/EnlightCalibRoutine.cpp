@@ -183,13 +183,13 @@ void EnlightCalibRoutine::step2() {
     cal.bcalNear = (uint32_t)(sBN[mid] > 0 ? sBN[mid] / REPS : 0);
 
     // Compute white-balance factors from step1 clear-target measurements.
-    // For each measurement: subtract baseline, compute rfact = g/r and bfact = g/b.
+    // _step1_r/g/b[i] accumulated over REPS cycles; subtract REPS cycles of baseline.
     float rfact_arr[N_RUNS], bfact_arr[N_RUNS];
     uint32_t rfact_count = 0, bfact_count = 0;
     for (uint32_t i = 0; i < _step1_n; i++) {
-        long long r = _step1_r[i] - cal.rcal;
-        long long g = _step1_g[i] - cal.gcal;
-        long long b = _step1_b[i] - cal.bcal;
+        long long r = _step1_r[i] - (long long)REPS * (long long)cal.rcal;
+        long long g = _step1_g[i] - (long long)REPS * (long long)cal.gcal;
+        long long b = _step1_b[i] - (long long)REPS * (long long)cal.bcal;
         if (r > 0) {
             rfact_arr[rfact_count++] = (float)g / (float)r;
         }

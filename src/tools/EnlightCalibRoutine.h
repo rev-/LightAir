@@ -78,7 +78,7 @@ private:
     static constexpr uint32_t N_RUNS     = 50;    // valid runs to collect per step
     static constexpr uint32_t REPS       = 5;     // run() repetitions per measurement
     static constexpr uint32_t DELAY_MS   = 100;   // ms between measurements
-    static constexpr float    SAT_THRESH = 0.10f; // discard if > 10 % saturated
+    static constexpr float    SAT_THRESH = 0.00f; // discard if any sample is saturated
 
     Enlight&            _e;
     LightAir_Display&   _disp;

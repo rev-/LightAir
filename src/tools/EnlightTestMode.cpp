@@ -146,9 +146,19 @@ void EnlightTestMode::run() {
 
             EnlightRawMeasure raw = _e.rawMeasure();
             const EnlightCalib& cal = _e.calib();
-            long long r = raw.rout;
-            long long g = raw.gout;
-            long long b = raw.bout;
+            // Subtract baseline using the same nCycles formula as classify().
+            const long long nCyc = (raw.totalSamples > 0 &&
+                                    _e.goertzPeriod() > 0 &&
+                                    _e.periodsPerCycle() > 0)
+                ? (long long)raw.totalSamples /
+                  ((long long)_e.goertzPeriod() * (long long)_e.periodsPerCycle())
+                : 1LL;
+            long long r = raw.rout - (long long)((float)cal.rcal * (float)nCyc);
+            long long g = raw.gout - (long long)((float)cal.gcal * (float)nCyc);
+            long long b = raw.bout - (long long)((float)cal.bcal * (float)nCyc);
+            if (r < 0) r = 0;
+            if (g < 0) g = 0;
+            if (b < 0) b = 0;
             float rw = (float)r * cal.rfact;
             float gw = (float)g;
             float bw = (float)b * cal.bfact;
