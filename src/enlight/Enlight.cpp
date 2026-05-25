@@ -437,10 +437,11 @@ void Enlight::processAdcCycle() {
                 const float num   = 2.0f * deltaX_rad * sx0 - sum_ch * twoPiOverGP;
                 const float denom = 2.0f * (deltaX_rad - sinf(deltaX_rad));
                 const float A     = (fabsf(denom) > 1e-6f) ? (num / denom) : 0.0f;
-                const float phi   = twoPiOverGP * (float)x0;
 
-                *far_acc[ch]  += (long long)(kern_f * halfGP_f * A * cosf(phi));
-                *near_acc[ch] += (long long)(kern_f * halfGP_f * A * sinf(phi));
+                // Use goertzTab directly so the kernel phase offset (phaseOff) is
+                // automatically included — cos/sin(phi) alone would miss it.
+                *far_acc[ch]  += (long long)(halfGP_f * A * (float)_goertzTab[x0 % _goertzPeriod]);
+                *near_acc[ch] += (long long)(halfGP_f * A * (float)_goertzTab[(x0 + _nearOffset) % _goertzPeriod]);
             }
         }
     }
