@@ -28,9 +28,11 @@ static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 // ledFreqHz and ledClockHz are chosen accordingly.
 static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 
-static constexpr float    PDM_AMPLITUDE  = 0.95f;
-static constexpr int32_t  KERN_MAG        = 2048;
-static constexpr int      GRID_MAX_THRESH = CALIB_MAX_PLAYERS * 2;
+static constexpr float    PDM_AMPLITUDE    = 0.95f;
+static constexpr float    LOW_POWER_FACTOR = 0.1f;   // amplitude scale for the dim PDM buffer
+static constexpr float    SAT_SWITCH_FRAC  = 0.25f;  // switch to low power if >25% active samples saturated
+static constexpr int32_t  KERN_MAG         = 2048;
+static constexpr int      GRID_MAX_THRESH  = CALIB_MAX_PLAYERS * 2;
 
 // Result type
 enum class EnlightStatus : uint8_t {
@@ -170,10 +172,15 @@ private:
     uint32_t    _activePeriods = 0;  // non-ditched, non-settling periods accumulated this run
 
     // LED DIO SPI
-    spi_device_handle_t _ledDevice   = nullptr;
-    uint8_t*            _ledTxBuf    = nullptr;
+    spi_device_handle_t _ledDevice    = nullptr;
+    uint8_t*            _ledTxBuf    = nullptr;   // full-power PDM buffer
+    uint8_t*            _ledTxBufLow = nullptr;   // 1/10-amplitude PDM buffer
     size_t              _ledBufBytes = 0;
     spi_transaction_t   _ledTrans    = {};
+
+    // Adaptive power state (reset each run())
+    bool      _useLowPower    = false;
+    float     _cycleNormScale = 1.0f;  // 1.0 = full power, 10.0 = low-power normalisation
 
     // ADC SPI
     spi_device_handle_t _adcDevice   = nullptr;
@@ -204,7 +211,8 @@ private:
     struct TaskArgs { Enlight* self; };
     TaskArgs        _taskArgs      = {};
 
-    bool          generateWaveform();
+    bool          generateWaveform();                            // allocates both buffers and fills them
+    bool          generateWaveform(uint8_t* buf, float ampScale); // fills one buffer at the given amplitude scale
     void          buildGrid();
     int           gridLookup(float outr, float outang) const;
     void          buildAdcTxBuffer();

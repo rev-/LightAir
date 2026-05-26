@@ -54,23 +54,34 @@ bool Enlight::generateWaveform() {
              (unsigned long)_goertzPeriod, (unsigned long)_periodsPerCycle,
              (double)cycleMs, (double)EnlightDefaults::PDM_AMP_OFFSET);
 
-    _ledTxBuf = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    _adcTxBuf = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    _adcRxBuf = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    if (!_ledTxBuf || !_adcTxBuf || !_adcRxBuf) {
+    _ledTxBuf    = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _ledTxBufLow = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _adcTxBuf    = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _adcRxBuf    = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    if (!_ledTxBuf || !_ledTxBufLow || !_adcTxBuf || !_adcRxBuf) {
         ESP_LOGE(TAG, "DMA alloc failed"); return false;
     }
     memset(_adcRxBuf, 0, _adcBufBytes);
 
-    const float base = 0.5f + EnlightDefaults::PDM_AMP_OFFSET, swing = 0.5f - EnlightDefaults::PDM_AMP_OFFSET;
+    if (!generateWaveform(_ledTxBuf,    1.0f))                        return false;
+    if (!generateWaveform(_ledTxBufLow, EnlightDefaults::LOW_POWER_FACTOR)) return false;
+
+    buildAdcTxBuffer();
+    return true;
+}
+
+bool Enlight::generateWaveform(uint8_t* buf, float ampScale) {
+    if (!buf) return false;
+    const float base = 0.5f + EnlightDefaults::PDM_AMP_OFFSET;
+    const float swing = 0.5f - EnlightDefaults::PDM_AMP_OFFSET;
     const float twoPiOverT = 2.0f * (float)M_PI / (float)_periodClocks;
     float acc_far = 0.0f, acc_near = 0.0f;
     for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
         uint8_t byte = 0;
         for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
             const float theta = twoPiOverT * (float)(i + j);
-            const float d_far  = base + swing * PDM_AMPLITUDE * cosf(theta);
-            const float d_near = base + swing * PDM_AMPLITUDE * sinf(theta);
+            const float d_far  = base + swing * PDM_AMPLITUDE * ampScale * cosf(theta);
+            const float d_near = base + swing * PDM_AMPLITUDE * ampScale * sinf(theta);
             const uint8_t b_far  = (acc_far  >= 0.5f) ? 1u : 0u;
             const uint8_t b_near = (acc_near >= 0.5f) ? 1u : 0u;
             acc_far  += d_far  - (float)b_far;
@@ -78,12 +89,10 @@ bool Enlight::generateWaveform() {
             const uint8_t sh = (uint8_t)(6u - j*2u);
             byte |= (uint8_t)(b_far << (sh+1u)); byte |= (uint8_t)(b_near << sh);
         }
-        _ledTxBuf[i / PDM_CLKS_PER_BYTE] = byte;
+        buf[i / PDM_CLKS_PER_BYTE] = byte;
     }
     for (uint32_t r = 1; r < _periodsPerCycle; r++)
-        memcpy(_ledTxBuf + r*_waveformBytes, _ledTxBuf, _waveformBytes);
-
-    buildAdcTxBuffer();
+        memcpy(buf + r*_waveformBytes, buf, _waveformBytes);
     return true;
 }
 
@@ -238,6 +247,9 @@ bool Enlight::run() {
     _rout=_gout=_bout=_rnear=_gnear=_bnear=_rawsum=0;
     _arrayiter=_satCount=_activePeriods=0;
     _resultDelivered = false;
+    _useLowPower    = false;
+    _cycleNormScale = 1.0f;
+    _ledTrans.tx_buffer = _ledTxBuf;
     _active=true;
     _firstCycle=true;
     gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,1);
@@ -317,6 +329,7 @@ void Enlight::processAdcCycle() {
 
     long long rout_c=0, gout_c=0, bout_c=0;
     long long rnear_c=0, gnear_c=0, bnear_c=0;
+    long long rawsum_c=0;
 
     const float twoPiOverGP = 2.0f * (float)M_PI / (float)_goertzPeriod;
     const float halfGP_f    = 0.5f * (float)_goertzPeriod;
@@ -381,7 +394,7 @@ void Enlight::processAdcCycle() {
                 if (bv > argmax_val[2]) { argmax_val[2] = bv; argmax_idx[2] = lt; }
             }
 
-            if (!sat_r && !sat_g && !sat_b) _rawsum += rv + gv + bv;
+            if (!sat_r && !sat_g && !sat_b) rawsum_c += rv + gv + bv;
             if (sat_r || sat_g || sat_b)    _satCount++;
             _arrayiter++;
         }
@@ -453,8 +466,13 @@ void Enlight::processAdcCycle() {
         }
     }
 
-    _rout  += rout_c;  _gout  += gout_c;  _bout  += bout_c;
-    _rnear += rnear_c; _gnear += gnear_c; _bnear += bnear_c;
+    _rout  += (long long)roundf((float)rout_c  * _cycleNormScale);
+    _gout  += (long long)roundf((float)gout_c  * _cycleNormScale);
+    _bout  += (long long)roundf((float)bout_c  * _cycleNormScale);
+    _rnear += (long long)roundf((float)rnear_c * _cycleNormScale);
+    _gnear += (long long)roundf((float)gnear_c * _cycleNormScale);
+    _bnear += (long long)roundf((float)bnear_c * _cycleNormScale);
+    _rawsum += (long long)roundf((float)rawsum_c * _cycleNormScale);
 }
 
 /* ============================================================
@@ -529,6 +547,20 @@ void Enlight::spawnCycle() {
 void Enlight::onCycleDone() {
     processAdcCycle();
     _repsRemaining--;
+
+    // After each cycle: if saturation is heavy and more cycles remain, switch to low power.
+    if (!_useLowPower && _repsRemaining > 0) {
+        const uint32_t activeInCycle = (uint32_t)(_periodsPerCycle - 1) * _goertzPeriod;
+        const uint32_t cyclesDone    = _repetitions - _repsRemaining;
+        const uint32_t totalActive   = activeInCycle * cyclesDone;
+        if (totalActive > 0 &&
+            (float)_satCount > EnlightDefaults::SAT_SWITCH_FRAC * (float)totalActive) {
+            _useLowPower        = true;
+            _cycleNormScale     = 1.0f / EnlightDefaults::LOW_POWER_FACTOR;
+            _ledTrans.tx_buffer = _ledTxBufLow;
+        }
+    }
+
     if (_repsRemaining==0) {
         gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
         EnlightResult r=classify();
