@@ -82,6 +82,7 @@ public:
     float    actualFreqHz()    const { return _actualFreqHz;    }
     uint32_t goertzPeriod()    const { return _goertzPeriod;    }
     uint32_t periodsPerCycle() const { return _periodsPerCycle; }
+    bool     usedLowPower()    const { return _useLowPower;     }
 
     // True while a run() is in progress or its result has not yet been consumed by poll().
     // Non-destructive: does not clear the result. Use this for loop conditions.

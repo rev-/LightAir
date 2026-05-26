@@ -182,8 +182,10 @@ void EnlightTestMode::run() {
                      r, g, b, bitCount);
             snprintf(diagColorCoord, sizeof(diagColorCoord), "r:%.2f a:%.2f",
                      (double)outr_n, (double)outang);
-            snprintf(diagSs, sizeof(diagSs), "SUM:%lld sat:%lu",
-                     (long long)sumShr, (unsigned long)raw.satCount);
+            const uint32_t satPct = (raw.totalSamples > 0)
+                ? (uint32_t)(raw.satCount * 100u / raw.totalSamples) : 0u;
+            snprintf(diagSs, sizeof(diagSs), "sat:%lu%%%s",
+                     (unsigned long)satPct, _e.usedLowPower() ? " LP" : "");
 
             if (res.status == EnlightStatus::PLAYER_HIT &&
                 res.id < PlayerDefs::MAX_PLAYER_ID) {
