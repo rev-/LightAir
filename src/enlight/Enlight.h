@@ -176,6 +176,7 @@ private:
     uint8_t*            _ledTxBufLow = nullptr;   // 1/10-amplitude PDM buffer
     size_t              _ledBufBytes = 0;
     spi_transaction_t   _ledTrans    = {};
+    spi_transaction_t   _ledTransLow = {};
 
     // Adaptive power state (reset each run())
     bool      _useLowPower    = false;

@@ -223,6 +223,10 @@ bool Enlight::begin() {
     _ledTrans.tx_buffer=_ledTxBuf;
     _ledTrans.flags=SPI_TRANS_MODE_DIO;
     _ledTrans.length=_ledBufBytes*8;
+    memset(&_ledTransLow,0,sizeof(_ledTransLow));
+    _ledTransLow.tx_buffer=_ledTxBufLow;
+    _ledTransLow.flags=SPI_TRANS_MODE_DIO;
+    _ledTransLow.length=_ledBufBytes*8;
     memset(&_adcTrans,0,sizeof(_adcTrans));
     _adcTrans.tx_buffer=_adcTxBuf;
     _adcTrans.rx_buffer=_adcRxBuf;
@@ -249,7 +253,6 @@ bool Enlight::run() {
     _resultDelivered = false;
     _useLowPower    = false;
     _cycleNormScale = 1.0f;
-    _ledTrans.tx_buffer = _ledTxBuf;
     _active=true;
     _firstCycle=true;
     gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,1);
@@ -567,9 +570,8 @@ void Enlight::onCycleDone() {
         const uint32_t satThisCycle  = _satCount - satBefore;
         const uint32_t activeInCycle = (uint32_t)(_periodsPerCycle - 1) * _goertzPeriod;
         if (satThisCycle > activeInCycle * EnlightDefaults::SAT_SWITCH_FRAC) {
-            _useLowPower        = true;
-            _cycleNormScale     = 1.0f / EnlightDefaults::LOW_POWER_FACTOR;
-            _ledTrans.tx_buffer = _ledTxBufLow;
+            _useLowPower    = true;
+            _cycleNormScale = 1.0f / EnlightDefaults::LOW_POWER_FACTOR;
         }
     }
 
@@ -592,7 +594,8 @@ void Enlight::dmaTask(void* arg) {
         const int64_t t0=esp_timer_get_time();
         while (esp_timer_get_time()-t0 < (int64_t)EnlightDefaults::AFE_STARTUP_MICROS) {}
     }
-    spi_device_queue_trans(s->_ledDevice,&s->_ledTrans,portMAX_DELAY);
+    spi_transaction_t& ledTx = s->_useLowPower ? s->_ledTransLow : s->_ledTrans;
+    spi_device_queue_trans(s->_ledDevice,&ledTx,portMAX_DELAY);
     spi_device_queue_trans(s->_adcDevice,&s->_adcTrans,portMAX_DELAY);
     spi_transaction_t* r;
     spi_device_get_trans_result(s->_ledDevice,&r,portMAX_DELAY);
