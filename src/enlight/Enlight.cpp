@@ -466,23 +466,22 @@ void Enlight::processAdcCycle() {
         }
     }
 
-    if (_useLowPower) {
-        _rout   += (long long)roundf((float)rout_c   * _cycleNormScale);
-        _gout   += (long long)roundf((float)gout_c   * _cycleNormScale);
-        _bout   += (long long)roundf((float)bout_c   * _cycleNormScale);
-        _rnear  += (long long)roundf((float)rnear_c  * _cycleNormScale);
-        _gnear  += (long long)roundf((float)gnear_c  * _cycleNormScale);
-        _bnear  += (long long)roundf((float)bnear_c  * _cycleNormScale);
-        _rawsum += (long long)roundf((float)rawsum_c * _cycleNormScale);
-    } else {
-        _rout   += rout_c;
-        _gout   += gout_c;
-        _bout   += bout_c;
-        _rnear  += rnear_c;
-        _gnear  += gnear_c;
-        _bnear  += bnear_c;
-        _rawsum += rawsum_c;
+    if (_useLowPower) {  //Normalize values to full-power equivalent when working in low-power mode
+        rout_c   = (long long)roundf((float)rout_c   * _cycleNormScale);
+        gout_c   = (long long)roundf((float)gout_c   * _cycleNormScale);
+        bout_c   = (long long)roundf((float)bout_c   * _cycleNormScale);
+        rnear_c  = (long long)roundf((float)rnear_c  * _cycleNormScale);
+        gnear_c  = (long long)roundf((float)gnear_c  * _cycleNormScale);
+        bnear_c  = (long long)roundf((float)bnear_c  * _cycleNormScale);
+        rawsum_c = (long long)roundf((float)rawsum_c * _cycleNormScale);
     }
+    _rout   += rout_c;
+    _gout   += gout_c;
+    _bout   += bout_c;
+    _rnear  += rnear_c;
+    _gnear  += gnear_c;
+    _bnear  += bnear_c;
+    _rawsum += rawsum_c;
 }
 
 /* ============================================================
