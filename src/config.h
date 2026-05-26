@@ -166,7 +166,9 @@ namespace EnlightDefaults {
     constexpr uint32_t AFE_STARTUP_MICROS = 2000;
     constexpr uint16_t SAT_HIGH      = 4085;
     constexpr uint16_t SAT_LOW       = 10;
-    constexpr float    SAT_DITCH_FRAC = 0.95f; // ditch period if any channel has >95% saturated samples
+    constexpr float    SAT_DITCH_FRAC  = 0.95f; // ditch period if any channel has >95% saturated samples
+    constexpr float    SAT_SWITCH_FRAC = 0.25f; // switch to low-power PDM if >25% of active samples saturated
+    constexpr float    LOW_POWER_FACTOR = 0.1f; // amplitude scale for the dim PDM buffer
 }
 
 // ---------------------------------------------------------------

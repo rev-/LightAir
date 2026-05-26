@@ -28,11 +28,9 @@ static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 // ledFreqHz and ledClockHz are chosen accordingly.
 static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 
-static constexpr float    PDM_AMPLITUDE    = 0.95f;
-static constexpr float    LOW_POWER_FACTOR = 0.1f;   // amplitude scale for the dim PDM buffer
-static constexpr float    SAT_SWITCH_FRAC  = 0.25f;  // switch to low power if >25% active samples saturated
-static constexpr int32_t  KERN_MAG         = 2048;
-static constexpr int      GRID_MAX_THRESH  = CALIB_MAX_PLAYERS * 2;
+static constexpr float    PDM_AMPLITUDE   = 0.95f;
+static constexpr int32_t  KERN_MAG        = 2048;
+static constexpr int      GRID_MAX_THRESH = CALIB_MAX_PLAYERS * 2;
 
 // Result type
 enum class EnlightStatus : uint8_t {
