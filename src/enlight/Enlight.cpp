@@ -80,8 +80,8 @@ bool Enlight::generateWaveform(uint8_t* buf, float ampScale) {
         uint8_t byte = 0;
         for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
             const float theta = twoPiOverT * (float)(i + j);
-            const float d_far  = base + swing * PDM_AMPLITUDE * ampScale * cosf(theta);
-            const float d_near = base + swing * PDM_AMPLITUDE * ampScale * sinf(theta);
+            const float d_far  = (base + swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
+            const float d_near = (base + swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
             const uint8_t b_far  = (acc_far  >= 0.5f) ? 1u : 0u;
             const uint8_t b_near = (acc_near >= 0.5f) ? 1u : 0u;
             acc_far  += d_far  - (float)b_far;
