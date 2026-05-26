@@ -554,16 +554,19 @@ void Enlight::spawnCycle() {
 }
 
 void Enlight::onCycleDone() {
+    const uint32_t satBefore = _satCount;
     processAdcCycle();
     _repsRemaining--;
 
-    // After each cycle: if saturation is heavy and more cycles remain, switch to low power.
+    // After each cycle: if this cycle had significant saturation and more cycles
+    // remain, switch to low-power PDM for the rest of the run.
+    // Per-cycle check (not cumulative): even a modest fraction of saturated samples
+    // in one cycle is enough to trigger — saturation that causes analytic fitting
+    // is already above this level.
     if (!_useLowPower && _repsRemaining > 0) {
+        const uint32_t satThisCycle  = _satCount - satBefore;
         const uint32_t activeInCycle = (uint32_t)(_periodsPerCycle - 1) * _goertzPeriod;
-        const uint32_t cyclesDone    = _repetitions - _repsRemaining;
-        const uint32_t totalActive   = activeInCycle * cyclesDone;
-        if (totalActive > 0 &&
-            (float)_satCount > EnlightDefaults::SAT_SWITCH_FRAC * (float)totalActive) {
+        if (satThisCycle > activeInCycle * EnlightDefaults::SAT_SWITCH_FRAC) {
             _useLowPower        = true;
             _cycleNormScale     = 1.0f / EnlightDefaults::LOW_POWER_FACTOR;
             _ledTrans.tx_buffer = _ledTxBufLow;
