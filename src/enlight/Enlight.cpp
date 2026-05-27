@@ -13,6 +13,7 @@ static const char* TAG = "Enlight";
 Enlight::Enlight(const EnlightCalib& cal) : _cal(cal) {}
 Enlight::~Enlight() {
     heap_caps_free(_ledTxBuf);
+    heap_caps_free(_ledTxBufLow);
     heap_caps_free(_adcTxBuf);
     heap_caps_free(_adcRxBuf);
     heap_caps_free(_goertzTab);
@@ -75,13 +76,19 @@ bool Enlight::generateWaveform(uint8_t* buf, float ampScale) {
     const float base = 0.5f + EnlightDefaults::PDM_AMP_OFFSET;
     const float swing = 0.5f - EnlightDefaults::PDM_AMP_OFFSET;
     const float twoPiOverT = 2.0f * (float)M_PI / (float)_periodClocks;
-    float acc_far = 0.0f, acc_near = 0.0f;
+    // SPI output is hardware-inverted: bit=1 → LED OFF, bit=0 → LED ON.
+    // To scale LED power by ampScale, scale the LED signal (1-SPI), not SPI itself:
+    //   SPI = 1 - (1 - base - swing*A*cos) * ampScale
+    // At ampScale=1 this reduces to base + swing*A*cos (identical to full-power).
+    // At ampScale=0.1, average SPI ≈ 0.96 → LED ON ~4% → dim.
+    // acc init 0.5 → first output bit = 1 (LED OFF) at theta=0, as expected.
+    float acc_far = 0.5f, acc_near = 0.5f;
     for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
         uint8_t byte = 0;
         for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
             const float theta = twoPiOverT * (float)(i + j);
-            const float d_far  = (base + swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
-            const float d_near = (base + swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
+            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
+            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
             const uint8_t b_far  = (acc_far  >= 0.5f) ? 1u : 0u;
             const uint8_t b_near = (acc_near >= 0.5f) ? 1u : 0u;
             acc_far  += d_far  - (float)b_far;
