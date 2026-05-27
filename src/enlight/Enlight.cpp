@@ -81,8 +81,18 @@ bool Enlight::generateWaveform(uint8_t* buf, float ampScale) {
     //   SPI = 1 - (1 - base - swing*A*cos) * ampScale
     // At ampScale=1 this reduces to base + swing*A*cos (identical to full-power).
     // At ampScale=0.1, average SPI ≈ 0.96 → LED ON ~4% → dim.
-    // acc init 0.5 → first output bit = 1 (LED OFF) at theta=0, as expected.
-    float acc_far = 0.5f, acc_near = 0.5f;
+    // Dry-run one full period to find the periodic steady-state accumulator values,
+    // so the real pass starts in-phase with no transient.
+    float acc_far = 0.0f, acc_near = 0.0f;
+    for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
+        for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
+            const float theta = twoPiOverT * (float)(i + j);
+            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
+            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
+            acc_far  += d_far  - (float)((acc_far  >= 0.5f) ? 1u : 0u);
+            acc_near += d_near - (float)((acc_near >= 0.5f) ? 1u : 0u);
+        }
+    }
     for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
         uint8_t byte = 0;
         for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
