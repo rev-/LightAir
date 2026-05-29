@@ -1,4 +1,5 @@
 #include "EnlightCalibRoutine.h"
+#include "esp_system.h"
 #include "../nvs_config.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -331,7 +332,7 @@ void EnlightCalibRoutine::step4() {
         }
 
         char footer[22];
-        snprintf(footer, sizeof(footer), "^V pg%u/%u TRIG2:done", page + 1, N_PAGES);
+        snprintf(footer, sizeof(footer), "^V pg%u/%u TRIG2:apply", page + 1, N_PAGES);
         _disp.print(0, 50, footer);
         _disp.flush();
 
@@ -343,6 +344,7 @@ void EnlightCalibRoutine::step4() {
             for (uint8_t i = 0; i < rep.buttonCount; i++) {
                 if (rep.buttons[i].id == TRIG_2_ID &&
                     (rep.buttons[i].state == ButtonState::HELD))
+                    esp_restart();
                     return;
             }
 
