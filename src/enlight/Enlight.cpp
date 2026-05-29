@@ -170,8 +170,8 @@ void Enlight::buildGrid() {
 }
 
 int Enlight::gridLookup(float outr, float outang) const {
-    if (_grid.nX==0||outr<_grid.xThresh[0]||outr>_grid.xThresh[_grid.nX-1]
-      ||_grid.nY==0||outang<_grid.yThresh[0]||outang>_grid.yThresh[_grid.nY-1])
+    if ((_grid.nX==0 && _grid.nY==0) ||outr<_grid.xThresh[0]||outr>_grid.xThresh[_grid.nX-1]
+      ||outang<_grid.yThresh[0]||outang>_grid.yThresh[_grid.nY-1])
         return -1;
     const uint8_t p = _grid.table
         [upper_bound_f(_grid.xThresh,_grid.nX,outr)]
