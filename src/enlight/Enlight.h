@@ -60,6 +60,13 @@ struct EnlightRawMeasure {
     uint32_t  totalSamples;        // total triples processed (_arrayiter)
 };
 
+// Baseline-corrected color coordinates — exact values used by classify() for grid lookup.
+// outr=0/outang=0 if signal was LOW_POW, NEAR, or sum<=0.
+struct EnlightColorCoords {
+    float outr;
+    float outang;
+};
+
 // Grid classifier: O(log N) lookup in non-overlapping (outr, outang) boxes
 struct GridClassifier {
     float   xThresh[GRID_MAX_THRESH];
@@ -118,8 +125,9 @@ public:
     // Raw correlator accumulators from the last completed run.
     // Valid to call immediately after poll() returns a non-RUNNING status.
     // Values are reset by run(), so call this before the next run().
-    EnlightRawMeasure rawMeasure() const;
-    const EnlightCalib& calib() const { return _cal; }
+    EnlightRawMeasure   rawMeasure()   const;
+    EnlightColorCoords  colorCoords()  const { return _colorCoords; }
+    const EnlightCalib& calib()        const { return _cal; }
 
     // Access to the raw ADC DMA buffer from the last completed DMA cycle.
     // Only the last cycle is retained; call before the next run().
@@ -168,7 +176,8 @@ private:
     int32_t*    _goertzTab  = nullptr;
     uint32_t    _nearOffset = 0;
 
-    uint32_t    _activePeriods = 0;  // non-ditched, non-settling periods accumulated this run
+    uint32_t            _activePeriods = 0;  // non-ditched, non-settling periods accumulated this run
+    EnlightColorCoords  _colorCoords   = {0.0f, 0.0f};
 
     // LED DIO SPI
     spi_device_handle_t _ledDevice    = nullptr;

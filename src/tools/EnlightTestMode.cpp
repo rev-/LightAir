@@ -144,44 +144,18 @@ void EnlightTestMode::run() {
                 delay(GameDefaults::LOOP_MS);
             } while (res.status == EnlightStatus::RUNNING);
 
-            EnlightRawMeasure raw = _e.rawMeasure();
-            const EnlightCalib& cal = _e.calib();
-            // Subtract baseline using the same nCycles formula as classify().
-            const long long nCyc = (raw.totalSamples > 0 &&
-                                    _e.goertzPeriod() > 0 &&
-                                    _e.periodsPerCycle() > 0)
-                ? (long long)raw.totalSamples /
-                  ((long long)_e.goertzPeriod() * (long long)_e.periodsPerCycle())
-                : 1LL;
-            long long r = raw.rout - (long long)((float)cal.rcal * (float)nCyc);
-            long long g = raw.gout - (long long)((float)cal.gcal * (float)nCyc);
-            long long b = raw.bout - (long long)((float)cal.bcal * (float)nCyc);
-            if (r < 0) r = 0;
-            if (g < 0) g = 0;
-            if (b < 0) b = 0;
-            float rw = (float)r * cal.rfact;
-            float gw = (float)g;
-            float bw = (float)b * cal.bfact;
-            float s  = rw + gw + bw;
-            float outr_n = (s > 0.f) ? (rw / s) : 0.f;
-            float outang  = (s > 0.f && outr_n < 1.f) ? (gw / s) / (1.f - outr_n) : 0.f;
+            EnlightRawMeasure  raw   = _e.rawMeasure();
+            EnlightColorCoords color = _e.colorCoords();
 
-            long long rawSum = r+g+b;
+            long long rawSum = raw.rout + raw.gout + raw.bout;
             long long sumShr = rawSum;
             int bitCount = 0;
-            while (sumShr>1024){
-                sumShr>>=1;
-                bitCount++;
-            }
-
-            r >>= bitCount;
-            g >>= bitCount;
-            b >>= bitCount;
+            while (sumShr > 1024) { sumShr >>= 1; bitCount++; }
 
             snprintf(diagRgb, sizeof(diagRgb), "r:%03lld g:%03lld b:%03lld >>%d",
-                     r, g, b, bitCount);
+                     raw.rout >> bitCount, raw.gout >> bitCount, raw.bout >> bitCount, bitCount);
             snprintf(diagColorCoord, sizeof(diagColorCoord), "r:%.2f a:%.2f",
-                     (double)outr_n, (double)outang);
+                     (double)color.outr, (double)color.outang);
             const uint32_t satPct = (raw.totalSamples > 0)
                 ? (uint32_t)(raw.satCount * 100u / raw.totalSamples) : 0u;
             snprintf(diagSs, sizeof(diagSs), "sat:%lu%%%s",

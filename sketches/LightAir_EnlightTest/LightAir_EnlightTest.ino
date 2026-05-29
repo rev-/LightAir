@@ -25,17 +25,16 @@
 //   On connect :  # mode=<RAW|ELAB> trig=<MANUAL|AUTO[Ns]>
 //
 //   RAW block :
-//     RAW_BEGIN,<ms>,<sample_count>,<rout>,<gout>,<bout>,<outr>,<outang>,<class>
-//     SAMPLE,<ms>,<idx>,<r>,<g>,<b>,<sat>
+//     RAW_BEGIN,<ms>,<sample_count>,<outr>,<outang>,<matched_id>
+//     SAMPLE,<ms>,<idx>,<r>,<g>,<b>,<sat>,<kernel>
 //       ... (sample_count lines) ...
 //     RAW_END,<ms>
 //
 //     <r>/<g>/<b> are raw 12-bit ADC values (0–4095).
 //     <sat> is 1 if any channel >= 4085 or <= 10, else 0.
-//     <idx> counts RGB triples (0-based), not raw conversions.
-//     <rout>/<gout>/<bout> are accumulated correlator sums (far-field).
-//     <outr>/<outang> are elaborated values (normalized color space).
-//     <class> is player ID (1-16) or -1 (NO_HIT).
+//     <kernel> is the Goertzel kernel value at this sample's phase.
+//     <outr>/<outang> are baseline-corrected color coordinates from Enlight.
+//     <matched_id> is player ID (1-16) or 0 (no hit).
 //
 //   ELAB line :  ELAB,<ms>,<status>,<id>,<rout>,<gout>,<bout>,
 //                     <rnear>,<gnear>,<bnear>
@@ -339,43 +338,12 @@ static void takeMeasurement() {
 
         uint32_t startTs = millis();
 
-        // Compute correlator sums by processing the ADC samples
-        long long rout = 0, gout = 0, bout = 0;
-        for (uint32_t t = 0; t < trips; t++) {
-            const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
-            const uint16_t rv = adcSample(buf, base);
-            const uint16_t gv = adcSample(buf, base + 1);
-            const uint16_t bv = adcSample(buf, base + 2);
-            const int32_t sinVal = goertzTab ? goertzTab[t % gp] : 0;
-            rout += (long long)rv * sinVal;
-            gout += (long long)gv * sinVal;
-            bout += (long long)bv * sinVal;
-        }
+        // Use Enlight's baseline-corrected color coordinates (same as classify())
+        EnlightColorCoords color = enlight->colorCoords();
 
-        // Compute elaborated values by subtracting baseline calibration
-        long long r = rout - (long long)enlightCalib.rcal * ENLIGHT_REPS;
-        long long g = gout - (long long)enlightCalib.gcal * ENLIGHT_REPS;
-        long long b = bout - (long long)enlightCalib.bcal * ENLIGHT_REPS;
-
-        // Compute outr and outang using calibration factors
-        double sum = r * enlightCalib.rfact + g + b * enlightCalib.bfact;
-        double outr = 0.0;
-        double outang = 0.0;
-        if (sum != 0.0) {
-            outr = (r * enlightCalib.rfact) / sum;
-            double outg_norm = g / sum;
-            if (outr < 1.0 && outr > 0.0) {
-                outang = outg_norm / (1.0 - outr);
-            } else {
-                outang = 0.0;
-            }
-        }
-
-        // Classify the (outr, outang) color pair
-        int playerClass = classifyColorBox((float)outr, (float)outang);
-
-        snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu,%lld,%lld,%lld,%.6f,%.6f,%d\n",
-                 (unsigned long)startTs, (unsigned long)trips, rout, gout, bout, outr, outang, playerClass);
+        snprintf(line, sizeof(line), "RAW_BEGIN,%lu,%lu,%.6f,%.6f,%d\n",
+                 (unsigned long)startTs, (unsigned long)trips,
+                 color.outr, color.outang, (int)res.id);
         tcpClient.print(line);
 
         for (uint32_t t = 0; t < trips; t++) {
@@ -396,29 +364,8 @@ static void takeMeasurement() {
         snprintf(line, sizeof(line), "RAW_END,%lu\n", (unsigned long)endTs);
         tcpClient.print(line);
     } else {
-        // rawMeasure() must be called before the next run(); grab it now.
-        EnlightRawMeasure raw = enlight->rawMeasure();
-
-        // Compute elaborated values (normalized color space)
-        // Subtract baseline calibration (scaled by number of DMA cycles)
-        // In ELABORATED mode, estimate cycles from ENLIGHT_REPS
-        long long r = raw.rout - (long long)enlightCalib.rcal * ENLIGHT_REPS;
-        long long g = raw.gout - (long long)enlightCalib.gcal * ENLIGHT_REPS;
-        long long b = raw.bout - (long long)enlightCalib.bcal * ENLIGHT_REPS;
-
-        // Compute outr and outang using calibration factors
-        double sum = r * enlightCalib.rfact + g + b * enlightCalib.bfact;
-        double outr = 0.0;
-        double outang = 0.0;
-        if (sum != 0.0) {
-            outr = (r * enlightCalib.rfact) / sum;
-            double outg_norm = g / sum;
-            if (outr < 1.0 && outr > 0.0) {
-                outang = outg_norm / (1.0 - outr);
-            } else {
-                outang = 0.0;
-            }
-        }
+        EnlightRawMeasure  raw   = enlight->rawMeasure();
+        EnlightColorCoords color = enlight->colorCoords();
 
         snprintf(line, sizeof(line),
             "ELAB,%lu,%s,%u,%lld,%lld,%lld,%lld,%lld,%lld,%.6f,%.6f,%lu\n",
@@ -426,7 +373,7 @@ static void takeMeasurement() {
             statusStr(res.status), res.id,
             raw.rout,  raw.gout,  raw.bout,
             raw.rnear, raw.gnear, raw.bnear,
-            outr, outang,
+            color.outr, color.outang,
             (unsigned long)raw.satCount);
         tcpClient.print(line);
     }
@@ -500,8 +447,8 @@ void loop() {
             // Column labels so each field is self-documenting.
             if (gDataMode == DataMode::RAW) {
                 tcpClient.print(
-                    "# RAW_BEGIN,timestamp_ms,sample_count,rout(far-R),gout(far-G),bout(far-B),outr(norm),outang,class\n"
-                    "# SAMPLE,timestamp_ms,triple_idx,r(12bit),g(12bit),b(12bit),saturated,sinVal\n"
+                    "# RAW_BEGIN,timestamp_ms,sample_count,outr(norm),outang,matched_id\n"
+                    "# SAMPLE,timestamp_ms,triple_idx,r(12bit),g(12bit),b(12bit),saturated,kernel\n"
                     "# RAW_END,timestamp_ms\n");
             } else {
                 tcpClient.print(

@@ -267,6 +267,7 @@ bool Enlight::run() {
     taskEXIT_CRITICAL(&_mux);
     _rout=_gout=_bout=_rnear=_gnear=_bnear=_rawsum=0;
     _arrayiter=_satCount=_activePeriods=0;
+    _colorCoords={0.0f,0.0f};
     _resultDelivered = false;
     _useLowPower    = false;
     _cycleNormScale = 1.0f;
@@ -547,6 +548,7 @@ EnlightResult Enlight::classify() {
     if (s <= 0.0f) return {EnlightStatus::NO_HIT, 0};
     outr /= s; outg /= s;
     const float outang = (outr < 1.0f) ? (outg / (1.0f - outr)) : 1.0f;
+    _colorCoords = {outr, outang};
     const int hit = gridLookup(outr, outang);
     if (hit > 0) {
         ESP_LOGI(TAG, "HIT player %d (outr=%.3f outang=%.3f)", hit, outr, outang);
