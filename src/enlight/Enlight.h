@@ -60,6 +60,12 @@ struct EnlightRawMeasure {
     uint32_t  totalSamples;        // total triples processed (_arrayiter)
 };
 
+// Baseline-corrected color coordinates — exact values used by classify() for grid lookup.
+struct EnlightColorCoords {
+    float outr;    // normalized red coordinate (0–1)
+    float outang;  // normalized green angle
+};
+
 // Grid classifier: O(log N) lookup in non-overlapping (outr, outang) boxes
 struct GridClassifier {
     float   xThresh[GRID_MAX_THRESH];
@@ -135,6 +141,11 @@ public:
     // Near kernel weight: goertzTab[(t % goertzPeriod() + nearOffset) % goertzPeriod()].
     // Valid after begin() / buildGoertzTab(); nullptr if allocation failed.
     const int32_t* rawGoertzTab() const { return _goertzTab; }
+
+    // Baseline-corrected color coordinates from the last completed run.
+    // Returns the exact (outr, outang) values used by classify() for grid lookup.
+    // Valid to call after poll() returns a non-RUNNING status.
+    EnlightColorCoords colorCoords() const;
 
     // Rebuild the Goertzel kernel table with the given phase offset.
     // Safe to call outside of an active run().
