@@ -281,27 +281,6 @@ EnlightRawMeasure Enlight::rawMeasure() const {
     return { _rout, _gout, _bout, _rnear, _gnear, _bnear, _satCount, _arrayiter };
 }
 
-EnlightColorCoords Enlight::colorCoords() const {
-    // Baseline correction — exact same formula as classify()
-    const long long nCycles = (long long)(_arrayiter / (_goertzPeriod * _periodsPerCycle));
-    const float nd_f  = (float)(_periodsPerCycle - 1) * (float)nCycles;
-    const float scale = (nd_f > 0.0f) ? ((float)_activePeriods / nd_f) : 1.0f;
-    const float baseScale = scale * (float)nCycles;
-    const long long eff_rcal = (long long)roundf((float)_cal.rcal * baseScale);
-    const long long eff_gcal = (long long)roundf((float)_cal.gcal * baseScale);
-    const long long eff_bcal = (long long)roundf((float)_cal.bcal * baseScale);
-
-    const long long rout = (_rout > eff_rcal) ? _rout - eff_rcal : 0LL;
-    const long long gout = (_gout > eff_gcal) ? _gout - eff_gcal : 0LL;
-    const long long bout = (_bout > eff_bcal) ? _bout - eff_bcal : 0LL;
-
-    float outr = rout * _cal.rfact, outb = bout * _cal.bfact, outg = (float)gout;
-    const float s = outr + outb + outg;
-    if (s <= 0.0f) return {0.0f, 0.0f};
-    outr /= s; outg /= s;
-    return { outr, (outr < 1.0f) ? (outg / (1.0f - outr)) : 1.0f };
-}
-
 EnlightResult Enlight::poll() {
     if (!_active) return {EnlightStatus::IDLE,0};
     if (!_complete) return {EnlightStatus::RUNNING,0};
