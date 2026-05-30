@@ -471,16 +471,19 @@ EnlightResult Enlight::classify() {
     // Multiply by nCycles so the baseline scales with the number of repetitions,
     // then scale for any ditched periods so over-subtraction is avoided.
 
-    // take limit power per channel as defined in the calibration
-    // if at least one is over threshold, it is expected to come from an RR
-    if ((_rout < _cal.thresh_far_r) && (_gout < _cal.thresh_far_g) && (_bout < _cal.thresh_far_b)){
-        return {EnlightStatus::LOW_POW, 0};
-    }
-
     const long long nCycles = (long long)(_arrayiter / (_goertzPeriod * _periodsPerCycle));
     const float nd_f  = (float)(_periodsPerCycle - 1) * (float)nCycles;
     const float scale = (nd_f > 0.0f) ? ((float)_activePeriods / nd_f) : 1.0f;
     const float baseScale = scale * (float)nCycles;
+
+    // Check if total power in all channels is below white-wall diffusing surface reference.
+    // thresh_far_* are per-cycle peaks from calibration; scale by baseScale to match
+    // the accumulated _rout/_gout/_bout values.
+    if ((_rout < (long long)(_cal.thresh_far_r * baseScale)) &&
+        (_gout < (long long)(_cal.thresh_far_g * baseScale)) &&
+        (_bout < (long long)(_cal.thresh_far_b * baseScale))){
+        return {EnlightStatus::LOW_POW, 0};
+    }
     const long long eff_rcal     = (long long)roundf((float)_cal.rcal     * baseScale);
     const long long eff_gcal     = (long long)roundf((float)_cal.gcal     * baseScale);
     const long long eff_bcal     = (long long)roundf((float)_cal.bcal     * baseScale);
