@@ -32,8 +32,12 @@
 // Step 3 — white diffusing surface (contact … 5 m):
 // maximum near and far correlator power seen during the sweep.
 // Used to distinguish reflective targets from diffusing surfaces.
-#define CAL_KEY_MAX_NEAR_WHITE  "max_near_w"   // Max Near White (uint32)
-#define CAL_KEY_MAX_FAR_WHITE   "max_far_w"    // Max Far White  (uint32)
+#define CAL_KEY_THRESH_NEAR_R  "thresh_near_r"   // Max Near Red (uint32)
+#define CAL_KEY_THRESH_NEAR_G  "thresh_near_g"   // Max Near Green (uint32)
+#define CAL_KEY_THRESH_NEAR_B  "thresh_near_b"   // Max Near Blue (uint32)
+#define CAL_KEY_THRESH_FAR_R   "thresh_far_r"    // Max Far Red  (uint32)
+#define CAL_KEY_THRESH_FAR_G   "thresh_far_g"    // Max Far Green  (uint32)
+#define CAL_KEY_THRESH_FAR_B   "thresh_far_b"    // Max Far Blue  (uint32)
 #define CALIB_MAX_PLAYERS       16
 
 // ---------------------------------------------------------------

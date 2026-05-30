@@ -253,7 +253,8 @@ void EnlightCalibRoutine::step3() {
               "TRIG1 to start.");
     waitTrig(TRIG_1_ID);
 
-    uint32_t maxNear = 0, maxFar = 0;
+    uint32_t maxNear_r = 0, maxNear_g = 0, maxNear_b = 0;
+    uint32_t maxFar_r = 0, maxFar_g = 0, maxFar_b = 0;
     uint32_t n = 0;
 
     while (n < N_RUNS) {
@@ -265,19 +266,24 @@ void EnlightCalibRoutine::step3() {
         EnlightRawMeasure m;
         runOne(m);  // no saturation rejection
 
-        const uint32_t nearPow = (uint32_t)(llabs(m.rnear) + llabs(m.gnear) + llabs(m.bnear));
-        const uint32_t farPow  = (uint32_t)(llabs(m.rout)  + llabs(m.gout)  + llabs(m.bout));
-
-        if (nearPow > maxNear) maxNear = nearPow;
-        if (farPow  > maxFar)  maxFar  = farPow;
+        if(m.rnear > maxNear_r) maxNear_r = m.rnear;
+        if(m.gnear > maxNear_g) maxNear_g = m.gnear;
+        if(m.bnear > maxNear_b) maxNear_b = m.bnear;
+        if(m.rout > maxFar_r) maxFar_r = m.rout;
+        if(m.gout > maxFar_g) maxFar_g = m.gout;
+        if(m.bout > maxFar_b) maxFar_b = m.bout;
         n++;
     }
 
     // Persist Max Near White and Max Far White.
     EnlightCalib cal;
     enlight_calib_load(cal);
-    cal.maxNearWhite = maxNear;
-    cal.maxFarWhite  = maxFar;
+    cal.thresh_near_r = (uint32_t)((maxNear_r*1.0)/(REPS)); // Normalize by REPS since these are per-cycle sums.
+    cal.thresh_near_g = (uint32_t)((maxNear_g*1.0)/(REPS));
+    cal.thresh_near_b = (uint32_t)((maxNear_b*1.0)/(REPS));
+    cal.thresh_far_r  = (uint32_t)((maxFar_r*1.0)/(REPS));
+    cal.thresh_far_g  = (uint32_t)((maxFar_g*1.0)/(REPS));
+    cal.thresh_far_b  = (uint32_t)((maxFar_b*1.0)/(REPS));
     enlight_calib_save(cal);
 
     // Show results.

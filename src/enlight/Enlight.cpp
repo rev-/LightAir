@@ -470,6 +470,13 @@ EnlightResult Enlight::classify() {
     // cal.*cal values are per-DMA-cycle baselines (sRF[mid] / REPS from step2).
     // Multiply by nCycles so the baseline scales with the number of repetitions,
     // then scale for any ditched periods so over-subtraction is avoided.
+
+    // take limit power per channel as defined in the calibration
+    // if at least one is over threshold, it is expected to come from an RR
+    if ((_rout < _cal.thresh_far_r) && (_gout < _cal.thresh_far_g) && (_bout < _cal.thresh_far_b)){
+        return {EnlightStatus::LOW_POW, 0};
+    }
+
     const long long nCycles = (long long)(_arrayiter / (_goertzPeriod * _periodsPerCycle));
     const float nd_f  = (float)(_periodsPerCycle - 1) * (float)nCycles;
     const float scale = (nd_f > 0.0f) ? ((float)_activePeriods / nd_f) : 1.0f;
@@ -491,8 +498,6 @@ EnlightResult Enlight::classify() {
     ESP_LOGD(TAG, "rawsum=%lld far=(%lld,%lld,%lld) near=(%lld,%lld,%lld) sat=%lu",
              _rawsum, rout, gout, bout, _rnear, _gnear, _bnear,
              (unsigned long)_satCount);
-
-    if (_rawsum <= (long long)_cal.limpow) return {EnlightStatus::LOW_POW, 0};
 
     const float farSum  = (float)((rout)  + (gout)  + (bout));
     const float nearSum = (float)((_rnear) + (_gnear) + (_bnear));
