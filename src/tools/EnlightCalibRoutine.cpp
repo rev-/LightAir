@@ -1,4 +1,5 @@
 #include "EnlightCalibRoutine.h"
+#include "esp_system.h"
 #include "../nvs_config.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,7 +87,7 @@ void EnlightCalibRoutine::step1() {
     enlight_calib_load(cal);
     cal.phaseOff = bestPhase;
     enlight_calib_save(cal);
-    _e.buildSintab(bestPhase);
+    _e.buildGoertzTab(bestPhase);
 
     // Show results.
     const long long avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
@@ -183,13 +184,13 @@ void EnlightCalibRoutine::step2() {
     cal.bcalNear = (uint32_t)(sBN[mid] > 0 ? sBN[mid] / REPS : 0);
 
     // Compute white-balance factors from step1 clear-target measurements.
-    // For each measurement: subtract baseline, compute rfact = g/r and bfact = g/b.
+    // _step1_r/g/b[i] accumulated over REPS cycles; subtract REPS cycles of baseline.
     float rfact_arr[N_RUNS], bfact_arr[N_RUNS];
     uint32_t rfact_count = 0, bfact_count = 0;
     for (uint32_t i = 0; i < _step1_n; i++) {
-        long long r = _step1_r[i] - cal.rcal;
-        long long g = _step1_g[i] - cal.gcal;
-        long long b = _step1_b[i] - cal.bcal;
+        long long r = _step1_r[i] - (long long)REPS * (long long)cal.rcal;
+        long long g = _step1_g[i] - (long long)REPS * (long long)cal.gcal;
+        long long b = _step1_b[i] - (long long)REPS * (long long)cal.bcal;
         if (r > 0) {
             rfact_arr[rfact_count++] = (float)g / (float)r;
         }
@@ -331,7 +332,7 @@ void EnlightCalibRoutine::step4() {
         }
 
         char footer[22];
-        snprintf(footer, sizeof(footer), "^V pg%u/%u TRIG2:done", page + 1, N_PAGES);
+        snprintf(footer, sizeof(footer), "^V pg%u/%u TRIG2:apply", page + 1, N_PAGES);
         _disp.print(0, 50, footer);
         _disp.flush();
 
@@ -343,6 +344,7 @@ void EnlightCalibRoutine::step4() {
             for (uint8_t i = 0; i < rep.buttonCount; i++) {
                 if (rep.buttons[i].id == TRIG_2_ID &&
                     (rep.buttons[i].state == ButtonState::HELD))
+                    esp_restart();
                     return;
             }
 
@@ -365,6 +367,7 @@ void EnlightCalibRoutine::step4() {
  * ============================================================ */
 
 bool EnlightCalibRoutine::runOne(EnlightRawMeasure& out) {
+    _e.setRepetitions(REPS);
     _e.run();
     while (_e.poll().status == EnlightStatus::RUNNING)
         delay(1);
@@ -375,30 +378,37 @@ bool EnlightCalibRoutine::runOne(EnlightRawMeasure& out) {
 
 uint32_t EnlightCalibRoutine::computeBestPhase() {
     const uint32_t gp       = _e.goertzPeriod();
-    const uint32_t maxOff   = gp / 4;            // scan 0 … 90°
     const uint8_t* buf      = _e.rawAdcBuf();
     const uint32_t nTriples = _e.adcConvsPerCycle() / ADC_CHANNELS;
 
-    // Precompute one period of integer sine values (same scale as Enlight's sintab).
-    int32_t* sinLut = (int32_t*)malloc(gp * sizeof(int32_t));
-    if (!sinLut) return 0;
+    // Pre-build one period of the FAR kernel at phase 0 using the same formula
+    // as Enlight::buildGoertzTab() — Enlight::kernelEntry is the single source of
+    // truth so this scan always matches the kernel actually used in processing.
+    int32_t* kernelLut = (int32_t*)malloc(gp * sizeof(int32_t));
+    if (!kernelLut) return 0;
     for (uint32_t i = 0; i < gp; i++)
-        sinLut[i] = (int32_t)roundf((float)SIN_MAG * sinf(2.0f * (float)M_PI * i / (float)gp));
+        kernelLut[i] = Enlight::kernelEntry(gp, i);
 
     uint32_t  bestPhase = 0;
     long long bestVal   = 0;
     bool      found     = false;
 
-    for (uint32_t p = 0; p <= maxOff; p++) {
+    for (uint32_t p = 0; p < gp; p++) {
         long long sum = 0;
-        for (uint32_t t = 0; t < nTriples; t++) {
+        // Skip the first period (t = 0..gp-1): it contains the photodiode
+        // settling transient from the inter-cycle LED gap, exactly as
+        // processAdcCycle() does with its p==0 continue.  Including it biases
+        // the phase estimate toward the transient rather than the steady-state
+        // signal and produces wrong results when the DMA buffer comes from a
+        // cycle with a short gap (reps > 1).
+        for (uint32_t t = gp; t < nTriples; t++) {
             // Each DMA cycle holds an exact integer number of periods, so
             // triple t has phase (t % gp) within that cycle.
             const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
             const long long rv = (((uint16_t)buf[base*2]     << 8) | buf[base*2+1])     & 0x0FFF;
             const long long gv = (((uint16_t)buf[(base+1)*2] << 8) | buf[(base+1)*2+1]) & 0x0FFF;
             const long long bv = (((uint16_t)buf[(base+2)*2] << 8) | buf[(base+2)*2+1]) & 0x0FFF;
-            sum += (rv + gv + bv) * sinLut[(t % gp + p) % gp];
+            sum += (rv + gv + bv) * kernelLut[(t % gp + p) % gp];
         }
         if (!found || sum > bestVal) {
             bestVal   = sum;
@@ -407,7 +417,7 @@ uint32_t EnlightCalibRoutine::computeBestPhase() {
         }
     }
 
-    free(sinLut);
+    free(kernelLut);
     return bestPhase;
 }
 

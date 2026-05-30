@@ -13,10 +13,11 @@
 //   For each of N_RUNS measurements the user presses TRIG1 to trigger a
 //   single Enlight run.  Runs with saturation > SAT_THRESH are discarded
 //   (user must press TRIG1 again).  For each valid run the raw ADC buffer
-//   is correlated against a shifted sine table at offsets 0…goertzPeriod/4
-//   (0°…90°); the offset yielding the maximum sum is recorded as the
-//   bestPhase for that shot.  After all shots the bestPhase values are
-//   sorted and the median is saved to NVS and applied.
+//   is correlated against a shifted kernel at all offsets 0…goertzPeriod-1
+//   (full 360° scan), skipping the first period to match processAdcCycle();
+//   the offset yielding the maximum sum is recorded as the bestPhase for
+//   that shot.  After all shots the bestPhase values are sorted and the
+//   median is saved to NVS and applied.
 //   Press TRIG2 to continue.
 //
 // Step 2 — Baseline ("void", no target):
@@ -53,7 +54,9 @@ private:
     void step3();
     void step4();  // calibration summary — paged view of all NVS values
 
-    // Run one Enlight measurement (REPS repetitions) and block until done.
+    // Run one Enlight measurement (exactly REPS repetitions) and block until
+    // done.  Sets _repetitions = REPS before each run so the result is
+    // independent of any global setRepetitions() call (e.g. from GameOutflow).
     // Returns false if saturation rate exceeds SAT_THRESH (run should be
     // discarded and not counted toward the total).
     bool runOne(EnlightRawMeasure& out);
@@ -75,7 +78,7 @@ private:
     static constexpr uint32_t N_RUNS     = 50;    // valid runs to collect per step
     static constexpr uint32_t REPS       = 5;     // run() repetitions per measurement
     static constexpr uint32_t DELAY_MS   = 100;   // ms between measurements
-    static constexpr float    SAT_THRESH = 0.10f; // discard if > 10 % saturated
+    static constexpr float    SAT_THRESH = 0.00f; // discard if any sample is saturated
 
     Enlight&            _e;
     LightAir_Display&   _disp;

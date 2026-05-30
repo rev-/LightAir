@@ -23,14 +23,13 @@ static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 // so that every period contains an exact integer number of R/G/B ADC triples.
 //
 // Additionally GOERTZ_PERIOD (_goertzPeriod) must be divisible by 4 so that
-// _cosOffset = GOERTZ_PERIOD/4 is an exact integer and sine/cosine remain
+// _nearOffset = 3*GOERTZ_PERIOD/4 is an exact integer and far/near kernels remain
 // orthogonal. begin() logs an error if this condition is violated. Ensure
 // ledFreqHz and ledClockHz are chosen accordingly.
 static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 
-static constexpr float    PDM_AMPLITUDE = 0.95f;
-static constexpr int32_t  SIN_MAG       = 2048;
-static constexpr int      GRID_MAX_THRESH = CALIB_MAX_PLAYERS * 2;
+static constexpr float    PDM_AMPLITUDE   = 0.95f;
+static constexpr int32_t  KERN_MAG        = 2048;
 
 // Result type
 enum class EnlightStatus : uint8_t {
@@ -60,12 +59,11 @@ struct EnlightRawMeasure {
     uint32_t  totalSamples;        // total triples processed (_arrayiter)
 };
 
-// Grid classifier: O(log N) lookup in non-overlapping (outr, outang) boxes
-struct GridClassifier {
-    float   xThresh[GRID_MAX_THRESH];
-    float   yThresh[GRID_MAX_THRESH];
-    int     nX, nY;
-    uint8_t table[GRID_MAX_THRESH + 1][GRID_MAX_THRESH + 1];
+// Baseline-corrected color coordinates — exact values used by classify() for box matching.
+// outr=0/outang=0 if signal was LOW_POW, NEAR, or sum<=0.
+struct EnlightColorCoords {
+    float outr;
+    float outang;
 };
 
 class Enlight
@@ -82,6 +80,7 @@ public:
     float    actualFreqHz()    const { return _actualFreqHz;    }
     uint32_t goertzPeriod()    const { return _goertzPeriod;    }
     uint32_t periodsPerCycle() const { return _periodsPerCycle; }
+    bool     usedLowPower()    const { return _useLowPower;     }
 
     // True while a run() is in progress or its result has not yet been consumed by poll().
     // Non-destructive: does not clear the result. Use this for loop conditions.
@@ -117,8 +116,9 @@ public:
     // Raw correlator accumulators from the last completed run.
     // Valid to call immediately after poll() returns a non-RUNNING status.
     // Values are reset by run(), so call this before the next run().
-    EnlightRawMeasure rawMeasure() const;
-    const EnlightCalib& calib() const { return _cal; }
+    EnlightRawMeasure   rawMeasure()   const;
+    EnlightColorCoords  colorCoords()  const { return _colorCoords; }
+    const EnlightCalib& calib()        const { return _cal; }
 
     // Access to the raw ADC DMA buffer from the last completed DMA cycle.
     // Only the last cycle is retained; call before the next run().
@@ -129,16 +129,21 @@ public:
     const uint8_t* rawAdcBuf()        const { return _adcRxBuf;        }
     uint32_t       adcConvsPerCycle() const { return _adcConvsPerCycle; }
 
-    // Raw sine lookup table used by the correlator (length = goertzPeriod()).
-    // sintab[t % goertzPeriod()] is the far-kernel weight for triple t.
-    // Cosine (near) kernel weight: sintab[(t % goertzPeriod() + cosOffset) % goertzPeriod()].
-    // Valid after begin() / buildSintab(); nullptr if allocation failed.
-    const int32_t* rawSintab() const { return _sintab; }
+    // Raw Goertzel kernel table used by the correlator (length = goertzPeriod()).
+    // goertzTab[t % goertzPeriod()] is the far-kernel weight for triple t.
+    // Near kernel weight: goertzTab[(t % goertzPeriod() + nearOffset) % goertzPeriod()].
+    // Valid after begin() / buildGoertzTab(); nullptr if allocation failed.
+    const int32_t* rawGoertzTab() const { return _goertzTab; }
 
-    // Rebuild the sine/cosine lookup table with the given phase offset.
-    // Also precomputes _sin2total and reallocates _satPhaseCount.
+    // Rebuild the Goertzel kernel table with the given phase offset.
     // Safe to call outside of an active run().
-    void buildSintab(uint32_t phase);
+    void buildGoertzTab(uint32_t phase);
+
+    // Single source of truth for the FAR kernel formula.
+    // Returns KERN_MAG * cos(2π * phaseIdx / gp).  Used by buildGoertzTab()
+    // and by EnlightCalibRoutine::computeBestPhase() so both always use the
+    // same kernel shape.
+    static int32_t kernelEntry(uint32_t gp, uint32_t phaseIdx);
 
 private:
     EnlightCalib    _cal;
@@ -158,30 +163,24 @@ private:
     //Repetitions
     uint32_t    _repetitions        = 10;
 
-    // Correlator kernel. Cosine = sintab[(idx+_cosOffset)%_goertzPeriod]; no second array.
-    int32_t*    _sintab    = nullptr;
-    uint32_t    _cosOffset = 0;
+    // Correlator kernel. FAR = goertzTab[idx], NEAR = goertzTab[(idx+_nearOffset)%_goertzPeriod]; no second array.
+    int32_t*    _goertzTab  = nullptr;
+    uint32_t    _nearOffset = 0;
 
-    // Per-phase saturation counter.
-    // _satPhaseCount[j] is incremented whenever a triple at phase j = (_arrayiter % GP)
-    // hits SAT_HIGH or SAT_LOW on any channel.  Maximum value per phase per run() call is
-    // repetitions × _periodsPerCycle (≤ 13 per DMA cycle at V6R2 defaults); uint16_t is
-    // sufficient for up to ~5000 repetitions before overflow.
-    //
-    // A single array is enough for both far and near corrections because classify() weights
-    // it differently for each channel:
-    //   far  correction ← Σ_j satPhaseCount[j] × sintab[j]²          (sin² weight)
-    //   near correction ← Σ_j satPhaseCount[j] × sintab[(j+cosOffset)%GP]²  (cos² weight)
-    // The squared-kernel weighting provides automatic phase attribution: a saturation at the
-    // cosine peak (sin[j] = 0) contributes zero to the far correction and maximum to the near.
-    uint16_t*   _satPhaseCount = nullptr;
-    long long   _sin2total     = 0;  // Σ_j sintab[j]² = Σ_j cos[j]²; precomputed in buildSintab()
+    uint32_t            _activePeriods = 0;  // non-ditched, non-settling periods accumulated this run
+    EnlightColorCoords  _colorCoords   = {0.0f, 0.0f};
 
     // LED DIO SPI
-    spi_device_handle_t _ledDevice   = nullptr;
-    uint8_t*            _ledTxBuf    = nullptr;
+    spi_device_handle_t _ledDevice    = nullptr;
+    uint8_t*            _ledTxBuf    = nullptr;   // full-power PDM buffer
+    uint8_t*            _ledTxBufLow = nullptr;   // 1/10-amplitude PDM buffer
     size_t              _ledBufBytes = 0;
     spi_transaction_t   _ledTrans    = {};
+    spi_transaction_t   _ledTransLow = {};
+
+    // Adaptive power state (reset each run())
+    bool      _useLowPower    = false;
+    float     _cycleNormScale = 1.0f;  // 1.0 = full power, 10.0 = low-power normalisation
 
     // ADC SPI
     spi_device_handle_t _adcDevice   = nullptr;
@@ -197,8 +196,6 @@ private:
     uint32_t    _arrayiter = 0;
     uint32_t    _satCount  = 0;
 
-    GridClassifier  _grid;
-
     // Result -- written by dmaTask (core 0), read-cleared by poll() (any core).
     portMUX_TYPE    _mux                = portMUX_INITIALIZER_UNLOCKED;
     EnlightResult   _latestResult       = {};
@@ -212,9 +209,8 @@ private:
     struct TaskArgs { Enlight* self; };
     TaskArgs        _taskArgs      = {};
 
-    bool          generateWaveform();
-    void          buildGrid();
-    int           gridLookup(float outr, float outang) const;
+    bool          generateWaveform();                            // allocates both buffers and fills them
+    bool          generateWaveform(uint8_t* buf, float ampScale); // fills one buffer at the given amplitude scale
     void          buildAdcTxBuffer();
     void          processAdcCycle();
     EnlightResult classify();

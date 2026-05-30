@@ -13,10 +13,10 @@ static const char* TAG = "Enlight";
 Enlight::Enlight(const EnlightCalib& cal) : _cal(cal) {}
 Enlight::~Enlight() {
     heap_caps_free(_ledTxBuf);
+    heap_caps_free(_ledTxBufLow);
     heap_caps_free(_adcTxBuf);
     heap_caps_free(_adcRxBuf);
-    heap_caps_free(_sintab);
-    heap_caps_free(_satPhaseCount);
+    heap_caps_free(_goertzTab);
 }
 
 /* ============================================================
@@ -55,110 +55,87 @@ bool Enlight::generateWaveform() {
              (unsigned long)_goertzPeriod, (unsigned long)_periodsPerCycle,
              (double)cycleMs, (double)EnlightDefaults::PDM_AMP_OFFSET);
 
-    _ledTxBuf = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    _adcTxBuf = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    _adcRxBuf = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    if (!_ledTxBuf || !_adcTxBuf || !_adcRxBuf) {
+    _ledTxBuf    = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _ledTxBufLow = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _adcTxBuf    = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _adcRxBuf    = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    if (!_ledTxBuf || !_ledTxBufLow || !_adcTxBuf || !_adcRxBuf) {
         ESP_LOGE(TAG, "DMA alloc failed"); return false;
     }
     memset(_adcRxBuf, 0, _adcBufBytes);
 
-    const float base = 0.5f + EnlightDefaults::PDM_AMP_OFFSET, swing = 0.5f - EnlightDefaults::PDM_AMP_OFFSET;
-    const float twoPiOverT = 2.0f * (float)M_PI / (float)_periodClocks;
-    float acc_sin = 0.0f, acc_cos = 0.0f;
-    for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
-        uint8_t byte = 0;
-        for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
-            const float theta = twoPiOverT * (float)(i + j);
-            const float ds = base + swing * PDM_AMPLITUDE * sinf(theta);
-            const float dc = base + swing * PDM_AMPLITUDE * cosf(theta);
-            const uint8_t bs = (acc_sin >= 0.5f) ? 1u : 0u;
-            const uint8_t bc = (acc_cos >= 0.5f) ? 1u : 0u;
-            acc_sin += ds - (float)bs; acc_cos += dc - (float)bc;
-            const uint8_t sh = (uint8_t)(6u - j*2u);
-            byte |= (uint8_t)(bs << (sh+1u)); byte |= (uint8_t)(bc << sh);
-        }
-        _ledTxBuf[i / PDM_CLKS_PER_BYTE] = byte;
-    }
-    for (uint32_t r = 1; r < _periodsPerCycle; r++)
-        memcpy(_ledTxBuf + r*_waveformBytes, _ledTxBuf, _waveformBytes);
+    if (!generateWaveform(_ledTxBuf,    1.0f))                        return false;
+    if (!generateWaveform(_ledTxBufLow, EnlightDefaults::LOW_POWER_FACTOR)) return false;
 
     buildAdcTxBuffer();
     return true;
 }
 
+bool Enlight::generateWaveform(uint8_t* buf, float ampScale) {
+    if (!buf) return false;
+    const float base = 0.5f + EnlightDefaults::PDM_AMP_OFFSET;
+    const float swing = 0.5f - EnlightDefaults::PDM_AMP_OFFSET;
+    const float twoPiOverT = 2.0f * (float)M_PI / (float)_periodClocks;
+    // SPI output is hardware-inverted: bit=1 → LED OFF, bit=0 → LED ON.
+    // To scale LED power by ampScale, scale the LED signal (1-SPI), not SPI itself:
+    //   SPI = 1 - (1 - base - swing*A*cos) * ampScale
+    // At ampScale=1 this reduces to base + swing*A*cos (identical to full-power).
+    // At ampScale=0.1, average SPI ≈ 0.96 → LED ON ~4% → dim.
+    // Dry-run one full period to find the periodic steady-state accumulator values,
+    // so the real pass starts in-phase with no transient.
+    float acc_far = 0.0f, acc_near = 0.0f;
+    for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
+        for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
+            const float theta = twoPiOverT * (float)(i + j);
+            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
+            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
+            acc_far  += d_far  - (float)((acc_far  >= 0.5f) ? 1u : 0u);
+            acc_near += d_near - (float)((acc_near >= 0.5f) ? 1u : 0u);
+        }
+    }
+    for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
+        uint8_t byte = 0;
+        for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
+            const float theta = twoPiOverT * (float)(i + j);
+            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
+            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
+            const uint8_t b_far  = (acc_far  >= 0.5f) ? 1u : 0u;
+            const uint8_t b_near = (acc_near >= 0.5f) ? 1u : 0u;
+            acc_far  += d_far  - (float)b_far;
+            acc_near += d_near - (float)b_near;
+            const uint8_t sh = (uint8_t)(6u - j*2u);
+            byte |= (uint8_t)(b_far << (sh+1u)); byte |= (uint8_t)(b_near << sh);
+        }
+        buf[i / PDM_CLKS_PER_BYTE] = byte;
+    }
+    for (uint32_t r = 1; r < _periodsPerCycle; r++)
+        memcpy(buf + r*_waveformBytes, buf, _waveformBytes);
+    return true;
+}
+
 /* ============================================================
- *   buildSintab()
- *   Cosine kernel uses sintab with offset _cosOffset = GP/4.
+ *   buildGoertzTab()
+ *   FAR kernel: goertzTab[idx] = KERN_MAG * cos(2π(idx+phase)/GP)
+ *   NEAR kernel: goertzTab[(idx + _nearOffset) % GP],  _nearOffset = 3*GP/4
+ *   cos(x + 3π/2) = sin(x), so the near kernel is sine — in phase with NEAR LED.
  *   REQUIREMENT: _goertzPeriod % 4 == 0 for orthogonality.
  * ============================================================ */
-void Enlight::buildSintab(uint32_t phase) {
-    heap_caps_free(_sintab);
+int32_t Enlight::kernelEntry(uint32_t gp, uint32_t phaseIdx) {
+    return (int32_t)roundf((float)KERN_MAG *
+                           cosf(2.0f * (float)M_PI * (float)phaseIdx / (float)gp));
+}
+
+void Enlight::buildGoertzTab(uint32_t phase) {
+    heap_caps_free(_goertzTab);
     if (_goertzPeriod % 4 != 0)
         ESP_LOGE(TAG, "GOERTZ_PERIOD=%lu not divisible by 4 -- near/far broken",
                  (unsigned long)_goertzPeriod);
-    _cosOffset = _goertzPeriod / 4;
-    _sintab = (int32_t*)heap_caps_malloc(_goertzPeriod*sizeof(int32_t),
-                                          MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-    if (!_sintab) { ESP_LOGE(TAG, "sintab alloc failed"); return; }
-    const float k = 2.0f * (float)M_PI / (float)_goertzPeriod;
+    _nearOffset = 3 * _goertzPeriod / 4;
+    _goertzTab = (int32_t*)heap_caps_malloc(_goertzPeriod*sizeof(int32_t),
+                                             MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    if (!_goertzTab) { ESP_LOGE(TAG, "goertzTab alloc failed"); return; }
     for (uint32_t i = 0; i < _goertzPeriod; i++)
-        _sintab[i] = (int32_t)roundf((float)SIN_MAG * sinf(k * (float)(i + phase)));
-
-    // Precompute Σ sintab[j]² = Σ cos[j]² (they are equal over a full period).
-    // Used once in classify() as the denominator for both far and near corrections.
-    _sin2total = 0;
-    for (uint32_t i = 0; i < _goertzPeriod; i++)
-        _sin2total += (long long)_sintab[i] * _sintab[i];
-
-    // Allocate the per-phase saturation counter (one array, GP entries, uint16_t).
-    // Zeroed here by calloc; zeroed again at the start of every run() via memset.
-    heap_caps_free(_satPhaseCount);
-    _satPhaseCount = (uint16_t*)heap_caps_calloc(_goertzPeriod, sizeof(uint16_t),
-                                                  MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-    if (!_satPhaseCount)
-        ESP_LOGE(TAG, "satPhaseCount alloc failed");
-}
-
-/* ============================================================
- *   buildGrid() + gridLookup()
- * ============================================================ */
-static void sort_unique(float* a, int& n) {
-    for (int i=1;i<n;i++){float k=a[i];int j=i-1;while(j>=0&&a[j]>k){a[j+1]=a[j];j--;}a[j+1]=k;}
-    int o=0; for(int i=0;i<n;i++) if(o==0||a[i]!=a[o-1]) a[o++]=a[i]; n=o;
-}
-static int upper_bound_f(const float* a, int n, float v) {
-    int lo=0,hi=n; while(lo<hi){int m=(lo+hi)/2; if(a[m]<=v)lo=m+1; else hi=m;} return lo;
-}
-
-void Enlight::buildGrid() {
-    memset(&_grid, 0, sizeof(_grid));
-    float xb[GRID_MAX_THRESH], yb[GRID_MAX_THRESH]; int nx=0,ny=0;
-    for (int p=1;p<CALIB_MAX_PLAYERS;p++) {
-        const float* b=colorBox::colorBox[p]; if(b[0]<=-5.0f) continue;
-        if(nx+2<=GRID_MAX_THRESH){xb[nx++]=b[1];xb[nx++]=b[0];}
-        if(ny+2<=GRID_MAX_THRESH){yb[ny++]=b[3];yb[ny++]=b[2];}
-    }
-    sort_unique(xb,nx); sort_unique(yb,ny);
-    _grid.nX=nx; _grid.nY=ny;
-    memcpy(_grid.xThresh,xb,nx*sizeof(float));
-    memcpy(_grid.yThresh,yb,ny*sizeof(float));
-    for (int p=1;p<CALIB_MAX_PLAYERS;p++) {
-        const float* b=colorBox::colorBox[p]; if(b[0]<=-5.0f) continue;
-        _grid.table[upper_bound_f(_grid.xThresh,nx,(b[0]+b[1])*0.5f)]
-                   [upper_bound_f(_grid.yThresh,ny,(b[2]+b[3])*0.5f)] = (uint8_t)p;
-    }
-    ESP_LOGI(TAG, "Grid: %d X thresholds, %d Y thresholds", nx, ny);
-}
-
-int Enlight::gridLookup(float outr, float outang) const {
-    if (_grid.nX==0||outr<_grid.xThresh[0]||outr>_grid.xThresh[_grid.nX-1]
-      ||_grid.nY==0||outang<_grid.yThresh[0]||outang>_grid.yThresh[_grid.nY-1])
-        return -1;
-    const uint8_t p = _grid.table
-        [upper_bound_f(_grid.xThresh,_grid.nX,outr)]
-        [upper_bound_f(_grid.yThresh,_grid.nY,outang)];
-    return (p>0)?(int)p:-1;
+        _goertzTab[i] = kernelEntry(_goertzPeriod, i + phase);
 }
 
 /* ============================================================
@@ -166,8 +143,7 @@ int Enlight::gridLookup(float outr, float outang) const {
  * ============================================================ */
 bool Enlight::begin() {
     if (!generateWaveform()) return false;
-    buildSintab(_cal.phaseOff); if (!_sintab) return false;
-    buildGrid();
+    buildGoertzTab(_cal.phaseOff); if (!_goertzTab) return false;
 
     gpio_config_t gc={};
     gc.pin_bit_mask=1ULL<<EnlightDefaults::AFE_ON;
@@ -222,6 +198,10 @@ bool Enlight::begin() {
     _ledTrans.tx_buffer=_ledTxBuf;
     _ledTrans.flags=SPI_TRANS_MODE_DIO;
     _ledTrans.length=_ledBufBytes*8;
+    memset(&_ledTransLow,0,sizeof(_ledTransLow));
+    _ledTransLow.tx_buffer=_ledTxBufLow;
+    _ledTransLow.flags=SPI_TRANS_MODE_DIO;
+    _ledTransLow.length=_ledBufBytes*8;
     memset(&_adcTrans,0,sizeof(_adcTrans));
     _adcTrans.tx_buffer=_adcTxBuf;
     _adcTrans.rx_buffer=_adcRxBuf;
@@ -244,9 +224,11 @@ bool Enlight::run() {
     _latestResult={};
     taskEXIT_CRITICAL(&_mux);
     _rout=_gout=_bout=_rnear=_gnear=_bnear=_rawsum=0;
-    _arrayiter=_satCount=0;
-    if (_satPhaseCount) memset(_satPhaseCount, 0, _goertzPeriod * sizeof(uint16_t));
+    _arrayiter=_satCount=_activePeriods=0;
+    _colorCoords={0.0f,0.0f};
     _resultDelivered = false;
+    _useLowPower    = false;
+    _cycleNormScale = 1.0f;
     _active=true;
     _firstCycle=true;
     gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,1);
@@ -298,135 +280,206 @@ void Enlight::buildAdcTxBuffer() {
 
 /* ============================================================
  *   processAdcCycle()
- *   Far  kernel: sintab[idx]
- *   Near kernel: sintab[(idx+_cosOffset)%GP]
+ *   Far  kernel: goertzTab[idx]
+ *   Near kernel: goertzTab[(idx+_nearOffset)%GP]
  *
- *   First-period skip (per DMA cycle)
- *   ------------------------------------
- *   The ~300-500 us gap between consecutive DMA cycles is long enough for the
- *   photodiode circuit to partially re-settle.  The first sine period of every
- *   DMA cycle is therefore excluded from all accumulators (_rawsum, correlators,
- *   _satPhaseCount).  _arrayiter is still incremented for those triples so that
- *   the phase index (idx = _arrayiter % GP) stays aligned for the remaining
- *   (_periodsPerCycle - 1) periods, which still form an integer multiple of GP,
- *   guaranteeing zero mean for the correlator sums.
+ *   First-period skip: period 0 of every DMA cycle is skipped (photodiode
+ *   settling after the inter-cycle gap). _arrayiter is still advanced to keep
+ *   phase alignment; _activePeriods is not incremented.
  *
- *   Saturation control
- *   ------------------
- *   When any R/G/B channel clips, the triple is excluded from both
- *   accumulators and its phase bucket is recorded in _satPhaseCount[idx].
- *   classify() later weights this per-phase count by sin²[j] to correct
- *   the far baseline and by cos²[j] to correct the near baseline.
- *   The squared-kernel weighting provides automatic attribution: a saturation
- *   at the cosine peak (sin[j] = 0) contributes nothing to the far correction.
+ *   Per-period saturation handling — single combined pass:
+ *     No saturation (common): Goertzel accumulators receive every sample.
+ *     Any saturation: analytic sinusoidal fitting applied to all channels.
+ *       Signal model: s(x) = k + A·sin(2πx/GP + α)
+ *       The non-saturated arc is symmetric around x0 (argmax) with half-width
+ *       deltaXs samples = (GP − w) / 2, where w = i_last − i_first + 1.
+ *       Amplitude: A = (2·deltaX_rad·s(x0) − SUM·twoPiOverGP)
+ *                      / (2·(deltaX_rad − sin(deltaX_rad)))
+ *       Analytic Goertzel: far  += KERN_MAG·GP/2·A·cos(2π·x0/GP)
+ *                          near += KERN_MAG·GP/2·A·sin(2π·x0/GP)
+ *       Formula is exact at W_sat=0 (deltaX_rad=π, SUM=GP·k → A exact).
+ *
+ *   Ditch: period discarded if any channel has > SAT_DITCH_FRAC saturated samples.
  * ============================================================ */
 void Enlight::processAdcCycle() {
-    const uint32_t triples = _adcConvsPerCycle / ADC_CHANNELS;
-    for (uint32_t t = 0; t < triples; t++) {
-        if (t < _goertzPeriod) { _arrayiter++; continue; }
+    auto r12 = [&](uint32_t s) -> uint16_t {
+        return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
+    };
 
-        const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
-        auto r12 = [&](uint32_t s) -> uint16_t {
-            return (((uint16_t)_adcRxBuf[s*2] << 8) | _adcRxBuf[s*2+1]) & 0x0FFF;
-        };
-        const uint16_t rv = r12(base), gv = r12(base+1), bv = r12(base+2);
-        _rawsum += rv + gv + bv;
+    long long rout_c=0, gout_c=0, bout_c=0;
+    long long rnear_c=0, gnear_c=0, bnear_c=0;
+    long long rawsum_c=0;
 
-        const uint32_t idx = _arrayiter % _goertzPeriod;
-        const int32_t  ks  = _sintab[idx];
-        const int32_t  kc  = _sintab[(idx + _cosOffset) % _goertzPeriod];
+    const float twoPiOverGP = 2.0f * (float)M_PI / (float)_goertzPeriod;
+    const float halfGP_f    = 0.5f * (float)_goertzPeriod;
+    const float kern_f      = (float)KERN_MAG;
 
-        if (rv >= EnlightDefaults::SAT_HIGH || rv <= EnlightDefaults::SAT_LOW ||
-            gv >= EnlightDefaults::SAT_HIGH || gv <= EnlightDefaults::SAT_LOW ||
-            bv >= EnlightDefaults::SAT_HIGH || bv <= EnlightDefaults::SAT_LOW) {
-            // Record which phase bucket was lost; classify() uses this for baseline correction.
-            _satPhaseCount[idx]++;
-            _satCount++;
-        } else {
-            _rout  += (long long)rv*ks; _gout  += (long long)gv*ks; _bout  += (long long)bv*ks;
-            _rnear += (long long)rv*kc; _gnear += (long long)gv*kc; _bnear += (long long)bv*kc;
+    for (uint32_t p = 0; p < _periodsPerCycle; p++) {
+        const uint32_t t_base = p * _goertzPeriod;
+
+        if (p == 0) {
+            _arrayiter += _goertzPeriod;
+            continue;
         }
-        _arrayiter++;
+
+        // Per-channel state for saturation tracking and non-sat accumulation
+        uint32_t  w_sat[ADC_CHANNELS]       = {};
+        uint32_t  i_first[ADC_CHANNELS]     = {UINT32_MAX, UINT32_MAX, UINT32_MAX};
+        uint32_t  i_last[ADC_CHANNELS]      = {};
+        uint16_t  argmax_val[ADC_CHANNELS]  = {};
+        uint32_t  argmax_idx[ADC_CHANNELS]  = {};
+        long long sum_nonsat[ADC_CHANNELS]  = {};
+        long long rout_p=0, gout_p=0, bout_p=0;
+        long long rnear_p=0, gnear_p=0, bnear_p=0;
+
+        for (uint32_t t = t_base; t < t_base + _goertzPeriod; t++) {
+            const uint32_t base = t * ADC_CHANNELS + ADC_PIPELINE_DELAY;
+            const uint16_t rv = r12(base), gv = r12(base+1), bv = r12(base+2);
+            const uint32_t lt = t - t_base;
+
+            const uint32_t idx = _arrayiter % _goertzPeriod;
+            const int32_t  ks  = _goertzTab[idx];
+            const int32_t  kc  = _goertzTab[(idx + _nearOffset) % _goertzPeriod];
+
+            const bool sat_r = (rv >= EnlightDefaults::SAT_HIGH || rv <= EnlightDefaults::SAT_LOW);
+            const bool sat_g = (gv >= EnlightDefaults::SAT_HIGH || gv <= EnlightDefaults::SAT_LOW);
+            const bool sat_b = (bv >= EnlightDefaults::SAT_HIGH || bv <= EnlightDefaults::SAT_LOW);
+
+            if (sat_r) {
+                if (i_first[0] == UINT32_MAX) i_first[0] = lt;
+                i_last[0] = lt; w_sat[0]++;
+            } else {
+                rout_p  += (long long)rv * ks;
+                rnear_p += (long long)rv * kc;
+                sum_nonsat[0] += rv;
+                if (rv > argmax_val[0]) { argmax_val[0] = rv; argmax_idx[0] = lt; }
+            }
+            if (sat_g) {
+                if (i_first[1] == UINT32_MAX) i_first[1] = lt;
+                i_last[1] = lt; w_sat[1]++;
+            } else {
+                gout_p  += (long long)gv * ks;
+                gnear_p += (long long)gv * kc;
+                sum_nonsat[1] += gv;
+                if (gv > argmax_val[1]) { argmax_val[1] = gv; argmax_idx[1] = lt; }
+            }
+            if (sat_b) {
+                if (i_first[2] == UINT32_MAX) i_first[2] = lt;
+                i_last[2] = lt; w_sat[2]++;
+            } else {
+                bout_p  += (long long)bv * ks;
+                bnear_p += (long long)bv * kc;
+                sum_nonsat[2] += bv;
+                if (bv > argmax_val[2]) { argmax_val[2] = bv; argmax_idx[2] = lt; }
+            }
+
+            if (!sat_r && !sat_g && !sat_b) rawsum_c += rv + gv + bv;
+            if (sat_r || sat_g || sat_b)    _satCount++;
+            _arrayiter++;
+        }
+
+        // Ditch period if any channel is nearly fully saturated
+        bool ditch = false;
+        for (int ch = 0; ch < ADC_CHANNELS; ch++) {
+            if ((float)w_sat[ch] > EnlightDefaults::SAT_DITCH_FRAC * (float)_goertzPeriod) {
+                ditch = true; break;
+            }
+        }
+        if (ditch) continue;
+
+        _activePeriods++;
+
+        const bool any_sat = (w_sat[0] > 0 || w_sat[1] > 0 || w_sat[2] > 0);
+
+        if (!any_sat) {
+            // Goertzel path: optimal SNR for weak signals, no saturation
+            rout_c  += rout_p;  gout_c  += gout_p;  bout_c  += bout_p;
+            rnear_c += rnear_p; gnear_c += gnear_p; bnear_c += bnear_p;
+        } else {
+            // Analytic sinusoidal fitting for all channels (signal strong, noise negligible)
+            long long* const far_acc[ADC_CHANNELS]  = {&rout_c,  &gout_c,  &bout_c};
+            long long* const near_acc[ADC_CHANNELS] = {&rnear_c, &gnear_c, &bnear_c};
+
+            for (int ch = 0; ch < ADC_CHANNELS; ch++) {
+                float    deltaX_rad;
+                float    sum_ch;
+                uint32_t x0;
+
+                if (w_sat[ch] == 0) {
+                    // Non-saturated channel: use full-period formula (exact at W_sat=0)
+                    x0         = argmax_idx[ch];
+                    deltaX_rad = (float)M_PI;
+                    sum_ch     = (float)sum_nonsat[ch];
+                } else {
+                    // When the signal peak is near a period boundary (lt≈0 or lt≈GP-1),
+                    // the saturated zone wraps: i_first=0, i_last=GP-1 even though only
+                    // w_sat[ch] samples are actually saturated → w=GP → deltaXs=0 → A=0.
+                    // Detect wrap-around and use w_sat[ch] as the true saturated width.
+                    const bool     wrapping = (i_last[ch] - i_first[ch] + 1 > w_sat[ch]);
+                    const uint32_t w        = wrapping ? w_sat[ch] : (i_last[ch] - i_first[ch] + 1);
+                    const uint32_t deltaXs  = (_goertzPeriod - w) / 2;
+                    deltaX_rad = (float)deltaXs * twoPiOverGP;
+                    // For wrapping: peak is at the period boundary, so the non-saturated
+                    // arc centre is at the antipodal point (GP/2).
+                    x0 = wrapping ? (_goertzPeriod / 2)
+                                  : (i_last[ch] + 1 + deltaXs) % _goertzPeriod;
+
+                    // SUM over the symmetric non-saturated interval [x0-deltaXs, x0+deltaXs]
+                    sum_ch = 0.0f;
+                    for (uint32_t d = 0; d <= 2 * deltaXs; d++) {
+                        const uint32_t lt2 = (x0 + _goertzPeriod - deltaXs + d) % _goertzPeriod;
+                        sum_ch += (float)r12((t_base + lt2) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
+                    }
+                }
+
+                const float sx0   = (float)r12((t_base + x0) * ADC_CHANNELS + ADC_PIPELINE_DELAY + ch);
+                const float num   = 2.0f * deltaX_rad * sx0 - sum_ch * twoPiOverGP;
+                const float denom = 2.0f * (deltaX_rad - sinf(deltaX_rad));
+                const float A     = (fabsf(denom) > 1e-6f) ? (num / denom) : 0.0f;
+
+                // Use goertzTab directly so the kernel phase offset (phaseOff) is
+                // automatically included — cos/sin(phi) alone would miss it.
+                *far_acc[ch]  += (long long)(halfGP_f * A * (float)_goertzTab[x0 % _goertzPeriod]);
+                *near_acc[ch] += (long long)(halfGP_f * A * (float)_goertzTab[(x0 + _nearOffset) % _goertzPeriod]);
+            }
+        }
     }
+
+    if (_useLowPower) {  //Normalize values to full-power equivalent when working in low-power mode
+        rout_c   = (long long)roundf((float)rout_c   * _cycleNormScale);
+        gout_c   = (long long)roundf((float)gout_c   * _cycleNormScale);
+        bout_c   = (long long)roundf((float)bout_c   * _cycleNormScale);
+        rnear_c  = (long long)roundf((float)rnear_c  * _cycleNormScale);
+        gnear_c  = (long long)roundf((float)gnear_c  * _cycleNormScale);
+        bnear_c  = (long long)roundf((float)bnear_c  * _cycleNormScale);
+        rawsum_c = (long long)roundf((float)rawsum_c * _cycleNormScale);
+    }
+    _rout   += rout_c;
+    _gout   += gout_c;
+    _bout   += bout_c;
+    _rnear  += rnear_c;
+    _gnear  += gnear_c;
+    _bnear  += bnear_c;
+    _rawsum += rawsum_c;
 }
 
 /* ============================================================
  *   classify()
- *
- *   Baseline correction for saturation-excluded samples
- *   ----------------------------------------------------
- *   The stored calibration values (rcal, gcal, …) were measured with ALL
- *   samples present.  When saturated triples are excluded in processAdcCycle()
- *   the accumulators are smaller, so subtracting the full baseline over-
- *   subtracts and produces false zeroes.
- *
- *   Correction principle
- *   Each sample at phase j contributes to rcal proportionally to sintab[j]²
- *   (kernel power ≈ sin²).  The fraction of baseline energy lost through
- *   excluded samples is therefore:
- *
- *     frac = Σ_j satPhaseCount[j] × sin²[j]  /  (N_per_phase × Σ_j sin²[j])
- *
- *   where N_per_phase = _arrayiter / GP is the number of times each phase
- *   was visited (exact, since each period contains exactly one of each phase).
- *   The corrected baseline is  cal × (1 − frac) = cal − cal × frac.
- *
- *   The SAME _satPhaseCount array is used for both far and near channels,
- *   weighted by sin²[j] and cos²[j] respectively.  Because Σ sin²[j] = Σ cos²[j]
- *   over a full period, the denominator is identical and is precomputed as
- *   _sin2total in buildSintab().
- *
- *   Integer arithmetic (Q16 fixed-point, no float)
- *   -----------------------------------------------
- *   frac_q16 = (sin2_sat << 16) / denom     ∈ [0, 65536]
- *   corr     = (cal × frac_q16 + (1<<15)) >> 16   (rounded)
- *
- *   Overflow check (worst case, all phases always saturated):
- *     sin2_sat   ≤ N_per_phase × _sin2total  →  sin2_sat << 16 fits in int64
- *     cal × frac_q16  ≤ UINT32_MAX × 65536 ≈ 2.8 × 10¹⁴  →  fits in int64
  * ============================================================ */
 EnlightResult Enlight::classify() {
-    // Accumulate sin²-weighted and cos²-weighted saturation counts.
-    long long sin2_sat = 0, cos2_sat = 0;
-    if (_satPhaseCount && _sin2total > 0) {
-        for (uint32_t j = 0; j < _goertzPeriod; j++) {
-            if (!_satPhaseCount[j]) continue;
-            const long long sj = _sintab[j];
-            const long long cj = _sintab[(j + _cosOffset) % _goertzPeriod];
-            sin2_sat += (long long)_satPhaseCount[j] * sj * sj;
-            cos2_sat += (long long)_satPhaseCount[j] * cj * cj;
-        }
-    }
-
-    // denom = N_per_phase × Σ sin²[j]  (total expected sin²-weighted sample count).
-    // The first period of every DMA cycle is skipped (photodiode re-settling), so
-    // only (_periodsPerCycle - 1) periods per cycle contributed to the accumulators.
-    const long long cycles      = (long long)(_arrayiter / (_goertzPeriod * _periodsPerCycle));
-    const long long n_per_phase = (long long)(_periodsPerCycle - 1) * cycles;
-    const long long denom       = n_per_phase * _sin2total;
-
-    // Q16 correction fractions: 0 = no saturation, 65536 = all samples excluded.
-    const long long frac_far_q16  = (denom > 0) ? (sin2_sat << 16) / denom : 0LL;
-    const long long frac_near_q16 = (denom > 0) ? (cos2_sat << 16) / denom : 0LL;
-
-    // Corrected baselines: cal - round(cal × frac).  Clamped so they can't go negative.
-    // The + (1<<15) term rounds to nearest rather than truncating.
-#define CORR(cal, frac_q16) \
-    ((long long)(cal) - (((long long)(cal) * (frac_q16) + (1LL<<15)) >> 16))
-#define EFF(cal, frac_q16) \
-    (CORR(cal, frac_q16) > 0 ? CORR(cal, frac_q16) : 0LL)
-
-    // Scale the single-cycle calibration baselines by the number of cycles so
-    // they match the accumulated correlator sums, then apply saturation correction.
-    const long long eff_rcal     = EFF(_cal.rcal     * cycles, frac_far_q16);
-    const long long eff_gcal     = EFF(_cal.gcal     * cycles, frac_far_q16);
-    const long long eff_bcal     = EFF(_cal.bcal     * cycles, frac_far_q16);
-    const long long eff_rcalNear = EFF(_cal.rcalNear * cycles, frac_near_q16);
-    const long long eff_gcalNear = EFF(_cal.gcalNear * cycles, frac_near_q16);
-    const long long eff_bcalNear = EFF(_cal.bcalNear * cycles, frac_near_q16);
-
-#undef EFF
-#undef CORR
+    // cal.*cal values are per-DMA-cycle baselines (sRF[mid] / REPS from step2).
+    // Multiply by nCycles so the baseline scales with the number of repetitions,
+    // then scale for any ditched periods so over-subtraction is avoided.
+    const long long nCycles = (long long)(_arrayiter / (_goertzPeriod * _periodsPerCycle));
+    const float nd_f  = (float)(_periodsPerCycle - 1) * (float)nCycles;
+    const float scale = (nd_f > 0.0f) ? ((float)_activePeriods / nd_f) : 1.0f;
+    const float baseScale = scale * (float)nCycles;
+    const long long eff_rcal     = (long long)roundf((float)_cal.rcal     * baseScale);
+    const long long eff_gcal     = (long long)roundf((float)_cal.gcal     * baseScale);
+    const long long eff_bcal     = (long long)roundf((float)_cal.bcal     * baseScale);
+    const long long eff_rcalNear = (long long)roundf((float)_cal.rcalNear * baseScale);
+    const long long eff_gcalNear = (long long)roundf((float)_cal.gcalNear * baseScale);
+    const long long eff_bcalNear = (long long)roundf((float)_cal.bcalNear * baseScale);
 
     const long long rout = (_rout  > eff_rcal)     ? _rout  - eff_rcal     : 0LL;
     const long long gout = (_gout  > eff_gcal)     ? _gout  - eff_gcal     : 0LL;
@@ -435,10 +488,9 @@ EnlightResult Enlight::classify() {
     _gnear = (_gnear > eff_gcalNear) ? _gnear - eff_gcalNear : 0LL;
     _bnear = (_bnear > eff_bcalNear) ? _bnear - eff_bcalNear : 0LL;
 
-    ESP_LOGD(TAG, "rawsum=%lld far=(%lld,%lld,%lld) near=(%lld,%lld,%lld) "
-                  "sat=%lu frac_far_q16=%lld frac_near_q16=%lld",
+    ESP_LOGD(TAG, "rawsum=%lld far=(%lld,%lld,%lld) near=(%lld,%lld,%lld) sat=%lu",
              _rawsum, rout, gout, bout, _rnear, _gnear, _bnear,
-             (unsigned long)_satCount, frac_far_q16, frac_near_q16);
+             (unsigned long)_satCount);
 
     if (_rawsum <= (long long)_cal.limpow) return {EnlightStatus::LOW_POW, 0};
 
@@ -454,7 +506,15 @@ EnlightResult Enlight::classify() {
     if (s <= 0.0f) return {EnlightStatus::NO_HIT, 0};
     outr /= s; outg /= s;
     const float outang = (outr < 1.0f) ? (outg / (1.0f - outr)) : 1.0f;
-    const int hit = gridLookup(outr, outang);
+    _colorCoords = {outr, outang};
+    int hit = -1;
+    for (int p = 1; p < CALIB_MAX_PLAYERS; p++) {
+        const float* b = colorBox::colorBox[p];
+        if (b[0] <= -5.0f) continue;
+        if (outr >= b[1] && outr <= b[0] && outang >= b[3] && outang <= b[2]) {
+            hit = p; break;
+        }
+    }
     if (hit > 0) {
         ESP_LOGI(TAG, "HIT player %d (outr=%.3f outang=%.3f)", hit, outr, outang);
         return {EnlightStatus::PLAYER_HIT, (uint8_t)hit};
@@ -481,8 +541,24 @@ void Enlight::spawnCycle() {
 }
 
 void Enlight::onCycleDone() {
+    const uint32_t satBefore = _satCount;
     processAdcCycle();
     _repsRemaining--;
+
+    // After each cycle: if this cycle had significant saturation and more cycles
+    // remain, switch to low-power PDM for the rest of the run.
+    // Per-cycle check (not cumulative): even a modest fraction of saturated samples
+    // in one cycle is enough to trigger — saturation that causes analytic fitting
+    // is already above this level.
+    if (!_useLowPower && _repsRemaining > 0) {
+        const uint32_t satThisCycle  = _satCount - satBefore;
+        const uint32_t activeInCycle = (uint32_t)(_periodsPerCycle - 1) * _goertzPeriod;
+        if (satThisCycle > activeInCycle * EnlightDefaults::SAT_SWITCH_FRAC) {
+            _useLowPower    = true;
+            _cycleNormScale = 1.0f / EnlightDefaults::LOW_POWER_FACTOR;
+        }
+    }
+
     if (_repsRemaining==0) {
         gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
         EnlightResult r=classify();
@@ -502,7 +578,8 @@ void Enlight::dmaTask(void* arg) {
         const int64_t t0=esp_timer_get_time();
         while (esp_timer_get_time()-t0 < (int64_t)EnlightDefaults::AFE_STARTUP_MICROS) {}
     }
-    spi_device_queue_trans(s->_ledDevice,&s->_ledTrans,portMAX_DELAY);
+    spi_transaction_t& ledTx = s->_useLowPower ? s->_ledTransLow : s->_ledTrans;
+    spi_device_queue_trans(s->_ledDevice,&ledTx,portMAX_DELAY);
     spi_device_queue_trans(s->_adcDevice,&s->_adcTrans,portMAX_DELAY);
     spi_transaction_t* r;
     spi_device_get_trans_result(s->_ledDevice,&r,portMAX_DELAY);

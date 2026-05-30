@@ -144,36 +144,22 @@ void EnlightTestMode::run() {
                 delay(GameDefaults::LOOP_MS);
             } while (res.status == EnlightStatus::RUNNING);
 
-            EnlightRawMeasure raw = _e.rawMeasure();
-            const EnlightCalib& cal = _e.calib();
-            long long r = raw.rout;
-            long long g = raw.gout;
-            long long b = raw.bout;
-            float rw = (float)r * cal.rfact;
-            float gw = (float)g;
-            float bw = (float)b * cal.bfact;
-            float s  = rw + gw + bw;
-            float outr_n = (s > 0.f) ? (rw / s) : 0.f;
-            float outang  = (s > 0.f && outr_n < 1.f) ? (gw / s) / (1.f - outr_n) : 0.f;
+            EnlightRawMeasure  raw   = _e.rawMeasure();
+            EnlightColorCoords color = _e.colorCoords();
 
-            long long rawSum = r+g+b;
+            long long rawSum = raw.rout + raw.gout + raw.bout;
             long long sumShr = rawSum;
             int bitCount = 0;
-            while (sumShr>1024){
-                sumShr>>=1;
-                bitCount++;
-            }
-
-            r >>= bitCount;
-            g >>= bitCount;
-            b >>= bitCount;
+            while (sumShr > 1024) { sumShr >>= 1; bitCount++; }
 
             snprintf(diagRgb, sizeof(diagRgb), "r:%03lld g:%03lld b:%03lld >>%d",
-                     r, g, b, bitCount);
+                     raw.rout >> bitCount, raw.gout >> bitCount, raw.bout >> bitCount, bitCount);
             snprintf(diagColorCoord, sizeof(diagColorCoord), "r:%.2f a:%.2f",
-                     (double)outr_n, (double)outang);
-            snprintf(diagSs, sizeof(diagSs), "SUM:%lld sat:%lu",
-                     (long long)sumShr, (unsigned long)raw.satCount);
+                     (double)color.outr, (double)color.outang);
+            const uint32_t satPct = (raw.totalSamples > 0)
+                ? (uint32_t)(raw.satCount * 100u / raw.totalSamples) : 0u;
+            snprintf(diagSs, sizeof(diagSs), "sat:%lu%%%s",
+                     (unsigned long)satPct, _e.usedLowPower() ? " LP" : "");
 
             if (res.status == EnlightStatus::PLAYER_HIT &&
                 res.id < PlayerDefs::MAX_PLAYER_ID) {

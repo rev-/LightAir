@@ -58,7 +58,7 @@ struct EnlightCalib {
     uint32_t    rcal, gcal, bcal;             // far  channel baselines
     uint32_t    rcalNear, gcalNear, bcalNear; // near channel baselines
     uint32_t    limpow;
-    uint32_t    phaseOff;                     // sintab phase offset (LED excitation delay, in samples)
+    uint32_t    phaseOff;                     // goertzTab phase offset (LED excitation delay, in samples)
     float       rfact, bfact;
     float       nearRatioMax;
     // Step 3 — white diffusing surface calibration
