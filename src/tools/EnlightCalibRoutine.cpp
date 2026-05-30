@@ -288,8 +288,8 @@ void EnlightCalibRoutine::step3() {
 
     // Show results.
     char l0[24], l1[24];
-    snprintf(l0, sizeof(l0), "NearMax: %lu", (unsigned long)maxNear);
-    snprintf(l1, sizeof(l1), "FarMax:  %lu", (unsigned long)maxFar);
+    snprintf(l0, sizeof(l0), "NrMax R:%lu G:%lu", (unsigned long)maxNear_r, (unsigned long)maxNear_g);
+    snprintf(l1, sizeof(l1), "FrMax R:%lu G:%lu", (unsigned long)maxFar_r,  (unsigned long)maxFar_g);
     showLines(l0, l1, nullptr, nullptr, nullptr, "TRIG2: done");
     waitTrig(TRIG_2_ID);
 }
@@ -305,7 +305,7 @@ void EnlightCalibRoutine::step4() {
 
     // Build one formatted line per calibration value.
     struct CalEntry { char line[22]; };
-    const uint8_t N_ENTRIES    = 13;
+    const uint8_t N_ENTRIES    = 17;
     const uint8_t ROWS_PER_PAGE = 5;
     const uint8_t N_PAGES      = (N_ENTRIES + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
 
@@ -321,8 +321,12 @@ void EnlightCalibRoutine::step4() {
     snprintf(entries[8].line,  sizeof(entries[8].line),  "rfact:  %.4g", (double)cal.rfact);
     snprintf(entries[9].line,  sizeof(entries[9].line),  "bfact:  %.4g", (double)cal.bfact);
     snprintf(entries[10].line, sizeof(entries[10].line), "nRatMx: %.4g", (double)cal.nearRatioMax);
-    snprintf(entries[11].line, sizeof(entries[11].line), "mxNrW:  %lu",  (unsigned long)cal.maxNearWhite);
-    snprintf(entries[12].line, sizeof(entries[12].line), "mxFrW:  %lu",  (unsigned long)cal.maxFarWhite);
+    snprintf(entries[11].line, sizeof(entries[11].line), "thNrR:  %lu",  (unsigned long)cal.thresh_near_r);
+    snprintf(entries[12].line, sizeof(entries[12].line), "thNrG:  %lu",  (unsigned long)cal.thresh_near_g);
+    snprintf(entries[13].line, sizeof(entries[13].line), "thNrB:  %lu",  (unsigned long)cal.thresh_near_b);
+    snprintf(entries[14].line, sizeof(entries[14].line), "thFrR:  %lu",  (unsigned long)cal.thresh_far_r);
+    snprintf(entries[15].line, sizeof(entries[15].line), "thFrG:  %lu",  (unsigned long)cal.thresh_far_g);
+    snprintf(entries[16].line, sizeof(entries[16].line), "thFrB:  %lu",  (unsigned long)cal.thresh_far_b);
 
     uint8_t page = 0;
     for (;;) {

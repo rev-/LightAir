@@ -65,9 +65,9 @@ struct EnlightCalib {
     uint32_t    phaseOff;                     // goertzTab phase offset (LED excitation delay, in samples)
     float       rfact, bfact;
     float       nearRatioMax;
-    // Step 3 — white diffusing surface calibration
-    uint32_t    maxNearWhite; // Max Near White: peak near-channel power over white-wall sweep
-    uint32_t    maxFarWhite;  // Max Far White:  peak far-channel  power over white-wall sweep
+    // Step 3 — per-channel low-power thresholds (white-wall sweep)
+    uint32_t    thresh_near_r, thresh_near_g, thresh_near_b;
+    uint32_t    thresh_far_r,  thresh_far_g,  thresh_far_b;
 };
 
 bool enlight_calib_load(EnlightCalib& cal);
