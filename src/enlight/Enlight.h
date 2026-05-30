@@ -30,7 +30,6 @@ static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 
 static constexpr float    PDM_AMPLITUDE   = 0.95f;
 static constexpr int32_t  KERN_MAG        = 2048;
-static constexpr int      GRID_MAX_THRESH = CALIB_MAX_PLAYERS * 2;
 
 // Result type
 enum class EnlightStatus : uint8_t {
@@ -60,19 +59,11 @@ struct EnlightRawMeasure {
     uint32_t  totalSamples;        // total triples processed (_arrayiter)
 };
 
-// Baseline-corrected color coordinates — exact values used by classify() for grid lookup.
+// Baseline-corrected color coordinates — exact values used by classify() for box matching.
 // outr=0/outang=0 if signal was LOW_POW, NEAR, or sum<=0.
 struct EnlightColorCoords {
     float outr;
     float outang;
-};
-
-// Grid classifier: O(log N) lookup in non-overlapping (outr, outang) boxes
-struct GridClassifier {
-    float   xThresh[GRID_MAX_THRESH];
-    float   yThresh[GRID_MAX_THRESH];
-    int     nX, nY;
-    uint8_t table[GRID_MAX_THRESH + 1][GRID_MAX_THRESH + 1];
 };
 
 class Enlight
@@ -205,8 +196,6 @@ private:
     uint32_t    _arrayiter = 0;
     uint32_t    _satCount  = 0;
 
-    GridClassifier  _grid;
-
     // Result -- written by dmaTask (core 0), read-cleared by poll() (any core).
     portMUX_TYPE    _mux                = portMUX_INITIALIZER_UNLOCKED;
     EnlightResult   _latestResult       = {};
@@ -222,8 +211,6 @@ private:
 
     bool          generateWaveform();                            // allocates both buffers and fills them
     bool          generateWaveform(uint8_t* buf, float ampScale); // fills one buffer at the given amplitude scale
-    void          buildGrid();
-    int           gridLookup(float outr, float outang) const;
     void          buildAdcTxBuffer();
     void          processAdcCycle();
     EnlightResult classify();
