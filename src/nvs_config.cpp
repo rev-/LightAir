@@ -81,16 +81,20 @@ bool enlight_calib_load(EnlightCalib& cal) {
         NVS_GET_FLOAT(h, CAL_KEY_RFACT,          cal.rfact,       1.0f);
         NVS_GET_FLOAT(h, CAL_KEY_BFACT,          cal.bfact,       1.0f);
         NVS_GET_FLOAT(h, CAL_KEY_NEAR_RATIO_MAX, cal.nearRatioMax, 1e9f);
-        NVS_GET_U32  (h, CAL_KEY_MAX_NEAR_WHITE, cal.maxNearWhite, 0);
-        NVS_GET_U32  (h, CAL_KEY_MAX_FAR_WHITE,  cal.maxFarWhite,  0);
+        NVS_GET_U32  (h, CAL_KEY_THRESH_NEAR_R,  cal.thresh_near_r, 0);
+        NVS_GET_U32  (h, CAL_KEY_THRESH_NEAR_G,  cal.thresh_near_g, 0);
+        NVS_GET_U32  (h, CAL_KEY_THRESH_NEAR_B,  cal.thresh_near_b, 0);
+        NVS_GET_U32  (h, CAL_KEY_THRESH_FAR_R,   cal.thresh_far_r,  0);
+        NVS_GET_U32  (h, CAL_KEY_THRESH_FAR_G,   cal.thresh_far_g,  0);
+        NVS_GET_U32  (h, CAL_KEY_THRESH_FAR_B,   cal.thresh_far_b,  0);
         nvs_close(h);
     } else {
         cal = {};
         cal.limpow = 0;
         cal.rfact = cal.bfact = 1.0f;
         cal.nearRatioMax = 1e9f;
-        cal.maxNearWhite = 0;
-        cal.maxFarWhite  = 0;
+        cal.thresh_near_r = cal.thresh_near_g = cal.thresh_near_b = 0;
+        cal.thresh_far_r  = cal.thresh_far_g  = cal.thresh_far_b  = 0;
         ESP_LOGW(TAG, "Calibration namespace missing -- using sentinels");
     }
     return true;
@@ -111,8 +115,12 @@ bool enlight_calib_save(const EnlightCalib& cal) {
     nvs_set_blob(h, CAL_KEY_RFACT,          &cal.rfact,        sizeof(float));
     nvs_set_blob(h, CAL_KEY_BFACT,          &cal.bfact,        sizeof(float));
     nvs_set_blob(h, CAL_KEY_NEAR_RATIO_MAX, &cal.nearRatioMax, sizeof(float));
-    nvs_set_u32 (h, CAL_KEY_MAX_NEAR_WHITE, cal.maxNearWhite);
-    nvs_set_u32 (h, CAL_KEY_MAX_FAR_WHITE,  cal.maxFarWhite);
+    nvs_set_u32 (h, CAL_KEY_THRESH_NEAR_R,  cal.thresh_near_r);
+    nvs_set_u32 (h, CAL_KEY_THRESH_NEAR_G,  cal.thresh_near_g);
+    nvs_set_u32 (h, CAL_KEY_THRESH_NEAR_B,  cal.thresh_near_b);
+    nvs_set_u32 (h, CAL_KEY_THRESH_FAR_R,   cal.thresh_far_r);
+    nvs_set_u32 (h, CAL_KEY_THRESH_FAR_G,   cal.thresh_far_g);
+    nvs_set_u32 (h, CAL_KEY_THRESH_FAR_B,   cal.thresh_far_b);
     esp_err_t e = nvs_commit(h); nvs_close(h);
     return e == ESP_OK;
 }
