@@ -14,6 +14,8 @@ Enlight::Enlight(const EnlightCalib& cal) : _cal(cal) {}
 Enlight::~Enlight() {
     heap_caps_free(_ledTxBuf);
     heap_caps_free(_ledTxBufLow);
+    heap_caps_free(_ledTxBufNearOff);
+    heap_caps_free(_ledTxBufFarOff);
     heap_caps_free(_adcTxBuf);
     heap_caps_free(_adcRxBuf);
     heap_caps_free(_goertzTab);
@@ -55,17 +57,27 @@ bool Enlight::generateWaveform() {
              (unsigned long)_goertzPeriod, (unsigned long)_periodsPerCycle,
              (double)cycleMs, (double)EnlightDefaults::PDM_AMP_OFFSET);
 
-    _ledTxBuf    = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    _ledTxBufLow = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    _adcTxBuf    = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    _adcRxBuf    = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    if (!_ledTxBuf || !_ledTxBufLow || !_adcTxBuf || !_adcRxBuf) {
+    _ledTxBuf        = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _ledTxBufLow     = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _ledTxBufNearOff = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _ledTxBufFarOff  = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _adcTxBuf        = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    _adcRxBuf        = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    if (!_ledTxBuf || !_ledTxBufLow || !_ledTxBufNearOff || !_ledTxBufFarOff ||
+        !_adcTxBuf || !_adcRxBuf) {
         ESP_LOGE(TAG, "DMA alloc failed"); return false;
     }
     memset(_adcRxBuf, 0, _adcBufBytes);
 
-    if (!generateWaveform(_ledTxBuf,    1.0f))                        return false;
+    if (!generateWaveform(_ledTxBuf,    1.0f))                              return false;
     if (!generateWaveform(_ledTxBufLow, EnlightDefaults::LOW_POWER_FACTOR)) return false;
+
+    // DIO byte layout: FAR on odd bits (7,5,3,1 → mask 0xAA), NEAR on even bits (6,4,2,0 → mask 0x55).
+    // Hardware-inverted: SPI bit=1 → LED OFF.  ORing the mask forces that source's bits to 1 = always OFF.
+    memcpy(_ledTxBufNearOff, _ledTxBuf, _ledBufBytes);
+    for (size_t i = 0; i < _ledBufBytes; i++) _ledTxBufNearOff[i] |= 0x55u;
+    memcpy(_ledTxBufFarOff,  _ledTxBuf, _ledBufBytes);
+    for (size_t i = 0; i < _ledBufBytes; i++) _ledTxBufFarOff[i]  |= 0xAAu;
 
     buildAdcTxBuffer();
     return true;
@@ -202,6 +214,14 @@ bool Enlight::begin() {
     _ledTransLow.tx_buffer=_ledTxBufLow;
     _ledTransLow.flags=SPI_TRANS_MODE_DIO;
     _ledTransLow.length=_ledBufBytes*8;
+    memset(&_ledTransNearOff,0,sizeof(_ledTransNearOff));
+    _ledTransNearOff.tx_buffer=_ledTxBufNearOff;
+    _ledTransNearOff.flags=SPI_TRANS_MODE_DIO;
+    _ledTransNearOff.length=_ledBufBytes*8;
+    memset(&_ledTransFarOff,0,sizeof(_ledTransFarOff));
+    _ledTransFarOff.tx_buffer=_ledTxBufFarOff;
+    _ledTransFarOff.flags=SPI_TRANS_MODE_DIO;
+    _ledTransFarOff.length=_ledBufBytes*8;
     memset(&_adcTrans,0,sizeof(_adcTrans));
     _adcTrans.tx_buffer=_adcTxBuf;
     _adcTrans.rx_buffer=_adcRxBuf;
@@ -586,7 +606,10 @@ void Enlight::dmaTask(void* arg) {
         const int64_t t0=esp_timer_get_time();
         while (esp_timer_get_time()-t0 < (int64_t)EnlightDefaults::AFE_STARTUP_MICROS) {}
     }
-    spi_transaction_t& ledTx = s->_useLowPower ? s->_ledTransLow : s->_ledTrans;
+    spi_transaction_t& ledTx = s->_useLowPower   ? s->_ledTransLow    :
+                               s->_nearInhibited ? s->_ledTransNearOff :
+                               s->_farInhibited  ? s->_ledTransFarOff  :
+                                                   s->_ledTrans;
     spi_device_queue_trans(s->_ledDevice,&ledTx,portMAX_DELAY);
     spi_device_queue_trans(s->_adcDevice,&s->_adcTrans,portMAX_DELAY);
     spi_transaction_t* r;

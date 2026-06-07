@@ -47,6 +47,10 @@ void EnlightCalibRoutine::step1() {
     long long ssR  = 0, ssG  = 0, ssB  = 0;
     uint32_t  n = 0;
 
+    // Suppress NEAR LED: only FAR retroreflection reaches the sensor, so the
+    // phase-offset scan is not confused by the in-phase NEAR contribution.
+    _e.inhibitNear();
+
     while (n < N_RUNS) {
         char prompt[24];
         snprintf(prompt, sizeof(prompt), "Shot %lu/%lu - TRIG1",
@@ -81,6 +85,9 @@ void EnlightCalibRoutine::step1() {
 
     // Store the number of runs for step2 processing.
     _step1_n = n;
+
+    // Restore both sources for normal operation.
+    _e.reinstateNear();
 
     // Persist and immediately apply the optimal phase offset.
     EnlightCalib cal;

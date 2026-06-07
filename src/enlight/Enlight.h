@@ -139,6 +139,14 @@ public:
     // Safe to call outside of an active run().
     void buildGoertzTab(uint32_t phase);
 
+    // Suppress one LED source so measurements read only the other.
+    // Safe to call outside of an active run(); persists until the matching
+    // reinstate*() call.  Only one source may be inhibited at a time.
+    void inhibitNear()   { _nearInhibited = true;  }
+    void reinstateNear() { _nearInhibited = false; }
+    void inhibitFar()    { _farInhibited  = true;  }
+    void reinstateFar()  { _farInhibited  = false; }
+
     // Single source of truth for the FAR kernel formula.
     // Returns KERN_MAG * cos(2π * phaseIdx / gp).  Used by buildGoertzTab()
     // and by EnlightCalibRoutine::computeBestPhase() so both always use the
@@ -171,12 +179,19 @@ private:
     EnlightColorCoords  _colorCoords   = {0.0f, 0.0f};
 
     // LED DIO SPI
-    spi_device_handle_t _ledDevice    = nullptr;
-    uint8_t*            _ledTxBuf    = nullptr;   // full-power PDM buffer
-    uint8_t*            _ledTxBufLow = nullptr;   // 1/10-amplitude PDM buffer
-    size_t              _ledBufBytes = 0;
-    spi_transaction_t   _ledTrans    = {};
-    spi_transaction_t   _ledTransLow = {};
+    spi_device_handle_t _ledDevice       = nullptr;
+    uint8_t*            _ledTxBuf        = nullptr;  // full-power PDM buffer
+    uint8_t*            _ledTxBufLow     = nullptr;  // 1/10-amplitude PDM buffer
+    uint8_t*            _ledTxBufNearOff = nullptr;  // full-power, NEAR LED suppressed
+    uint8_t*            _ledTxBufFarOff  = nullptr;  // full-power, FAR LED suppressed
+    size_t              _ledBufBytes     = 0;
+    spi_transaction_t   _ledTrans        = {};
+    spi_transaction_t   _ledTransLow     = {};
+    spi_transaction_t   _ledTransNearOff = {};
+    spi_transaction_t   _ledTransFarOff  = {};
+
+    bool                _nearInhibited   = false;
+    bool                _farInhibited    = false;
 
     // Adaptive power state (reset each run())
     bool      _useLowPower    = false;
