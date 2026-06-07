@@ -71,10 +71,10 @@ bool Enlight::generateWaveform() {
 
     if (!generateWaveform(_ledTxBuf,        1.0f))                              return false;
     if (!generateWaveform(_ledTxBufLow,     EnlightDefaults::LOW_POWER_FACTOR)) return false;
-    // ampScale=0 drives d=1 every sample → sigma-delta locks to output=1 → LED always OFF (hardware-inverted).
-    // Using per-source scales avoids any reliance on the DIO bit-to-pin mapping.
-    if (!generateWaveform(_ledTxBufNearOff, 1.0f, 0.0f))                       return false;
-    if (!generateWaveform(_ledTxBufFarOff,  0.0f, 1.0f))                       return false;
+    // Physical NEAR LED is driven by b_far (odd bits); physical FAR LED by b_near (even bits).
+    // ampScale=0 on the corresponding source locks its sigma-delta output to 1 → LED always OFF.
+    if (!generateWaveform(_ledTxBufNearOff, 0.0f, 1.0f)) return false;  // b_far=1 → physical NEAR off, FAR active
+    if (!generateWaveform(_ledTxBufFarOff,  1.0f, 0.0f)) return false;  // b_near=1 → physical FAR off, NEAR active
 
     buildAdcTxBuffer();
     return true;
