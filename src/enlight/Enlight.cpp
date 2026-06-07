@@ -69,38 +69,36 @@ bool Enlight::generateWaveform() {
     }
     memset(_adcRxBuf, 0, _adcBufBytes);
 
-    if (!generateWaveform(_ledTxBuf,    1.0f))                              return false;
-    if (!generateWaveform(_ledTxBufLow, EnlightDefaults::LOW_POWER_FACTOR)) return false;
-
-    // DIO byte layout: FAR on odd bits (7,5,3,1 → mask 0xAA), NEAR on even bits (6,4,2,0 → mask 0x55).
-    // Hardware-inverted: SPI bit=1 → LED OFF.  ORing the mask forces that source's bits to 1 = always OFF.
-    memcpy(_ledTxBufNearOff, _ledTxBuf, _ledBufBytes);
-    for (size_t i = 0; i < _ledBufBytes; i++) _ledTxBufNearOff[i] |= 0x55u;
-    memcpy(_ledTxBufFarOff,  _ledTxBuf, _ledBufBytes);
-    for (size_t i = 0; i < _ledBufBytes; i++) _ledTxBufFarOff[i]  |= 0xAAu;
+    if (!generateWaveform(_ledTxBuf,        1.0f))                              return false;
+    if (!generateWaveform(_ledTxBufLow,     EnlightDefaults::LOW_POWER_FACTOR)) return false;
+    // ampScale=0 drives d=1 every sample → sigma-delta locks to output=1 → LED always OFF (hardware-inverted).
+    // Using per-source scales avoids any reliance on the DIO bit-to-pin mapping.
+    if (!generateWaveform(_ledTxBufNearOff, 1.0f, 0.0f))                       return false;
+    if (!generateWaveform(_ledTxBufFarOff,  0.0f, 1.0f))                       return false;
 
     buildAdcTxBuffer();
     return true;
 }
 
 bool Enlight::generateWaveform(uint8_t* buf, float ampScale) {
+    return generateWaveform(buf, ampScale, ampScale);
+}
+
+bool Enlight::generateWaveform(uint8_t* buf, float ampScaleFar, float ampScaleNear) {
     if (!buf) return false;
     const float base = 0.5f + EnlightDefaults::PDM_AMP_OFFSET;
     const float swing = 0.5f - EnlightDefaults::PDM_AMP_OFFSET;
     const float twoPiOverT = 2.0f * (float)M_PI / (float)_periodClocks;
     // SPI output is hardware-inverted: bit=1 → LED OFF, bit=0 → LED ON.
-    // To scale LED power by ampScale, scale the LED signal (1-SPI), not SPI itself:
-    //   SPI = 1 - (1 - base - swing*A*cos) * ampScale
-    // At ampScale=1 this reduces to base + swing*A*cos (identical to full-power).
-    // At ampScale=0.1, average SPI ≈ 0.96 → LED ON ~4% → dim.
+    // Per-source amplitude: ampScale=0 drives d=1 always → sigma-delta locks to 1 → LED always OFF.
     // Dry-run one full period to find the periodic steady-state accumulator values,
     // so the real pass starts in-phase with no transient.
     float acc_far = 0.0f, acc_near = 0.0f;
     for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
         for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
-            const float theta = twoPiOverT * (float)(i + j);
-            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
-            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
+            const float theta  = twoPiOverT * (float)(i + j);
+            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScaleFar;
+            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScaleNear;
             acc_far  += d_far  - (float)((acc_far  >= 0.5f) ? 1u : 0u);
             acc_near += d_near - (float)((acc_near >= 0.5f) ? 1u : 0u);
         }
@@ -108,9 +106,9 @@ bool Enlight::generateWaveform(uint8_t* buf, float ampScale) {
     for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
         uint8_t byte = 0;
         for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
-            const float theta = twoPiOverT * (float)(i + j);
-            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
-            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
+            const float theta  = twoPiOverT * (float)(i + j);
+            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScaleFar;
+            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScaleNear;
             const uint8_t b_far  = (acc_far  >= 0.5f) ? 1u : 0u;
             const uint8_t b_near = (acc_near >= 0.5f) ? 1u : 0u;
             acc_far  += d_far  - (float)b_far;

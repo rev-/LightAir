@@ -224,8 +224,9 @@ private:
     struct TaskArgs { Enlight* self; };
     TaskArgs        _taskArgs      = {};
 
-    bool          generateWaveform();                            // allocates both buffers and fills them
-    bool          generateWaveform(uint8_t* buf, float ampScale); // fills one buffer at the given amplitude scale
+    bool          generateWaveform();                                               // allocates all buffers and fills them
+    bool          generateWaveform(uint8_t* buf, float ampScale);                  // fills one buffer; both sources share the same scale
+    bool          generateWaveform(uint8_t* buf, float ampScaleFar, float ampScaleNear); // fills one buffer with independent per-source scales
     void          buildAdcTxBuffer();
     void          processAdcCycle();
     EnlightResult classify();
