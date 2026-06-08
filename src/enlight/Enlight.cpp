@@ -562,7 +562,8 @@ EnlightResult Enlight::classify() {
             if (snr >= EnlightDefaults::NEAR_PHASE_GATE_Z) gate_ok = true;
             if (snr > best_snr) { best_snr = snr; best_phi = phi_ch; }
         }
-        _phaseGate = EnlightPhaseGate{ best_phi * (180.f / (float)M_PI), best_snr };
+        _phaseGate.phiDeg   = best_phi * (180.f / (float)M_PI);
+        _phaseGate.snrPhase = best_snr;
         ESP_LOGD(TAG, "phi=%.1f snr_phase=%.2f gate=%d",
                  (double)_phaseGate.phiDeg, (double)_phaseGate.snrPhase, (int)gate_ok);
 
