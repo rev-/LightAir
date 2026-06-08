@@ -247,6 +247,10 @@ bool Enlight::run() {
     _resultDelivered = false;
     _useLowPower    = false;
     _cycleNormScale = 1.0f;
+    for (int ch = 0; ch < (int)ADC_CHANNELS; ch++)
+        _iqMeanI[ch] = _iqMeanQ[ch] = _iqM2I[ch] = _iqM2Q[ch] = 0.f;
+    _iqCount   = 0;
+    _phaseGate = {};
     _active=true;
     _firstCycle=true;
     gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,1);
@@ -409,6 +413,10 @@ void Enlight::processAdcCycle() {
 
         const bool any_sat = (w_sat[0] > 0 || w_sat[1] > 0 || w_sat[2] > 0);
 
+        // Snapshot cycle sums before this period's contribution is added.
+        const long long rout_c0  = rout_c,  gout_c0  = gout_c,  bout_c0  = bout_c;
+        const long long rnear_c0 = rnear_c, gnear_c0 = gnear_c, bnear_c0 = bnear_c;
+
         if (!any_sat) {
             // Goertzel path: optimal SNR for weak signals, no saturation
             rout_c  += rout_p;  gout_c  += gout_p;  bout_c  += bout_p;
@@ -460,6 +468,22 @@ void Enlight::processAdcCycle() {
                 *far_acc[ch]  += (long long)(halfGP_f * A * (float)_goertzTab[x0 % _goertzPeriod]);
                 *near_acc[ch] += (long long)(halfGP_f * A * (float)_goertzTab[(x0 + _nearOffset) % _goertzPeriod]);
             }
+        }
+
+        // Welford per-period I/Q update for the phase-confidence gate.
+        // Per-period contribution: delta between cycle sums before and after this period.
+        // Scale-invariant: σ and R_mean are both in unscaled per-period units, so σ/R is preserved.
+        const long long I_p[ADC_CHANNELS] = { rout_c - rout_c0, gout_c - gout_c0, bout_c - bout_c0 };
+        const long long Q_p[ADC_CHANNELS] = { rnear_c - rnear_c0, gnear_c - gnear_c0, bnear_c - bnear_c0 };
+        _iqCount++;
+        for (int ch = 0; ch < (int)ADC_CHANNELS; ch++) {
+            const float fi = (float)I_p[ch], fq = (float)Q_p[ch];
+            float dI = fi - _iqMeanI[ch];
+            _iqMeanI[ch] += dI / (float)_iqCount;
+            _iqM2I[ch]   += dI * (fi - _iqMeanI[ch]);
+            float dQ = fq - _iqMeanQ[ch];
+            _iqMeanQ[ch] += dQ / (float)_iqCount;
+            _iqM2Q[ch]   += dQ * (fq - _iqMeanQ[ch]);
         }
     }
 
@@ -520,11 +544,31 @@ EnlightResult Enlight::classify() {
              _rawsum, rout, gout, bout, _rnear, _gnear, _bnear,
              (unsigned long)_satCount);
 
-    const float farSum  = (float)((rout)  + (gout)  + (bout));
-    const float nearSum = (float)((_rnear) + (_gnear) + (_bnear));
-    if (farSum > 0.0f && (nearSum / farSum) > _cal.nearRatioMax) {
-        ESP_LOGD(TAG, "NEAR ratio=%.3f", (double)(nearSum / farSum));
-        return classifyNear();
+    // Per-channel I/Q phase gate — uses Welford per-period variance for scale-invariant SNR.
+    // Gate passes (OR logic) if any channel's SNR ≥ NEAR_PHASE_GATE_Z.
+    // The best-SNR channel's phase determines FAR vs NEAR classification.
+    {
+        const float phi_thresh_rad = EnlightDefaults::NEAR_PHASE_DEG * ((float)M_PI / 180.f);
+        const float sqrtN          = sqrtf((float)_iqCount);
+        float best_snr = 0.f, best_phi = 0.f;
+        bool  gate_ok  = false;
+        for (int ch = 0; ch < (int)ADC_CHANNELS; ch++) {
+            if (_iqCount < 2) continue;
+            const float sigma_p = sqrtf(0.5f * (_iqM2I[ch] + _iqM2Q[ch]) / (float)(_iqCount - 1));
+            if (sigma_p <= 0.f) continue;
+            const float R_mean = sqrtf(_iqMeanI[ch]*_iqMeanI[ch] + _iqMeanQ[ch]*_iqMeanQ[ch]);
+            const float phi_ch = atan2f(_iqMeanQ[ch], _iqMeanI[ch]);
+            const float snr    = fabsf(phi_ch - phi_thresh_rad) * R_mean * sqrtN / sigma_p;
+            if (snr >= EnlightDefaults::NEAR_PHASE_GATE_Z) gate_ok = true;
+            if (snr > best_snr) { best_snr = snr; best_phi = phi_ch; }
+        }
+        _phaseGate = { best_phi * (180.f / (float)M_PI), best_snr };
+        ESP_LOGD(TAG, "phi=%.1f snr_phase=%.2f gate=%d",
+                 (double)_phaseGate.phiDeg, (double)_phaseGate.snrPhase, (int)gate_ok);
+
+        if (!gate_ok)                          return {EnlightStatus::NO_HIT, 0};
+        if (best_phi > phi_thresh_rad)         return classifyNear();
+        // best_phi ≤ threshold → FAR retroreflector: fall through to colour-box matching.
     }
 
     float outr = rout * _cal.rfact, outb = bout * _cal.bfact, outg = (float)gout;

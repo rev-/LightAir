@@ -158,8 +158,9 @@ void EnlightTestMode::run() {
                      (double)color.outr, (double)color.outang);
             const uint32_t satPct = (raw.totalSamples > 0)
                 ? (uint32_t)(raw.satCount * 100u / raw.totalSamples) : 0u;
-            snprintf(diagSs, sizeof(diagSs), "sat:%lu%%%s",
-                     (unsigned long)satPct, _e.usedLowPower() ? " LP" : "");
+            EnlightPhaseGate pg = _e.phaseGate();
+            snprintf(diagSs, sizeof(diagSs), "sat:%lu%% p:%3.0f z:%4.1f",
+                     (unsigned long)satPct, (double)pg.phiDeg, (double)pg.snrPhase);
 
             if (res.status == EnlightStatus::PLAYER_HIT &&
                 res.id < PlayerDefs::MAX_PLAYER_ID) {

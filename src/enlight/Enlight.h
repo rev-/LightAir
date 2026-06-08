@@ -66,6 +66,14 @@ struct EnlightColorCoords {
     float outang;
 };
 
+// I/Q phase-gate diagnostics from the last classify() call.
+// phiDeg: best-channel I/Q phase in degrees (atan2(NEAR,FAR)).
+// snrPhase: gate SNR = |φ − φ_thresh| × R_mean × √N / σ_period of the best channel.
+struct EnlightPhaseGate {
+    float phiDeg   = 0.f;
+    float snrPhase = 0.f;
+};
+
 class Enlight
 {
 public:
@@ -118,6 +126,7 @@ public:
     // Values are reset by run(), so call this before the next run().
     EnlightRawMeasure   rawMeasure()   const;
     EnlightColorCoords  colorCoords()  const { return _colorCoords; }
+    EnlightPhaseGate    phaseGate()    const { return _phaseGate;   }
     const EnlightCalib& calib()        const { return _cal; }
 
     // Access to the raw ADC DMA buffer from the last completed DMA cycle.
@@ -210,6 +219,14 @@ private:
     long long   _rawsum    = 0;
     uint32_t    _arrayiter = 0;
     uint32_t    _satCount  = 0;
+
+    // Per-channel per-period I/Q Welford estimator for the phase-confidence gate.
+    float    _iqMeanI[ADC_CHANNELS] = {};  // running per-period FAR mean, per channel
+    float    _iqMeanQ[ADC_CHANNELS] = {};  // running per-period NEAR mean, per channel
+    float    _iqM2I  [ADC_CHANNELS] = {};  // Welford M2 for FAR, per channel
+    float    _iqM2Q  [ADC_CHANNELS] = {};  // Welford M2 for NEAR, per channel
+    uint32_t _iqCount = 0;                  // active periods counted (shared across channels)
+    EnlightPhaseGate _phaseGate     = {};   // last classify() result, for diagnostics
 
     // Result -- written by dmaTask (core 0), read-cleared by poll() (any core).
     portMUX_TYPE    _mux                = portMUX_INITIALIZER_UNLOCKED;

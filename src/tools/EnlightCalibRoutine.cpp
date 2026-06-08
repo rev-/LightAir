@@ -22,7 +22,7 @@ EnlightCalibRoutine::EnlightCalibRoutine(Enlight&            e,
 void EnlightCalibRoutine::run() {
     step1();
     step2();
-    step3();
+    // step3() removed: white-wall magnitude thresholds superseded by I/Q phase gate.
     step4();
 }
 
@@ -221,6 +221,10 @@ void EnlightCalibRoutine::step2() {
         cal.bfact = 1.0f;
     }
 
+    // Zero the now-unused white-wall power thresholds; LOW_POW check becomes dead code.
+    cal.thresh_near_r = cal.thresh_near_g = cal.thresh_near_b = 0;
+    cal.thresh_far_r  = cal.thresh_far_g  = cal.thresh_far_b  = 0;
+    cal.limpow = 0;
     enlight_calib_save(cal);
 
     // Compute averages and stdevs for display.
