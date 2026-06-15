@@ -251,6 +251,10 @@ bool Enlight::run() {
         _iqMeanI[ch] = _iqMeanQ[ch] = _iqM2I[ch] = _iqM2Q[ch] = 0.f;
     _iqCount   = 0;
     _phaseGate = {};
+    for (int ch = 0; ch < (int)ADC_CHANNELS; ch++)
+        _noiseVar[ch] = _rhoArr[ch] = 0.f;
+    _coordErr[0] = _coordErr[1] = -1.f;
+    _diagValid = false;
     _active=true;
     _firstCycle=true;
     gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,1);
@@ -544,32 +548,34 @@ EnlightResult Enlight::classify() {
              _rawsum, rout, gout, bout, _rnear, _gnear, _bnear,
              (unsigned long)_satCount);
 
-    // Per-channel I/Q phase gate — uses Welford per-period variance for scale-invariant SNR.
-    // Gate passes (OR logic) if any channel's SNR ≥ NEAR_PHASE_GATE_Z.
-    // The best-SNR channel's phase determines FAR vs NEAR classification.
     {
-        const float phi_thresh_rad = EnlightDefaults::NEAR_PHASE_DEG * ((float)M_PI / 180.f);
-        const float sqrtN          = sqrtf((float)_iqCount);
-        float best_snr = 0.f, best_phi = 0.f;
-        bool  gate_ok  = false;
-        for (int ch = 0; ch < (int)ADC_CHANNELS; ch++) {
-            if (_iqCount < 2) continue;
-            const float sigma_p = sqrtf(0.5f * (_iqM2I[ch] + _iqM2Q[ch]) / (float)(_iqCount - 1));
-            if (sigma_p <= 0.f) continue;
-            const float R_mean = sqrtf(_iqMeanI[ch]*_iqMeanI[ch] + _iqMeanQ[ch]*_iqMeanQ[ch]);
-            const float phi_ch = atan2f(_iqMeanQ[ch], _iqMeanI[ch]);
-            const float snr    = fabsf(phi_ch - phi_thresh_rad) * R_mean * sqrtN / sigma_p;
-            if (snr >= EnlightDefaults::NEAR_PHASE_GATE_Z) gate_ok = true;
-            if (snr > best_snr) { best_snr = snr; best_phi = phi_ch; }
+        float best_rho = 0.f, best_phi = 0.f;
+        int   best_ch  = 0;
+        if (_iqCount >= 2) {
+            for (int ch = 0; ch < (int)ADC_CHANNELS; ch++) {
+                const float sigma_eta2 = (_iqM2I[ch] + _iqM2Q[ch]) / (2.f * (_iqCount - 1));
+                _noiseVar[ch]          = sigma_eta2;
+                const float M_hat2     = _iqMeanI[ch]*_iqMeanI[ch] + _iqMeanQ[ch]*_iqMeanQ[ch];
+                const float rho        = (sigma_eta2 > 0.f)
+                                         ? 2.f * (float)_iqCount * M_hat2 / sigma_eta2 : 0.f;
+                _rhoArr[ch]            = rho;
+                const float phi_ch     = atan2f(_iqMeanQ[ch], _iqMeanI[ch]);
+                if (rho > best_rho) { best_rho = rho; best_phi = phi_ch; best_ch = ch; }
+            }
         }
         _phaseGate.phiDeg   = best_phi * (180.f / (float)M_PI);
-        _phaseGate.snrPhase = best_snr;
-        ESP_LOGD(TAG, "phi=%.1f snr_phase=%.2f gate=%d",
-                 (double)_phaseGate.phiDeg, (double)_phaseGate.snrPhase, (int)gate_ok);
+        _phaseGate.snrPhase = best_rho;
+        _coordErr[0] = _coordErr[1] = -1.f;
+        _diagValid = true;
+        ESP_LOGD(TAG, "phi=%.1f best_rho=%.1f ch=%d",
+                 (double)_phaseGate.phiDeg, (double)best_rho, best_ch);
 
-        if (!gate_ok)                          return {EnlightStatus::NO_HIT, 0};
-        if (best_phi > phi_thresh_rad)         return classifyNear();
-        // best_phi ≤ threshold → FAR retroreflector: fall through to colour-box matching.
+        if (best_rho < EnlightDefaults::RHO_MIN_THRESHOLD)
+            return {EnlightStatus::NO_HIT, 0};
+        const float far_hit_rad = EnlightDefaults::FAR_HIT_PHASE_DEG * ((float)M_PI / 180.f);
+        if (fabsf(best_phi) >= far_hit_rad)
+            return classifyNear();
+        // rho OK and |φ| < FAR_HIT_PHASE_DEG → fall through to colour-box matching.
     }
 
     float outr = rout * _cal.rfact, outb = bout * _cal.bfact, outg = (float)gout;
@@ -578,6 +584,27 @@ EnlightResult Enlight::classify() {
     outr /= s; outg /= s;
     const float outang = (outr < 1.0f) ? (outg / (1.0f - outr)) : 1.0f;
     _colorCoords = {outr, outang};
+    if (_iqCount >= 2) {
+        const float vR = (float)_iqCount * _iqM2I[0] / (float)(_iqCount - 1);
+        const float vG = (float)_iqCount * _iqM2I[1] / (float)(_iqCount - 1);
+        const float vB = (float)_iqCount * _iqM2I[2] / (float)(_iqCount - 1);
+        const float R  = (float)rout * _cal.rfact;
+        const float G  = (float)gout;
+        const float B  = (float)bout * _cal.bfact;
+        const float S  = R + G + B;
+        if (S > 0.f) {
+            const float GB = G + B;
+            const float s2 = S * S;
+            const float var_outr = (GB*GB * _cal.rfact*_cal.rfact * vR
+                                  + R*R * vG
+                                  + R*R * _cal.bfact*_cal.bfact * vB) / (s2 * s2);
+            const float T  = G + B;
+            const float t2 = T * T;
+            const float var_outang = (B*B * vG + G*G * _cal.bfact*_cal.bfact * vB) / (t2 * t2);
+            _coordErr[0] = EnlightDefaults::COORD_ERR_K * sqrtf(fmaxf(0.f, var_outr));
+            _coordErr[1] = EnlightDefaults::COORD_ERR_K * sqrtf(fmaxf(0.f, var_outang));
+        }
+    }
     int hit = -1;
     for (int p = 1; p < CALIB_MAX_PLAYERS; p++) {
         const float* b = colorBox::colorBox[p];
@@ -600,6 +627,19 @@ EnlightResult Enlight::classify() {
  * ============================================================ */
 EnlightResult Enlight::classifyNear() {
     return {EnlightStatus::NEAR,0};
+}
+
+EnlightNoiseVar Enlight::noiseVariance() const {
+    if (!_diagValid) return {-1.f, -1.f, -1.f};
+    return {_noiseVar[0], _noiseVar[1], _noiseVar[2]};
+}
+EnlightRhoVec Enlight::rhoVec() const {
+    if (!_diagValid) return {-1.f, -1.f, -1.f};
+    return {_rhoArr[0], _rhoArr[1], _rhoArr[2]};
+}
+EnlightCoordErr Enlight::coordErrors() const {
+    if (!_diagValid || _coordErr[0] < 0.f) return {-1.f, -1.f};
+    return {_coordErr[0], _coordErr[1]};
 }
 
 /* ============================================================

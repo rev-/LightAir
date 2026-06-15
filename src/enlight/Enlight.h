@@ -68,11 +68,15 @@ struct EnlightColorCoords {
 
 // I/Q phase-gate diagnostics from the last classify() call.
 // phiDeg: best-channel I/Q phase in degrees (atan2(NEAR,FAR)).
-// snrPhase: gate SNR = |φ − φ_thresh| × R_mean × √N / σ_period of the best channel.
+// snrPhase: best-channel rho (= 2N|M̂|²/σ²_η) — signal-to-noise non-centrality parameter.
 struct EnlightPhaseGate {
     float phiDeg   = 0.f;
     float snrPhase = 0.f;
 };
+
+struct EnlightNoiseVar  { float r, g, b; };          // σ²_η per channel; -1 if stale
+struct EnlightRhoVec    { float r, g, b; };          // rho per channel;  -1 if stale
+struct EnlightCoordErr  { float outr, outang; };     // 99%-CI half-widths; -1 if no FAR hit
 
 class Enlight
 {
@@ -127,6 +131,9 @@ public:
     EnlightRawMeasure   rawMeasure()   const;
     EnlightColorCoords  colorCoords()  const { return _colorCoords; }
     EnlightPhaseGate    phaseGate()    const { return _phaseGate;   }
+    EnlightNoiseVar     noiseVariance() const;
+    EnlightRhoVec       rhoVec()        const;
+    EnlightCoordErr     coordErrors()   const;
     const EnlightCalib& calib()        const { return _cal; }
 
     // Access to the raw ADC DMA buffer from the last completed DMA cycle.
@@ -220,13 +227,17 @@ private:
     uint32_t    _arrayiter = 0;
     uint32_t    _satCount  = 0;
 
-    // Per-channel per-period I/Q Welford estimator for the phase-confidence gate.
+    // Per-channel per-period I/Q Welford estimator.
     float    _iqMeanI[ADC_CHANNELS] = {};  // running per-period FAR mean, per channel
     float    _iqMeanQ[ADC_CHANNELS] = {};  // running per-period NEAR mean, per channel
     float    _iqM2I  [ADC_CHANNELS] = {};  // Welford M2 for FAR, per channel
     float    _iqM2Q  [ADC_CHANNELS] = {};  // Welford M2 for NEAR, per channel
     uint32_t _iqCount = 0;                  // active periods counted (shared across channels)
     EnlightPhaseGate _phaseGate     = {};   // last classify() result, for diagnostics
+    float         _noiseVar[ADC_CHANNELS] = {};  // σ²_η per channel
+    float         _rhoArr  [ADC_CHANNELS] = {};  // rho per channel
+    float         _coordErr[2]            = {};  // 99%-CI for outr, outang
+    volatile bool _diagValid              = false;
 
     // Result -- written by dmaTask (core 0), read-cleared by poll() (any core).
     portMUX_TYPE    _mux                = portMUX_INITIALIZER_UNLOCKED;

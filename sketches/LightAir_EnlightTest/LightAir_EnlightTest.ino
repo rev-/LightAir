@@ -366,15 +366,23 @@ static void takeMeasurement() {
     } else {
         EnlightRawMeasure  raw   = enlight->rawMeasure();
         EnlightColorCoords color = enlight->colorCoords();
+        EnlightNoiseVar    nv    = enlight->noiseVariance();
+        EnlightRhoVec      rho   = enlight->rhoVec();
+        EnlightCoordErr    ce    = enlight->coordErrors();
 
         snprintf(line, sizeof(line),
-            "ELAB,%lu,%s,%u,%lld,%lld,%lld,%lld,%lld,%lld,%.6f,%.6f,%lu\n",
+            "ELAB,%lu,%s,%u,%lld,%lld,%lld,%lld,%lld,%lld,%.6f,%.6f,%lu"
+            ",%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%.6f,%.6f\n",
             (unsigned long)ts,
             statusStr(res.status), res.id,
             raw.rout,  raw.gout,  raw.bout,
             raw.rnear, raw.gnear, raw.bnear,
             color.outr, color.outang,
-            (unsigned long)raw.satCount);
+            (unsigned long)raw.satCount,
+            (unsigned)ENLIGHT_REPS,
+            nv.r, nv.g, nv.b,
+            rho.r, rho.g, rho.b,
+            ce.outr, ce.outang);
         tcpClient.print(line);
     }
 
@@ -399,6 +407,7 @@ void setup() {
     // Enlight init
     enlight_calib_load(enlightCalib);
     enlight = new Enlight(enlightCalib);
+    enlight->setRepetitions(ENLIGHT_REPS);
     if (!enlight->begin()) {
         dispBegin();
         dispRow(0, "Enlight init");
@@ -458,7 +467,8 @@ void loop() {
                     "rout(far-R),gout(far-G),bout(far-B),"
                     "rnear(near-R),gnear(near-G),bnear(near-B),"
                     "outr(norm),outang,"
-                    "satCount\n");
+                    "satCount,"
+                    "reps,noiseVar_r,noiseVar_g,noiseVar_b,rho_r,rho_g,rho_b,err_outr,err_outang\n");
             }
         } else {
             if (millis() - lastDispMs > 500) {
