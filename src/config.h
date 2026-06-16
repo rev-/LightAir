@@ -169,8 +169,9 @@ namespace EnlightDefaults {
     constexpr float    SAT_DITCH_FRAC  = 0.95f; // ditch period if any channel has >95% saturated samples
     constexpr float    SAT_SWITCH_FRAC = 0.02f; // switch to low-power PDM if >2% of a cycle's active samples saturated
     constexpr float    LOW_POWER_FACTOR = 0.1f; // amplitude scale for the dim PDM buffer
-    constexpr float    NEAR_PHASE_DEG    = 70.0f;   // φ > this → NEAR diffuser (degrees)
-    constexpr float    NEAR_PHASE_GATE_Z = 3.00f;   // phase-gate z-score threshold
+    constexpr float RHO_MIN_THRESHOLD = 350.0f;  // best-channel rho must exceed this → else NO_HIT
+    constexpr float FAR_HIT_PHASE_DEG = 10.0f;   // |φ| must be below this → else NEAR (degrees)
+    constexpr float COORD_ERR_K       = 2.576f;  // z-score for 99 % CI in coord error propagation
 }
 
 // ---------------------------------------------------------------
