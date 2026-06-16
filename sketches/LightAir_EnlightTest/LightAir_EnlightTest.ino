@@ -16,6 +16,8 @@
 //               AUTO   : measurements fire automatically on a timer
 //   Step 3 — Auto interval (AUTO only)
 //               1 – 10 seconds, 1 s steps   (</>: change, A: confirm)
+//   Step 4 — Repetitions
+//               1 – 200, 1 step             (</>: change, A: confirm)
 //
 // After the menu the sketch connects to WiFi (station mode) and
 // starts a TCP server.  Connect with e.g.:
@@ -50,8 +52,9 @@
 #define WIFI_PASSWORD "PASSWORD"
 #define TCP_PORT      9000
 
-// Number of Enlight DMA repetitions per measurement.
-// RAW mode: set to 1 — only the last DMA cycle is retained after poll().
+// Initial value for the Repetitions menu step (range 1-200, adjustable
+// at runtime via </> on the setup screen).
+// RAW mode: 1 — only the last DMA cycle is retained after poll().
 // ELABORATED mode: 5 reps ≈ 39 ms per shot at V6R2 defaults.
 #define ENLIGHT_REPS  1
 // ------------------------------------------------------------------------
@@ -85,6 +88,7 @@ enum class TrigMode : uint8_t { MANUAL = 0, AUTO = 1 };
 static DataMode gDataMode    = DataMode::RAW;
 static TrigMode gTrigMode    = TrigMode::MANUAL;
 static uint8_t  gIntervalSec = 5;
+static uint8_t  gReps        = ENLIGHT_REPS;
 
 static uint32_t gLastTrigMs  = 0;
 static uint32_t gTxCount     = 0;
@@ -187,6 +191,24 @@ static void menuInterval() {
     }
 }
 
+static void menuReps() {
+    uint8_t val = gReps;
+    char buf[20];
+    for (;;) {
+        dispBegin();
+        dispRow(0, "Repetitions:");
+        snprintf(buf, sizeof(buf), "  %u", val);
+        dispRow(2, buf, true);
+        dispRow(4, "</> change  A: ok");
+        dispFlush();
+
+        char k = waitKey();
+        if      (k == '<' && val > 1)   val--;
+        else if (k == '>' && val < 200) val++;
+        else if (k == 'A')              { gReps = val; return; }
+    }
+}
+
 // ================================================================
 // WiFi + TCP server startup
 // ================================================================
@@ -253,12 +275,12 @@ static void updateRunDisplay(bool waitingClient) {
 
     dispRow(1, gDataMode == DataMode::RAW ? "Mode: RAW" : "Mode: ELAB");
 
+    snprintf(buf, sizeof(buf), "Reps: %u", gReps);
+    dispRow(2, buf);
+
     if (gTrigMode == TrigMode::MANUAL) {
-        dispRow(2, "Trig: MANUAL");
         dispRow(3, "Press TRIG 1");
     } else {
-        snprintf(buf, sizeof(buf), "Trig: AUTO %us", gIntervalSec);
-        dispRow(2, buf);
         uint32_t elapsed = (millis() - gLastTrigMs) / 1000;
         uint32_t remain  = (gIntervalSec > elapsed) ? gIntervalSec - elapsed : 0;
         snprintf(buf, sizeof(buf), "Next in: %lus", (unsigned long)remain);
@@ -421,6 +443,8 @@ void setup() {
     menuDataMode();
     menuTrigMode();
     if (gTrigMode == TrigMode::AUTO) menuInterval();
+    menuReps();
+    enlight->setRepetitions(gReps);
 
     // WiFi + TCP server
     wifiConnect();
