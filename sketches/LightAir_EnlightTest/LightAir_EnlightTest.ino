@@ -401,7 +401,7 @@ static void takeMeasurement() {
             raw.rnear, raw.gnear, raw.bnear,
             color.outr, color.outang,
             (unsigned long)raw.satCount,
-            (unsigned)ENLIGHT_REPS,
+            (unsigned)gReps,
             nv.r, nv.g, nv.b,
             rho.r, rho.g, rho.b,
             ce.outr, ce.outang);
@@ -429,7 +429,6 @@ void setup() {
     // Enlight init
     enlight_calib_load(enlightCalib);
     enlight = new Enlight(enlightCalib);
-    enlight->setRepetitions(ENLIGHT_REPS);
     if (!enlight->begin()) {
         dispBegin();
         dispRow(0, "Enlight init");
