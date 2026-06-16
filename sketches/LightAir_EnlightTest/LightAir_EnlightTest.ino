@@ -16,8 +16,9 @@
 //               AUTO   : measurements fire automatically on a timer
 //   Step 3 — Auto interval (AUTO only)
 //               1 – 10 seconds, 1 s steps   (</>: change, A: confirm)
-//   Step 4 — Repetitions
-//               1 – 200, 1 step             (</>: change, A: confirm)
+//
+// Once running, </> changes the repetition count live (1-200), shown
+// on the LCD where the trigger mode used to be displayed.
 //
 // After the menu the sketch connects to WiFi (station mode) and
 // starts a TCP server.  Connect with e.g.:
@@ -188,24 +189,6 @@ static void menuInterval() {
         if      (k == '<' && val > 1)  val--;
         else if (k == '>' && val < 10) val++;
         else if (k == 'A')             { gIntervalSec = val; return; }
-    }
-}
-
-static void menuReps() {
-    uint8_t val = gReps;
-    char buf[20];
-    for (;;) {
-        dispBegin();
-        dispRow(0, "Repetitions:");
-        snprintf(buf, sizeof(buf), "  %u", val);
-        dispRow(2, buf, true);
-        dispRow(4, "</> change  A: ok");
-        dispFlush();
-
-        char k = waitKey();
-        if      (k == '<' && val > 1)   val--;
-        else if (k == '>' && val < 200) val++;
-        else if (k == 'A')              { gReps = val; return; }
     }
 }
 
@@ -429,6 +412,7 @@ void setup() {
     // Enlight init
     enlight_calib_load(enlightCalib);
     enlight = new Enlight(enlightCalib);
+    enlight->setRepetitions(gReps);
     if (!enlight->begin()) {
         dispBegin();
         dispRow(0, "Enlight init");
@@ -442,8 +426,6 @@ void setup() {
     menuDataMode();
     menuTrigMode();
     if (gTrigMode == TrigMode::AUTO) menuInterval();
-    menuReps();
-    enlight->setRepetitions(gReps);
 
     // WiFi + TCP server
     wifiConnect();
@@ -513,6 +495,15 @@ void loop() {
              rpt.buttons[i].state == ButtonState::HELD)) {
             trigFired = true;
         }
+    }
+
+    // ---- Live repetitions adjustment (</>) ----------------------------
+    for (uint8_t i = 0; i < rpt.keyEventCount; i++) {
+        if (rpt.keyEvents[i].state != KeyState::RELEASED) continue;
+        if      (rpt.keyEvents[i].key == '<' && gReps > 1)   gReps--;
+        else if (rpt.keyEvents[i].key == '>' && gReps < 200) gReps++;
+        else continue;
+        enlight->setRepetitions(gReps);
     }
 
     // ---- Decide whether to measure -----------------------------------
