@@ -186,7 +186,7 @@ static void menuInterval() {
         dispFlush();
 
         char k = waitKey();
-        if      (k == '<' && val > 1)  val--;
+        if      (k == '<' && val > 0)  val--;
         else if (k == '>' && val < 10) val++;
         else if (k == 'A')             { gIntervalSec = val; return; }
     }
