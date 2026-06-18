@@ -371,7 +371,7 @@ static void takeMeasurement() {
     } else {
         EnlightRawMeasure  raw   = enlight->rawMeasure();
         EnlightColorCoords color = enlight->colorCoords();
-        EnlightNoiseVar    nv    = enlight->noiseVariance();
+        EnlightNoiseSigma  ns    = enlight->noiseSigma();
         EnlightRhoVec      rho   = enlight->rhoVec();
         EnlightCoordErr    ce    = enlight->coordErrors();
 
@@ -385,7 +385,7 @@ static void takeMeasurement() {
             color.outr, color.outang,
             (unsigned long)raw.satCount,
             (unsigned)gReps,
-            nv.r, nv.g, nv.b,
+            ns.r, ns.g, ns.b,
             rho.r, rho.g, rho.b,
             ce.outr, ce.outang);
         tcpClient.print(line);
@@ -473,7 +473,7 @@ void loop() {
                     "rnear(near-R),gnear(near-G),bnear(near-B),"
                     "outr(norm),outang,"
                     "satCount,"
-                    "reps,noiseVar_r,noiseVar_g,noiseVar_b,rho_r,rho_g,rho_b,err_outr,err_outang\n");
+                    "reps,sigma_r,sigma_g,sigma_b,rho_r,rho_g,rho_b,err_outr,err_outang\n");
             }
         } else {
             if (millis() - lastDispMs > 500) {
