@@ -4,33 +4,37 @@
 // One-time NVS setup sketch for a LightAir totem device.
 //
 // Flash this sketch onto the totem ESP32 to assign its logical
-// player-ID, team, and hardware type.  After the sketch runs,
-// reflash the device with LightAir_Totem.ino.
+// totem number and hardware type.  After the sketch runs, reflash
+// the device with LightAir_Totem.ino.
 //
 // Usage:
 //   1. Open Serial Monitor at 115200 baud.
-//   2. Edit TOTEM_ID and TOTEM_TEAM below to match the desired
-//      totem assignment.
+//   2. Edit TOTEM_NUM below to match the desired totem (1–16,
+//      matching the "Totem 01".."Totem 16" labels used elsewhere).
 //   3. Flash.  The sketch writes to NVS and prints confirmation.
 //
-// NVS namespace: "lightair"
-//   "id"   uint8  — logical player ID used as the beacon senderId
-//   "team" uint8  — 0 = team-O, 1 = team-X
-//   "hw"   uint8  — DeviceHardware::TOTEM (1)
+// NVS namespace: "calibration"
+//   "id" uint8  — logical totem ID used as the beacon senderId
+//   "hw" uint8  — DeviceHardware::TOTEM (1)
 //
-// Totem ID conventions:
-//   Player IDs 1–9 are reserved for player blasters.
-//   Totem IDs 10–20 avoid collisions with players.
-//   ID 10 = Base O1, 11 = Base O2, 12 = Base X1, 13 = Base X2,
-//   14 = Flag O,  15 = Flag X,
-//   16 = CP1, 17 = CP2, 18 = CP3, 19 = CP4, 20 = CP5
+// Totem ID conventions (see TotemDefs in config.h):
+//   Player IDs 1–16 are reserved for player blasters.
+//   Totem numbers 1–16 map to logical IDs 254 down to 239
+//   (TOTEM_NUM 1 = id 254 = "Totem 01", TOTEM_NUM 16 = id 239 =
+//   "Totem 16"), via TotemDefs::idFromIndex(TOTEM_NUM - 1).
+//
+//   Totem role (BASE_O, BASE_X, CP, FLAG, …) and team are NOT
+//   fixed in firmware — they are assigned per-game at game setup,
+//   so this sketch only provisions the totem's identity, not its
+//   in-game role.
 // ================================================================
 
 #include <LightAir.h>
 
-// ---- Edit these before flashing ----
-static constexpr uint8_t TOTEM_ID   = 10;   // logical player-ID for this totem
-static constexpr uint8_t TOTEM_TEAM =  0;   // 0 = team-O, 1 = team-X
+// ---- Edit this before flashing ----
+static constexpr uint8_t TOTEM_NUM = 1;   // totem number, 1–16 ("Totem 01".."Totem 16")
+
+static constexpr uint8_t TOTEM_ID = TotemDefs::idFromIndex(TOTEM_NUM - 1);  // logical id, 254..239
 
 // ----------------------------------------------------------------
 void setup() {
@@ -38,14 +42,11 @@ void setup() {
     delay(1000);
 
     Serial.println("=== LightAir Totem Provisioning ===");
-    Serial.printf("Writing: id=%u  team=%u  hw=TOTEM\n", TOTEM_ID, TOTEM_TEAM);
+    Serial.printf("Writing: totem=%u  id=%u  hw=TOTEM\n", TOTEM_NUM, TOTEM_ID);
 
-    // Write ID and team via existing calibration helpers.
+    // Write ID via existing calibration helpers.
     if (!player_config_save_id(TOTEM_ID)) {
         Serial.println("ERROR: failed to save ID");
-    }
-    if (!player_config_save_team(TOTEM_TEAM)) {
-        Serial.println("ERROR: failed to save team");
     }
     if (!player_config_save_hardware(DeviceHardware::TOTEM)) {
         Serial.println("ERROR: failed to save hardware type");
@@ -54,11 +55,9 @@ void setup() {
     // Verify by reading back.
     PlayerConfig cfg;
     player_config_load(cfg);
-    Serial.printf("Verified:  id=%u  team=%u  hw=%u\n",
-                  cfg.id, cfg.team, (uint8_t)cfg.hardware);
+    Serial.printf("Verified:  id=%u  hw=%u\n", cfg.id, (uint8_t)cfg.hardware);
 
-    if (cfg.id       == TOTEM_ID   &&
-        cfg.team     == TOTEM_TEAM &&
+    if (cfg.id       == TOTEM_ID &&
         cfg.hardware == DeviceHardware::TOTEM) {
         Serial.println("Provisioning OK.  Reflash with LightAir_Totem.ino.");
     } else {
