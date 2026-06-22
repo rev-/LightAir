@@ -320,5 +320,6 @@ extern const LightAir_Game game_ffa = {
     /* totemRequirements     */ FFA::totemRequirements,  /* totemRequirementCount  */ 2,
     /* teamCount             */ 0,
     /* teamMap               */ nullptr,
+    /* gameTimeLeft          */ &FFA::gameTimeLeft,
     /* onEnd                 */ nullptr,
 };

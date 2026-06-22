@@ -12,9 +12,10 @@
 //              On player reply (0x61) → COOLDOWN; triggers Malus anim.
 //   COOLDOWN : silent; waits _cooldownSecs seconds then → READY; triggers Idle.
 //
-// Activation payload
-//   payload[0] = roleId (MALUS)
-//   payload[1] = cooldown interval in seconds (optional; default 30).
+// Activation
+//   info.roleId       = MALUS
+//   info.configSecs   = cooldown interval in seconds, if info.hasConfigSecs;
+//                       otherwise DEFAULT_COOLDOWN_SECS.
 //
 // The effect of the malus is entirely determined by the player side.
 // ================================================================
@@ -37,10 +38,10 @@ public:
         : _state(MALUS_READY), _cooldownSecs(DEFAULT_COOLDOWN_SECS),
           _cooldownEnd(0), _lastBeacon(0) {}
 
-    void onActivate(const uint8_t* payload, uint8_t len,
+    void onActivate(const LightAir_TotemActivation& info,
                     LightAir_TotemOutput& out) override {
         _state        = MALUS_READY;
-        _cooldownSecs = (len >= 2) ? payload[1] : DEFAULT_COOLDOWN_SECS;
+        _cooldownSecs = info.hasConfigSecs ? info.configSecs : DEFAULT_COOLDOWN_SECS;
         _cooldownEnd  = 0;
         _lastBeacon   = 0;
         out.ui.trigger(TotemUIEvent::Idle);

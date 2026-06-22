@@ -10,26 +10,33 @@
 // Multiple instances of the same subclass may run on different
 // totem devices simultaneously.
 //
-// Lifecycle managed by LightAir_TotemDriver:
+// A totem is stateless (no role, no session token, no typeId) only
+// *between* games.  Lifecycle managed by LightAir_TotemDriver:
 //
-//   IDLE  → (first game-typeId packet received) → ACTIVE
-//            driver calls onMessage() with the activation packet,
-//            then update() every tick.
+//   IDLE  → (first 0xF1 activation reply received) → ACTIVE
+//            driver decodes the reply into a LightAir_TotemActivation,
+//            adopts its session token, and calls onActivate(info, out);
+//            then onMessage() for subsequent packets, update() every tick.
 //
-//   ACTIVE → (MSG_TOTEM_ROSTER received) → IDLE
-//            driver calls onRoster() (which queues the reply),
-//            then reset() to clear all state.
+//   ACTIVE → (MSG_TOTEM_ROSTER received, or the self-revert watchdog
+//             elapses without one arriving) → IDLE
+//            driver calls onRoster() (which queues the reply) when roster
+//            arrives, then reset() and clears role/token/typeId either way
+//            so the totem is fully stateless again for the next game.
 //
 // Activation protocol — MSG_TOTEM_BEACON reply (msgType 0xF1):
 //   The GameRunner infrastructure (on the host device only) replies to
-//   every MSG_TOTEM_BEACON from a configured totem with 0xF1:
+//   every MSG_TOTEM_BEACON from a configured totem with 0xF1, carrying:
+//     - the assigned roleId
+//     - the host's current session token (the totem adopts it for the game)
+//     - the game's live remaining-time counter, used to arm a self-revert
+//       watchdog (~10s margin) in case MSG_TOTEM_ROSTER is never received
+//     - optional per-role config (e.g. cooldown seconds for BONUS/MALUS)
 //
-//     payload[0] = roleId  (TotemRoleId::BASE_O … MALUS)
-//     payload[1] = optional per-role config (e.g. cooldown seconds)
-//
-//   TotemDriver looks up the runner via LightAir_TotemRoleManager and
-//   calls runner->onActivate(payload, len, out).  onMessage() is NOT
-//   called with the activation packet.
+//   TotemDriver looks up the runner via LightAir_TotemRoleManager, decodes
+//   the reply into a LightAir_TotemActivation, and calls
+//   runner->onActivate(info, out).  onMessage() is NOT called with the
+//   activation packet.
 //
 //   Unconfigured and non-totem senders receive no reply.
 //
@@ -46,19 +53,31 @@
 //       void reset() override { /* clear counters */ }
 //   };
 // ----------------------------------------------------------------
+
+// Decoded contents of one 0xF1 activation reply.  Built once by
+// LightAir_TotemDriver from the raw packet payload and passed to every
+// role's onActivate(), instead of each role re-deriving its own fields
+// from raw payload[] indices.
+struct LightAir_TotemActivation {
+    uint8_t  roleId;
+    uint8_t  sessionToken;
+    uint16_t gameTimeLeftSecs;   // 0xFFFF = unknown / no watchdog budget
+    bool     hasConfigSecs;
+    uint8_t  configSecs;        // valid only if hasConfigSecs
+};
+
 class LightAir_TotemRunner {
 public:
     virtual ~LightAir_TotemRunner() = default;
 
     // Called once when the activation reply (0xF1) is received with a
-    // known roleId.  payload[0] = roleId; payload[1..] = optional per-role
-    // config bytes (e.g. cooldown seconds for BONUS/MALUS).
-    // Use for identity animations and reading config from the payload.
+    // known roleId.  Use for identity animations and reading per-role
+    // config out of info.
     // Default: calls reset() — backward-compatible with legacy runners
     // that do not override this method.
-    virtual void onActivate(const uint8_t* payload, uint8_t len,
+    virtual void onActivate(const LightAir_TotemActivation& info,
                             LightAir_TotemOutput& out) {
-        (void)payload; (void)len; (void)out;
+        (void)info; (void)out;
         reset();
     }
 

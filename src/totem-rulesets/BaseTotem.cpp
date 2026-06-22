@@ -21,9 +21,9 @@
 //   that support teamless bases can accept it from any player.
 //   Respawn animation still shows the respawning player's team colour.
 //
-// Activation payload
-//   payload[0] = roleId (BASE_O, BASE_X, or BASE) — team already known
-//                from construction; payload is ignored beyond confirming roleId.
+// Activation
+//   info.roleId = BASE_O, BASE_X, or BASE — team already known from
+//                 construction; info is otherwise unused.
 // ================================================================
 
 using RadioMsg::MSG_BASE_BEACON;
@@ -46,7 +46,7 @@ public:
     explicit BaseTotem(uint8_t team)
         : _team(team), _lastBeacon(0) {}
 
-    void onActivate(const uint8_t* /*payload*/, uint8_t /*len*/,
+    void onActivate(const LightAir_TotemActivation& /*info*/,
                     LightAir_TotemOutput& out) override {
         _lastBeacon = 0;
         uint8_t r = 0, g = 0, b = 0;

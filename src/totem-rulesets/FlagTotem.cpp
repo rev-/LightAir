@@ -62,7 +62,7 @@ public:
     explicit FlagTotem(uint8_t team)
         : _team(team), _state(FLAG_STATE_IN), _lastBeacon(0) {}
 
-    void onActivate(const uint8_t* /*payload*/, uint8_t /*len*/,
+    void onActivate(const LightAir_TotemActivation& /*info*/,
                     LightAir_TotemOutput& out) override {
         _state      = FLAG_STATE_IN;
         _lastBeacon = 0;

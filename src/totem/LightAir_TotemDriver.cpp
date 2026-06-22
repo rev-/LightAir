@@ -8,7 +8,7 @@ LightAir_TotemDriver::LightAir_TotemDriver(LightAir_Radio&            radio,
                                             LightAir_TotemUICtrl&      ui,
                                             LightAir_TotemRoleManager& roleMgr)
     : _radio(radio), _ui(ui), _roleMgr(roleMgr),
-      _runner(nullptr), _lastBeacon(0)
+      _runner(nullptr), _lastBeacon(0), _revertDeadline(0)
 {}
 
 // ----------------------------------------------------------------
@@ -33,7 +33,12 @@ void LightAir_TotemDriver::loop() {
         _radio.broadcastUniversal(MSG_TOTEM_BEACON);
     }
 
-    // ---- 2. Process incoming events ----
+    // ---- 2. Self-revert watchdog: no MSG_TOTEM_ROSTER ever arrived ----
+    if (_runner && _revertDeadline && now >= _revertDeadline) {
+        revertToIdle(out);
+    }
+
+    // ---- 3. Process incoming events ----
     for (uint8_t i = 0; i < report.count; i++) {
         const RadioEvent& ev = report.events[i];
 
@@ -49,28 +54,33 @@ void LightAir_TotemDriver::loop() {
         if (isRoster) {
             if (_runner) {
                 _runner->onRoster(ev.packet, out);
-                flushOutput(out);
-                out = LightAir_TotemOutput{};  // reset for next cycle
-                _runner->reset();
-                _runner = nullptr;
-                _radio.setTypeId(RadioTypeId::UNIVERSAL);
-                // Return to idle animation.
-                out.ui.trigger(TotemUIEvent::Idle);
+                revertToIdle(out);
             }
             continue;
         }
 
         // Activate runner on first 0xF1 activation reply.
-        // payload[0] holds the roleId.
         if (!_runner && incomingTypeId != RadioTypeId::UNIVERSAL) {
             if (ev.packet.msgType == (RadioMsg::MSG_TOTEM_BEACON + 1) &&
-                ev.packet.payloadLen >= 1) {
+                ev.packet.payloadLen >= 4) {
                 uint8_t roleId = ev.packet.payload[0];
                 const TotemRole* role = _roleMgr.findById(roleId);
                 if (role && role->runner) {
+                    LightAir_TotemActivation info;
+                    info.roleId           = roleId;
+                    info.sessionToken     = ev.packet.payload[1];
+                    info.gameTimeLeftSecs = ((uint16_t)ev.packet.payload[2] << 8) |
+                                             ev.packet.payload[3];
+                    info.hasConfigSecs    = ev.packet.payloadLen >= 5;
+                    info.configSecs       = info.hasConfigSecs ? ev.packet.payload[4] : 0;
+
                     _runner = role->runner;
                     _radio.setTypeId(incomingTypeId);
-                    _runner->onActivate(ev.packet.payload, ev.packet.payloadLen, out);
+                    _radio.setSessionToken(info.sessionToken);
+                    _revertDeadline = (info.gameTimeLeftSecs == 0xFFFF)
+                        ? 0
+                        : now + (uint32_t)(info.gameTimeLeftSecs + 10) * 1000;
+                    _runner->onActivate(info, out);
                 }
             }
             continue;
@@ -82,16 +92,26 @@ void LightAir_TotemDriver::loop() {
         }
     }
 
-    // ---- 3. Periodic runner update ----
+    // ---- 4. Periodic runner update ----
     if (_runner) {
         _runner->update(out);
     }
 
-    // ---- 4. Flush output ----
+    // ---- 5. Flush output ----
     flushOutput(out);
 
-    // ---- 5. Advance strip animation ----
+    // ---- 6. Advance strip animation ----
     _ui.update();
+}
+
+// ----------------------------------------------------------------
+void LightAir_TotemDriver::revertToIdle(LightAir_TotemOutput& out) {
+    _runner->reset();
+    _runner = nullptr;
+    _radio.setTypeId(RadioTypeId::UNIVERSAL);
+    _radio.setSessionToken(RadioToken::UNSET);
+    _revertDeadline = 0;
+    out.ui.trigger(TotemUIEvent::Idle);
 }
 
 // ----------------------------------------------------------------

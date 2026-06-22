@@ -212,9 +212,12 @@ bool LightAir_Radio::broadcastUniversal(uint8_t msgType,
 // ----------------------------------------------------------------
 void LightAir_Radio::processPacket(const RadioPacket& pkt, int8_t rssi) {
     // 1. Session token gate
-    // If own token is UNSET, accept all (device not yet in session).
-    // Once a token is set, only matching-token packets pass.
-    if (_sessionToken != RadioToken::UNSET &&
+    // pkt.sessionToken == UNSET always passes (infrastructure / not-yet-activated
+    // senders, e.g. totems before a projector has assigned them a token).
+    // _sessionToken == UNSET (own) always passes (device not yet in session).
+    // Otherwise: drop only if both sides have a token and they mismatch.
+    if (pkt.sessionToken != RadioToken::UNSET &&
+        _sessionToken    != RadioToken::UNSET &&
         pkt.sessionToken != _sessionToken) return;
 
     // 2. Game typeId gate

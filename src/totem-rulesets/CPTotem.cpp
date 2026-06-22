@@ -30,8 +30,8 @@
 //   when their RSSI to this totem is above their own proximity threshold.
 //   subType 0 (auto empty-reply) is ignored.
 //
-// Activation payload
-//   payload[0] = roleId (CP).  No additional config bytes needed.
+// Activation
+//   info.roleId = CP.  No additional config needed.
 // ================================================================
 
 using RadioMsg::MSG_CP_BEACON;
@@ -65,7 +65,7 @@ public:
         : _cpTeam(CP_TEAM_NONE), _presenceMask(0),
           _windowStart(0), _attachStart(0) {}
 
-    void onActivate(const uint8_t* /*payload*/, uint8_t /*len*/,
+    void onActivate(const LightAir_TotemActivation& /*info*/,
                     LightAir_TotemOutput& out) override {
         _cpTeam       = CP_TEAM_NONE;
         _presenceMask = 0;
