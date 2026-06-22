@@ -230,6 +230,11 @@ struct LightAir_Game {
     uint8_t                          teamCount;   // 0 = teamless; 2–8 = number of teams
     uint8_t*                         teamMap;     // size MAX_PLAYER_ID; nullptr if teamCount==0
 
+    // Optional pointer to the ruleset's live in-game countdown (seconds remaining),
+    // e.g. &gameTimeLeft.  Sent to totems in the 0xF1 activation reply so they can
+    // arm a self-revert watchdog.  nullptr = ruleset has no such counter.
+    const int* gameTimeLeft;
+
     // Called by GameRunner immediately before esp_restart() after the player
     // presses A+B on the end-game screen.  Use for last-moment display updates
     // or NVS writes.  nullptr = skip.

@@ -607,5 +607,6 @@ extern const LightAir_Game game_flag = {
     /* totemRequirements     */ Flag::totemRequirements,   /* totemRequirementCount  */ 7,
     /* teamCount             */ 2,
     /* teamMap               */ Flag::teamMap,
+    /* gameTimeLeft          */ &Flag::gameTimeLeft,
     /* onEnd                 */ nullptr,
 };

@@ -47,9 +47,15 @@ private:
     LightAir_TotemUICtrl&      _ui;
     LightAir_TotemRoleManager& _roleMgr;
 
-    LightAir_TotemRunner* _runner;      // nullptr = IDLE
-    uint32_t              _lastBeacon;  // millis() of last beacon broadcast
+    LightAir_TotemRunner* _runner;          // nullptr = IDLE
+    uint32_t              _lastBeacon;      // millis() of last beacon broadcast
+    uint32_t              _revertDeadline;  // millis() deadline for self-revert; 0 = no watchdog armed
 
     // Flush all queued radio and UI commands to the hardware.
     void flushOutput(LightAir_TotemOutput& out);
+
+    // Shared teardown: reset()s the runner, clears role/token/typeId, and
+    // returns to the Idle animation.  Used both when MSG_TOTEM_ROSTER arrives
+    // and when the self-revert watchdog elapses without one.
+    void revertToIdle(LightAir_TotemOutput& out);
 };

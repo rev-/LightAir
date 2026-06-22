@@ -165,6 +165,9 @@ public:
     // Active game typeId (read-back, e.g. for the totem driver).
     uint16_t typeId() const { return _typeId; }
 
+    // Active session token (read-back, e.g. for GameRunner's totem activation reply).
+    uint8_t sessionToken() const { return _sessionToken; }
+
     // Poll — call once per loop iteration.
     // Drains all received packets and checks all pending timeouts in one call.
     // Returns a reference valid until the next call to poll().

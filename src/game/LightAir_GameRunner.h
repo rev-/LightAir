@@ -131,6 +131,7 @@ private:
     void activateStateDisplay(uint8_t state);
     void flushOutput(const GameOutput& out);
     void scoreUpdate(const InputReport&, const RadioReport&, GameOutput&);
+    void replyToTotemBeacon(const RadioEvent& ev, GameOutput& output);
 
     // Score collection helpers (all defined in .cpp)
     void postScoreAnnounce();

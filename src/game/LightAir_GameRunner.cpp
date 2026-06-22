@@ -170,37 +170,15 @@ void LightAir_GameRunner::update() {
         }
     }
 
-    // MSG_TOTEM_BEACON: reply with the totem's assigned roleId in payload[0].
-    // payload[1] = *configSecs for this role if a requirement has one set.
+    // MSG_TOTEM_BEACON: reply with the totem's assigned role, the current session
+    // token, and the game's remaining time (see replyToTotemBeacon()).
     // No reply is sent to non-totem senders or unconfigured totems.
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type           != RadioEventType::MessageReceived) continue;
         if (ev.packet.msgType != RadioMsg::MSG_TOTEM_BEACON)      continue;
         infraHandled[e] = true;
-
-        uint8_t id = ev.packet.senderId;
-        if (!TotemDefs::isTotemId(id)) continue;
-
-        for (uint8_t t = 0; t < _totemCount; t++) {
-            if (_totems[t].id != id) continue;
-            uint8_t roleId = _totems[t].roleId;
-            uint8_t buf[2] = { roleId, 0 };
-            uint8_t bufLen = 1;
-            // Include configSecs if any requirement for this role has one.
-            if (_game->totemRequirements) {
-                for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
-                    const LightAir_TotemRequirement& req = _game->totemRequirements[r];
-                    if (req.roleId == roleId && req.configSecs != nullptr) {
-                        buf[1] = (uint8_t)*req.configSecs;
-                        bufLen = 2;
-                        break;
-                    }
-                }
-            }
-            output.radio.replyWithPayload(ev.packet, buf, bufLen);
-            break;
-        }
+        replyToTotemBeacon(ev, output);
     }
 
     // Step 2b: DirectRadioRules — handle all incoming MessageReceived events.
@@ -277,6 +255,8 @@ void LightAir_GameRunner::update() {
 
         // Flood MSG_END_GAME so devices still in a non-scoring state transition.
         output.radio.broadcast(GameDefaults::MSG_END_GAME, nullptr, 0, 2);
+        // Flood MSG_TOTEM_ROSTER so any activated totem reverts to stateless.
+        output.radio.broadcast(RadioMsg::MSG_TOTEM_ROSTER, nullptr, 0, 2);
         scoreBroadcastFused(output);
         _scoreSentAt = millis();
 
@@ -301,6 +281,50 @@ void LightAir_GameRunner::update() {
 
     // Enforce fixed loop duration.
     while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
+}
+
+/* =========================================================
+ *   TOTEM BEACON REPLY (0xF1) — shared by update() and scoreUpdate()
+ * ========================================================= */
+
+// Builds the activation reply for one MSG_TOTEM_BEACON event:
+//   payload[0]   = the totem's assigned roleId
+//   payload[1]   = the current session token (so the totem learns it for the
+//                  duration of the game)
+//   payload[2:3] = gameTimeLeft as uint16_t, big-endian, exact seconds;
+//                  0xFFFF if the ruleset has no live countdown to report
+//   payload[4]   = *configSecs for this role, only if a requirement has one set
+// No reply is sent to non-totem senders or totems with no assigned role.
+void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& output) {
+    uint8_t id = ev.packet.senderId;
+    if (!TotemDefs::isTotemId(id)) return;
+
+    for (uint8_t t = 0; t < _totemCount; t++) {
+        if (_totems[t].id != id) continue;
+        uint8_t roleId = _totems[t].roleId;
+        uint8_t buf[5] = { roleId, _radio->sessionToken(), 0xFF, 0xFF, 0 };
+        uint8_t bufLen = 4;
+
+        if (_game->gameTimeLeft) {
+            uint16_t secs = (uint16_t)*_game->gameTimeLeft;   // exact, no rounding
+            buf[2] = (uint8_t)(secs >> 8);
+            buf[3] = (uint8_t)(secs & 0xFF);
+        }
+
+        // Include configSecs if any requirement for this role has one.
+        if (_game->totemRequirements) {
+            for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
+                const LightAir_TotemRequirement& req = _game->totemRequirements[r];
+                if (req.roleId == roleId && req.configSecs != nullptr) {
+                    buf[4] = (uint8_t)*req.configSecs;
+                    bufLen = 5;
+                    break;
+                }
+            }
+        }
+        output.radio.replyWithPayload(ev.packet, buf, bufLen);
+        break;
+    }
 }
 
 /* =========================================================
@@ -347,28 +371,7 @@ void LightAir_GameRunner::scoreUpdate(const InputReport& inputs,
         const RadioEvent& ev = radio.events[e];
         if (ev.type           != RadioEventType::MessageReceived) continue;
         if (ev.packet.msgType != RadioMsg::MSG_TOTEM_BEACON)      continue;
-
-        uint8_t id = ev.packet.senderId;
-        if (!TotemDefs::isTotemId(id)) continue;
-
-        for (uint8_t t = 0; t < _totemCount; t++) {
-            if (_totems[t].id != id) continue;
-            uint8_t roleId = _totems[t].roleId;
-            uint8_t buf[2] = { roleId, 0 };
-            uint8_t bufLen = 1;
-            if (_game->totemRequirements) {
-                for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
-                    const LightAir_TotemRequirement& req = _game->totemRequirements[r];
-                    if (req.roleId == roleId && req.configSecs != nullptr) {
-                        buf[1] = (uint8_t)*req.configSecs;
-                        bufLen = 2;
-                        break;
-                    }
-                }
-            }
-            output.radio.replyWithPayload(ev.packet, buf, bufLen);
-            break;
-        }
+        replyToTotemBeacon(ev, output);
     }
 
     // Timed retry — re-broadcast fused scores while waiting for all devices.
