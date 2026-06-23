@@ -50,7 +50,7 @@ class CPTotem : public LightAir_TotemRunner {
 
     void updateBackground(LightAir_TotemOutput& out) const {
         if (_cpTeam == CP_TEAM_NONE) {
-            out.ui.trigger(TotemUIEvent::Idle, 80, 80, 80);  // dim grey = unclaimed
+            out.ui.trigger(TotemUIEvent::CPIdle, 80, 80, 80);  // dim grey = unclaimed
         } else if (_cpTeam < 2) {
             // Two-team games: use team colour (cyan for O, magenta for X).
             out.ui.trigger(TotemUIEvent::Control, _cpTeam);
@@ -71,7 +71,7 @@ public:
         _presenceMask = 0;
         _windowStart  = millis();
         _attachStart  = _windowStart;
-        out.ui.trigger(TotemUIEvent::Idle, 80, 80, 80);  // dim grey = unclaimed
+        out.ui.trigger(TotemUIEvent::CPIdle, 80, 80, 80);  // dim grey = unclaimed
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& /*out*/) override {
@@ -121,7 +121,7 @@ public:
                 out.ui.trigger(TotemUIEvent::ControlContest);
             }
         } else if (_cpTeam == CP_TEAM_NONE) {
-            out.ui.trigger(TotemUIEvent::Idle, 80, 80, 80);  // dim grey = unclaimed
+            out.ui.trigger(TotemUIEvent::CPIdle, 80, 80, 80);  // dim grey = unclaimed
         }
 
         // ---- Open next window ----

@@ -1,7 +1,25 @@
 #include "LightAir_LEDStrip_HW.h"
+#include "../../../config.h"
 #include <string.h>
 
+namespace {
+// Stations for the VerticalScan effect (cross-rectangle "rungs", spine end
+// to spine end).  Indexed via the flat tables in TotemLedLayout.
+const uint8_t* kStations[TotemLedLayout::kStationCount] = {
+    TotemLedLayout::kStation0, TotemLedLayout::kStation1,
+    TotemLedLayout::kStation2, TotemLedLayout::kStation3,
+    TotemLedLayout::kStation4,
+};
+const uint8_t kStationSizes[TotemLedLayout::kStationCount] = { 2, 3, 3, 3, 2 };
+
+// Scale an 8-bit colour channel by an 8-bit brightness (0..255).
+inline uint8_t scale8c(uint8_t c, uint8_t b) {
+    return (uint8_t)(((uint16_t)c * b) / 255);
+}
+}  // namespace
+
 void LightAir_LEDStrip_HW::begin(int dataPin, uint8_t numLeds) {
+    (void)dataPin;
     _numLeds = (numLeds > MAX_LEDS) ? MAX_LEDS : numLeds;
     // FastLED requires a compile-time pin; we default to the reference hardware
     // pin (13) here.  Override by subclassing or adjusting for your hardware.
@@ -15,15 +33,12 @@ void LightAir_LEDStrip_HW::play(const StripAnimation& anim) {
     _fg        = anim;
     _fgActive  = true;
     _fgStartMs = millis();
-    _fgStep    = 0;
 }
 
 void LightAir_LEDStrip_HW::loop(const StripAnimation& anim) {
     _bg        = anim;
     _bgActive  = true;
-    _bgCycleMs = millis();
-    _bgStep    = 0;
-    _bgPhase   = false;
+    _bgStartMs = millis();
 }
 
 void LightAir_LEDStrip_HW::stopLoop() {
@@ -40,150 +55,62 @@ void LightAir_LEDStrip_HW::update() {
 
     if (_fgActive) {
         uint32_t elapsed = now - _fgStartMs;
-        renderAnim(_fg, elapsed, _fgStep, _bgPhase /*unused for fg*/, false);
+        renderAnim(_fg, elapsed);
         FastLED.show();
 
-        // Check completion
-        bool done = false;
-        switch (_fg.effect) {
-            case StripEffect::Off:
-            case StripEffect::Fill:
-                done = true;
-                break;
-            case StripEffect::Wipe:
-            case StripEffect::Chase:
-                done = (_fgStep >= _numLeds);
-                break;
-            default:
-                done = (elapsed >= _fg.durationMs);
-                break;
-        }
+        // One-shot completion.  durationMs is one motion cycle; a one-shot
+        // plays pulseCount cycles (or a single cycle when pulseCount == 0),
+        // then yields back to the background.  Off is instant.
+        uint16_t period = _fg.durationMs ? _fg.durationMs : 1000;
+        uint32_t total  = (_fg.pulseCount > 0)
+                              ? (uint32_t)_fg.pulseCount * period
+                              : period;
+        bool done = (_fg.effect == StripEffect::Off) || (elapsed >= total);
         if (done) {
-            _fgActive = false;
-            // Reset bg cycle so it starts fresh
-            _bgCycleMs = now;
-            _bgStep    = 0;
-            _bgPhase   = false;
+            _fgActive  = false;
+            _bgStartMs = now;  // restart the background cleanly
         }
         return;
     }
 
     if (_bgActive) {
-        uint32_t elapsed = now - _bgCycleMs;
-        uint16_t period  = _bg.durationMs ? _bg.durationMs : 1000;
-
-        // Advance step / phase for per-LED effects
-        switch (_bg.effect) {
-            case StripEffect::Wipe:
-            case StripEffect::Chase:
-                _bgStep = (uint8_t)((elapsed / 50) % _numLeds);
-                break;
-            case StripEffect::Blink:
-                _bgPhase = ((elapsed / (period / 2)) & 1) != 0;
-                break;
-            case StripEffect::BlinkFast:
-                _bgPhase = ((elapsed / 150) & 1) != 0;
-                break;
-            case StripEffect::Alternate:
-                _bgPhase = ((elapsed / (period / 2)) & 1) != 0;
-                break;
-            case StripEffect::Pulse:
-                // Use elapsed within one period
-                break;
-            default:
-                break;
-        }
-
-        bool dummy = _bgPhase;
-        renderAnim(_bg, elapsed % period, _bgStep, dummy, true);
+        renderAnim(_bg, now - _bgStartMs);
         FastLED.show();
     }
 }
 
 // ----------------------------------------------------------------
-void LightAir_LEDStrip_HW::renderAnim(const StripAnimation& a,
-                                       uint32_t elapsed,
-                                       uint8_t& step,
-                                       bool&    phase,
-                                       bool     looping) {
-    uint16_t period = a.durationMs ? a.durationMs : 1000;
+// Zone helpers.
+uint8_t LightAir_LEDStrip_HW::zoneCount(StripZone zone) const {
+    switch (zone) {
+        case StripZone::Perimeter:
+            return (TotemLedLayout::kPerimeterCount < _numLeds)
+                       ? TotemLedLayout::kPerimeterCount : _numLeds;
+        case StripZone::CenterLine:
+            return TotemLedLayout::kCenterLineCount;
+        case StripZone::Center:
+            return 1;
+        case StripZone::All:
+        default:
+            return _numLeds;
+    }
+}
 
-    switch (a.effect) {
-        case StripEffect::Off:
-            setAll(0, 0, 0);
-            break;
+uint8_t LightAir_LEDStrip_HW::zoneLed(StripZone zone, uint8_t i) const {
+    switch (zone) {
+        case StripZone::Perimeter:  return TotemLedLayout::kPerimeter[i];
+        case StripZone::CenterLine: return TotemLedLayout::kCenterLine[i];
+        case StripZone::Center:     return TotemLedLayout::kCenter;
+        case StripZone::All:
+        default:                    return i;
+    }
+}
 
-        case StripEffect::Fill:
-            setAll(a.r, a.g, a.b);
-            break;
-
-        case StripEffect::Wipe: {
-            // Advance to the LED that should be lit now
-            uint8_t target = (uint8_t)(elapsed / 50);  // ~50 ms per LED
-            if (target > _numLeds) target = _numLeds;
-            if (target > step) {
-                // Light up to target, leaving trail on
-                for (uint8_t i = step; i < target && i < _numLeds; i++)
-                    _leds[i] = CRGB(a.r, a.g, a.b);
-                step = target;
-            }
-            break;
-        }
-
-        case StripEffect::Pulse: {
-            // Sine-approximated brightness: full→dim→full over period
-            uint32_t t     = elapsed % period;
-            uint8_t  phase2 = (uint8_t)((t * 255) / period);
-            // Triangle wave: 0→255→0
-            uint8_t  bright = (phase2 < 128) ? (phase2 * 2) : ((255 - phase2) * 2);
-            uint8_t  minB   = 20;
-            bright = minB + (uint8_t)((bright * (255 - minB)) / 255);
-            _leds[0] = CRGB(a.r, a.g, a.b);
-            for (uint8_t i = 0; i < _numLeds; i++) {
-                _leds[i].r = (uint8_t)((a.r * bright) / 255);
-                _leds[i].g = (uint8_t)((a.g * bright) / 255);
-                _leds[i].b = (uint8_t)((a.b * bright) / 255);
-            }
-            break;
-        }
-
-        case StripEffect::Blink:
-        case StripEffect::BlinkFast:
-            if (!phase) setAll(a.r, a.g, a.b);
-            else        setAll(0, 0, 0);
-            break;
-
-        case StripEffect::Chase: {
-            setAll(0, 0, 0);
-            uint8_t pos = step % _numLeds;
-            _leds[pos] = CRGB(a.r, a.g, a.b);
-            break;
-        }
-
-        case StripEffect::Alternate:
-            setAlternate(a.r, a.g, a.b, a.r2, a.g2, a.b2, phase);
-            break;
-
-        case StripEffect::IdleMarker: {
-            // Only the second-to-last LED, half power, 50% duty over `period`.
-            setAll(0, 0, 0);
-            uint32_t t  = elapsed % period;
-            bool     on = t < (period / 2);
-            if (on && _numLeds >= 2) {
-                uint8_t idx = _numLeds - 2;
-                _leds[idx] = CRGB(a.r / 2, a.g / 2, a.b / 2);
-            }
-            break;
-        }
-
-        case StripEffect::DoubleBlink: {
-            // Two short flashes near the start of each period, then a long pause.
-            uint32_t t  = elapsed % period;
-            bool     on = (t < 150) || (t >= 300 && t < 450);
-            if (on) setAll(a.r, a.g, a.b);
-            else    setAll(0, 0, 0);
-            break;
-        }
+void LightAir_LEDStrip_HW::setZone(StripZone zone, uint8_t r, uint8_t g, uint8_t b) {
+    uint8_t n = zoneCount(zone);
+    for (uint8_t i = 0; i < n; i++) {
+        uint8_t led = zoneLed(zone, i);
+        if (led < _numLeds) _leds[led] = CRGB(r, g, b);
     }
 }
 
@@ -192,12 +119,129 @@ void LightAir_LEDStrip_HW::setAll(uint8_t r, uint8_t g, uint8_t b) {
         _leds[i] = CRGB(r, g, b);
 }
 
-void LightAir_LEDStrip_HW::setAlternate(uint8_t r1, uint8_t g1, uint8_t b1,
-                                          uint8_t r2, uint8_t g2, uint8_t b2,
-                                          bool phase) {
-    for (uint8_t i = 0; i < _numLeds; i++) {
-        bool even = (i & 1) == 0;
-        if (even ^ phase) _leds[i] = CRGB(r1, g1, b1);
-        else              _leds[i] = CRGB(r2, g2, b2);
+// ----------------------------------------------------------------
+void LightAir_LEDStrip_HW::renderAnim(const StripAnimation& a, uint32_t elapsed) {
+    setAll(0, 0, 0);
+
+    if (a.effect == StripEffect::Off) return;
+
+    uint16_t period = a.durationMs ? a.durationMs : 1000;
+
+    // ---- Beat-group bookkeeping (pulseCount cycles, then one silent cycle) ----
+    // pulseCount == 0 → continuous: a single, ever-repeating cycle.
+    uint32_t cyclePhase;  // ms within the current motion cycle [0, period)
+    if (a.pulseCount == 0) {
+        cyclePhase = elapsed % period;
+    } else {
+        uint32_t group   = (uint32_t)(a.pulseCount + 1) * period;
+        uint32_t inGroup = elapsed % group;
+        if (inGroup >= (uint32_t)a.pulseCount * period)
+            return;                       // silent beat → leave all off
+        cyclePhase = inGroup % period;
+    }
+
+    switch (a.effect) {
+        case StripEffect::Off:
+            break;
+
+        case StripEffect::Fill:
+            setZone(a.zone, a.r, a.g, a.b);
+            break;
+
+        case StripEffect::Pulse: {
+            // Triangle 0→255→0 across the cycle, floored so it never fully dies.
+            uint8_t p      = (uint8_t)((cyclePhase * 255) / period);
+            uint8_t tri    = (p < 128) ? (uint8_t)(p * 2) : (uint8_t)((255 - p) * 2);
+            uint8_t minB   = 20;
+            uint8_t bright = minB + (uint8_t)(((uint16_t)tri * (255 - minB)) / 255);
+            setZone(a.zone, scale8c(a.r, bright), scale8c(a.g, bright), scale8c(a.b, bright));
+            break;
+        }
+
+        case StripEffect::Blink:
+            // On for the first half of the cycle, off for the second.
+            if (cyclePhase < (uint32_t)(period / 2))
+                setZone(a.zone, a.r, a.g, a.b);
+            break;
+
+        case StripEffect::BlinkFast: {
+            // Fixed fast toggle, independent of period.
+            bool on = ((elapsed / 150) & 1) == 0;
+            if (on) setZone(a.zone, a.r, a.g, a.b);
+            break;
+        }
+
+        case StripEffect::Wipe: {
+            // Run grows along the zone, holds full, then resets next cycle.
+            uint8_t n = zoneCount(a.zone);
+            if (n == 0) break;
+            uint8_t target = (uint8_t)(((uint32_t)cyclePhase * n) / period) + 1;
+            if (target > n) target = n;
+            for (uint8_t i = 0; i < target; i++) {
+                uint8_t led = zoneLed(a.zone, i);
+                if (led < _numLeds) _leds[led] = CRGB(a.r, a.g, a.b);
+            }
+            break;
+        }
+
+        case StripEffect::Chase: {
+            uint8_t n = zoneCount(a.zone);
+            if (n == 0) break;
+            uint8_t pos = (uint8_t)(((uint32_t)cyclePhase * n) / period) % n;
+            uint8_t led = zoneLed(a.zone, pos);
+            if (led < _numLeds) _leds[led] = CRGB(a.r, a.g, a.b);
+            break;
+        }
+
+        case StripEffect::Alternate: {
+            // Interleave two colours within the zone, swapping each half-cycle.
+            bool phase = cyclePhase >= (uint32_t)(period / 2);
+            uint8_t n  = zoneCount(a.zone);
+            for (uint8_t i = 0; i < n; i++) {
+                uint8_t led = zoneLed(a.zone, i);
+                if (led >= _numLeds) continue;
+                bool even = (i & 1) == 0;
+                if (even ^ phase) _leds[led] = CRGB(a.r,  a.g,  a.b);
+                else              _leds[led] = CRGB(a.r2, a.g2, a.b2);
+            }
+            break;
+        }
+
+        case StripEffect::Sparse: {
+            // Every `density`-th LED in the zone, brightness-modulated.
+            uint8_t stride = a.density ? a.density : 3;
+            uint8_t bright;
+            if (a.pulseStyle == StripPulseStyle::Hard) {
+                bright = (cyclePhase < (uint32_t)(period / 2)) ? 255 : 40;
+            } else {
+                uint8_t p   = (uint8_t)((cyclePhase * 255) / period);
+                uint8_t tri = (p < 128) ? (uint8_t)(p * 2) : (uint8_t)((255 - p) * 2);
+                bright = 40 + (uint8_t)(((uint16_t)tri * (255 - 40)) / 255);
+            }
+            uint8_t n = zoneCount(a.zone);
+            for (uint8_t i = 0; i < n; i += stride) {
+                uint8_t led = zoneLed(a.zone, i);
+                if (led < _numLeds)
+                    _leds[led] = CRGB(scale8c(a.r, bright),
+                                      scale8c(a.g, bright),
+                                      scale8c(a.b, bright));
+            }
+            break;
+        }
+
+        case StripEffect::VerticalScan: {
+            // One "rung" lit at a time, ping-ponging end-to-end along the
+            // length of the rectangle.  Ignores a.zone (spans the geometry).
+            const uint8_t n = TotemLedLayout::kStationCount;          // 5 stations
+            const uint8_t span = (n > 1) ? (2 * (n - 1)) : 1;        // 0..n-1..1 = 8
+            uint8_t pos = (uint8_t)(((uint32_t)cyclePhase * span) / period) % span;
+            uint8_t st  = (pos < n) ? pos : (uint8_t)(span - pos);   // ping-pong
+            const uint8_t* station = kStations[st];
+            for (uint8_t i = 0; i < kStationSizes[st]; i++) {
+                uint8_t led = station[i];
+                if (led < _numLeds) _leds[led] = CRGB(a.r, a.g, a.b);
+            }
+            break;
+        }
     }
 }

@@ -53,10 +53,20 @@ class FlagTotem : public LightAir_TotemRunner {
         b = (_team == 0) ?   0 : 255;
     }
 
+    void showIdle(LightAir_TotemOutput& out) const {
+        uint8_t r, g, b;
+        teamColor(r, g, b);
+        TeamLedRhythm::Rhythm rh = TeamLedRhythm::forTeam(_team);
+        out.ui.trigger(TotemUIEvent::FlagIdle, r, g, b, rh.periodMs, rh.pulseCount);
+    }
+
     void returnFlag(LightAir_TotemOutput& out) {
         _state = FLAG_STATE_IN;
         uint8_t r, g, b;
         teamColor(r, g, b);
+        // Restore the home-idle background, then flash the return one-shot
+        // over it so the totem reads as "home" again once the flash ends.
+        showIdle(out);
         out.ui.trigger(TotemUIEvent::FlagReturn, r, g, b);
     }
 
@@ -68,9 +78,7 @@ public:
                     LightAir_TotemOutput& out) override {
         _state      = FLAG_STATE_IN;
         _lastBeacon = 0;
-        uint8_t r, g, b;
-        teamColor(r, g, b);
-        out.ui.trigger(TotemUIEvent::Idle, r, g, b);
+        showIdle(out);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {

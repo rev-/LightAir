@@ -4,32 +4,42 @@
 // ----------------------------------------------------------------
 // TotemUIEvent — semantic events the totem reacts to visually.
 //
+// Each role has a UNIQUE idle background (distinct LED footprint + motion,
+// recognizable even as a frozen frame, so colour is never the only cue) and
+// its events reuse that footprint family at higher intensity/speed so the
+// strip always reads as "this totem" while the variation reads as "this
+// just happened".  The concrete (zone, effect, timing) binding for each
+// event lives in LightAir_TotemUICtrl.
+//
 // One-shot events play once then return to the background.
 // Background states loop until replaced by another loop() call.
 // ----------------------------------------------------------------
 enum class TotemUIEvent : uint8_t {
     // ---- One-shot events ----
-    Respawn,       // player respawned here; wipe strip in player colour
-    FlagTaken,     // flag picked up from this totem; fast blink
-    FlagReturn,    // flag returned to this totem; brief fill
-    Bonus,         // bonus awarded; green pulse
-    Malus,         // malus imposed; red pulse
-    Roster,        // game ended (roster exchange); brief white fill then off
+    Respawn,       // player respawned here; fast perimeter blink in player colour
+    FlagTaken,     // flag picked up from this totem; frantic vertical scan
+    FlagReturn,    // flag returned/scored; single fast vertical scan (button untouched)
+    Bonus,         // bonus awarded; bright green sparkle burst
+    Malus,         // malus imposed; bright red flicker burst
+    Roster,        // game ended (roster exchange); brief white fill
+
     // ---- Looping background states ----
-    Idle,          // "nothing currently happening" background, dual purpose:
-                   //   cmd colour == (0,0,0) → fully stateless / unassigned totem
-                   //     (driver only, before activation / after revert):
-                   //     single dim marker LED, RGB off.
-                   //   cmd colour != (0,0,0) → role assigned, idle/ready/neutral:
-                   //     slow pulse in that colour, so an assigned totem reads as
-                   //     distinct from a stateless one and the colour identifies
-                   //     its role/team.
-    FlagMissing,   // flag away from home; double-blink in flag-team colour
-    Control,       // CP owned: steady fill in team or player colour.
+    Idle,          // fully-stateless / unassigned totem (driver only, before
+                   //   activation / after revert): single dim center LED blink,
+                   //   RGB off.  NOT used by active roles.
+    BaseIdle,      // base ready: breathing perimeter ring, team colour + rhythm.
+    CPIdle,        // control point unclaimed: roaming dot on the perimeter, grey.
+    FlagIdle,      // flag at home: breathing vertical scan, team colour + rhythm.
+    BonusIdle,     // bonus ready: slow smooth green sparkle.
+    MalusIdle,     // malus ready: fast hard red flicker (sparse).
+
+    FlagMissing,   // flag away from home: faint spine "heartbeat" in flag colour.
+    Control,       // CP owned: perimeter wipe settling to a steady ring.
                    //   cmd.r = 0 or 1  → team index; colour from TeamColors::kColors.
                    //   cmd.r = 0xFF    → player-based; cmd.g = player ID (0–16);
                    //                    colour from PlayerColors::kColors.
-    ControlContest,// contested; alternating team colours (no cmd colour used)
+    ControlContest,// contested; alternating team colours on the perimeter.
+
     // ---- Extensibility ----
     Custom1,
     Custom2,
@@ -38,17 +48,18 @@ enum class TotemUIEvent : uint8_t {
 };
 
 // ----------------------------------------------------------------
-// TotemUICmd — one queued UI command, with optional colour param.
+// TotemUICmd — one queued UI command, with optional colour + tempo.
+//
+// Colour (r,g,b) and tempo (periodMs/pulseCount) tune the fixed footprint
+// the controller binds to each event.  periodMs/pulseCount let team-aware
+// roles pass their per-team rhythm (see config.h TeamLedRhythm); 0/1 mean
+// "use this event's built-in default speed/beat".
 // ----------------------------------------------------------------
 struct TotemUICmd {
     TotemUIEvent event;
-    uint8_t      r, g, b;  // colour param:
-                            //   Respawn       → player RGB colour
-                            //   FlagMissing/Return/Taken → flag-team (or player) colour
-                            //   Control       → cmd.r = team (0/1) or 0xFF; cmd.g = player ID
-                            //   Idle          → (0,0,0) = stateless marker; otherwise
-                            //                    role-coloured idle pulse (strip + RGB)
-                            //   others        → ignored (use 0,0,0)
+    uint8_t      r, g, b;     // colour param (see per-event docs above)
+    uint16_t     periodMs;    // 0 = use the event's built-in default speed
+    uint8_t      pulseCount;  // 1 = no extra beat; >1 = per-team beat count
 };
 
 // ----------------------------------------------------------------
@@ -60,8 +71,9 @@ struct TotemUIOutput {
     uint8_t    count = 0;
 
     void trigger(TotemUIEvent ev,
-                 uint8_t r = 0, uint8_t g = 0, uint8_t b = 0) {
+                 uint8_t r = 0, uint8_t g = 0, uint8_t b = 0,
+                 uint16_t periodMs = 0, uint8_t pulseCount = 1) {
         if (count >= MAX_CMDS) return;
-        cmds[count++] = { ev, r, g, b };
+        cmds[count++] = { ev, r, g, b, periodMs, pulseCount };
     }
 };

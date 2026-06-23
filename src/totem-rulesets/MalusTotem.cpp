@@ -44,7 +44,7 @@ public:
         _cooldownSecs = info.hasConfigSecs ? info.configSecs : DEFAULT_COOLDOWN_SECS;
         _cooldownEnd  = 0;
         _lastBeacon   = 0;
-        out.ui.trigger(TotemUIEvent::Idle, 180, 0, 0);
+        out.ui.trigger(TotemUIEvent::MalusIdle, 180, 0, 0);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
@@ -62,7 +62,7 @@ public:
         if (_state == MALUS_COOLDOWN) {
             if (now >= _cooldownEnd) {
                 _state = MALUS_READY;
-                out.ui.trigger(TotemUIEvent::Idle, 180, 0, 0);
+                out.ui.trigger(TotemUIEvent::MalusIdle, 180, 0, 0);
             }
             return;
         }
