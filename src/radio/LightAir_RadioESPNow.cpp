@@ -85,7 +85,16 @@ void LightAir_RadioESPNow::onRecv(const uint8_t* mac_addr,
     LightAir_RadioESPNow* self = _instance;
     if (!self || len <= 0 || len > ESPNOW_MAX_PKT_LEN) return;
 
-    int8_t rssi = 0;  // rx_ctrl not available in ESP-IDF 4.x callback
+    // ESP-IDF 4.x's esp_now_recv_cb_t carries no rx_ctrl, but the driver's
+    // internal RX buffer still places a wifi_promiscuous_pkt_t header right
+    // before the ESP-NOW payload (39 = sizeof the ESP-NOW action-frame
+    // header). Same offset trick the legacy totem firmware used to recover
+    // real RSSI on this core; without it rssi reads as a constant 0 dBm and
+    // every proximity gate in the rulesets (NEAR_*_RSSI / FLAG_RSSI_*) is
+    // effectively disabled.
+    const wifi_promiscuous_pkt_t* promiscuous_pkt =
+        (const wifi_promiscuous_pkt_t*)(data - sizeof(wifi_pkt_rx_ctrl_t) - 39);
+    int8_t rssi = (int8_t)promiscuous_pkt->rx_ctrl.rssi;
 #endif
 
     taskENTER_CRITICAL(&self->_mux);
