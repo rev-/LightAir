@@ -51,7 +51,8 @@ public:
         _lastBeacon = 0;
         uint8_t r = 0, g = 0, b = 0;
         teamColor(r, g, b);
-        out.ui.trigger(TotemUIEvent::Idle, r, g, b);
+        TeamLedRhythm::Rhythm rh = TeamLedRhythm::forTeam(_team);
+        out.ui.trigger(TotemUIEvent::BaseIdle, r, g, b, rh.periodMs, rh.pulseCount);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {

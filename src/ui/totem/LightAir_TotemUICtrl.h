@@ -16,6 +16,11 @@
 //
 // Looping background states (Idle, FlagMissing, Control,
 // ControlContest) call strip.loop() and set a persistent RGB colour.
+// Idle is dual-purpose: cmd colour (0,0,0) means the fully-stateless/
+// unassigned totem (single dim marker LED); any other colour means an
+// activated role's idle/ready/neutral state (slow pulse in that colour),
+// so an assigned totem never looks unassigned and its colour identifies
+// its role/team.
 // One-shot events (Respawn, FlagTaken, etc.) call strip.play() which
 // pre-empts the background for its duration, then the background resumes.
 //

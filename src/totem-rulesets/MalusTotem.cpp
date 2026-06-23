@@ -10,7 +10,7 @@
 // States
 //   READY    : broadcasting MSG_MALUS_BEACON every BEACON_INTERVAL_MS.
 //              On player reply (0x61) → COOLDOWN; triggers Malus anim.
-//   COOLDOWN : silent; waits _cooldownSecs seconds then → READY; triggers Idle.
+//   COOLDOWN : silent; waits _cooldownSecs seconds then → READY; triggers Idle (dim red).
 //
 // Activation
 //   info.roleId       = MALUS
@@ -44,7 +44,7 @@ public:
         _cooldownSecs = info.hasConfigSecs ? info.configSecs : DEFAULT_COOLDOWN_SECS;
         _cooldownEnd  = 0;
         _lastBeacon   = 0;
-        out.ui.trigger(TotemUIEvent::Idle);
+        out.ui.trigger(TotemUIEvent::MalusIdle, 180, 0, 0);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
@@ -62,7 +62,7 @@ public:
         if (_state == MALUS_COOLDOWN) {
             if (now >= _cooldownEnd) {
                 _state = MALUS_READY;
-                out.ui.trigger(TotemUIEvent::Idle);
+                out.ui.trigger(TotemUIEvent::MalusIdle, 180, 0, 0);
             }
             return;
         }

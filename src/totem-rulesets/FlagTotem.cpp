@@ -1,5 +1,6 @@
 #include <LightAir.h>
 #include "TotemRoleIds.h"
+#include "../config.h"
 
 // ================================================================
 // FlagTotem — flag-totem role runner (new architecture).
@@ -9,13 +10,14 @@
 //   FLAG_OUT (1) : flag carried by enemy; silent until returned.
 //
 // Lifecycle
-//   onActivate() : enters FLAG_IN; shows generic Idle background.
+//   onActivate() : enters FLAG_IN; shows Idle background (team colour glow).
 //   update()     : in FLAG_IN, broadcasts MSG_FLAG_BEACON every
 //                  FLAG_BEACON_INTERVAL_MS.
 //   onMessage()  :
-//     FLAG_IN  — on enemy-player reply (0x59) → FLAG_OUT + FlagMissing anim.
+//     FLAG_IN  — on enemy-player reply (0x59) → FLAG_OUT + FlagMissing anim
+//                (double-blink, team colour) + FlagTaken flash (picker's colour).
 //     FLAG_OUT — on MSG_FLAG_RETURN or MSG_FLAG_SCORE flood matching our
-//                team → FLAG_IN + FlagReturn anim.
+//                team → FLAG_IN + FlagReturn anim (flash, team colour).
 //   reset()      : returns to FLAG_IN; clears timer.
 //
 // Two singletons: flagO (owns the O flag) and flagX (owns the X flag).
@@ -51,10 +53,20 @@ class FlagTotem : public LightAir_TotemRunner {
         b = (_team == 0) ?   0 : 255;
     }
 
+    void showIdle(LightAir_TotemOutput& out) const {
+        uint8_t r, g, b;
+        teamColor(r, g, b);
+        TeamLedRhythm::Rhythm rh = TeamLedRhythm::forTeam(_team);
+        out.ui.trigger(TotemUIEvent::FlagIdle, r, g, b, rh.periodMs, rh.pulseCount);
+    }
+
     void returnFlag(LightAir_TotemOutput& out) {
         _state = FLAG_STATE_IN;
         uint8_t r, g, b;
         teamColor(r, g, b);
+        // Restore the home-idle background, then flash the return one-shot
+        // over it so the totem reads as "home" again once the flash ends.
+        showIdle(out);
         out.ui.trigger(TotemUIEvent::FlagReturn, r, g, b);
     }
 
@@ -66,7 +78,7 @@ public:
                     LightAir_TotemOutput& out) override {
         _state      = FLAG_STATE_IN;
         _lastBeacon = 0;
-        out.ui.trigger(TotemUIEvent::Idle);
+        showIdle(out);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
@@ -76,9 +88,14 @@ public:
                 _state = FLAG_STATE_OUT;
                 uint8_t r, g, b;
                 teamColor(r, g, b);
-                // Set looping background first, then play one-shot pickup flash on top.
+                // Looping background uses the flag's home-team colour;
+                // the pickup flash uses the picking player's own colour.
+                uint8_t pid = (msg.senderId < PlayerDefs::MAX_PLAYER_ID) ? msg.senderId : 0;
                 out.ui.trigger(TotemUIEvent::FlagMissing, r, g, b);
-                out.ui.trigger(TotemUIEvent::FlagTaken,   r, g, b);
+                out.ui.trigger(TotemUIEvent::FlagTaken,
+                               PlayerColors::kColors[pid][0],
+                               PlayerColors::kColors[pid][1],
+                               PlayerColors::kColors[pid][2]);
             }
             return;
         }

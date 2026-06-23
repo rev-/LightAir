@@ -11,6 +11,8 @@
 // ---- WS2812B LED strip ----
 static constexpr int     TOTEM_PIN_DATA = 13;  // WS2812B data line
 static constexpr uint8_t TOTEM_NUM_LEDS = 13;  // strip length
+                                               // (geometry zones in config.h
+                                               //  TotemLedLayout must match)
 
 // ---- Discrete RGB indicator LED ----
 static constexpr int TOTEM_PIN_COMM = 18;  // common enable (cathode/anode)

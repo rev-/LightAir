@@ -282,6 +282,56 @@ namespace TotemDefs {
 }
 
 // ---------------------------------------------------------------
+// Totem LED strip physical layout
+//
+// Groups the 13 strip LEDs into named zones / sides / scan-stations so
+// strip animations can target a *shape* (which LEDs and how they move),
+// not just a colour.  Edit these tables if the physical wiring/geometry
+// of the totem strip changes; kNumLeds is the single source of truth for
+// strip length (totem_pins.h::TOTEM_NUM_LEDS derives from it).
+//
+// Geometry (rectangle outline + center spine):
+//   short1 = 0,1   long1 = 2,3,4   short2 = 5,6   long2 = 7,8,9
+//   centerline (spine through the middle) = 10,11,12; LED 11 = exact center.
+//   long2 runs antiparallel to long1, so long2's last LED (9) sits beside
+//   long1's first LED (2).
+// ---------------------------------------------------------------
+namespace TotemLedLayout {
+    constexpr uint8_t kPerimeter[]     = { 0,1,2,3,4,5,6,7,8,9 };
+    constexpr uint8_t kPerimeterCount  = sizeof(kPerimeter) / sizeof(kPerimeter[0]);
+
+    constexpr uint8_t kCenterLine[]    = { 10,11,12 };
+    constexpr uint8_t kCenterLineCount = sizeof(kCenterLine) / sizeof(kCenterLine[0]);
+
+    constexpr uint8_t kCenter          = 11;  // single LED, rectangle center
+
+    // Named sides — kept as documentation of the wiring; no current effect
+    // consumes them, but they make the geometry self-describing if a
+    // side-anchored effect is added later.
+    constexpr uint8_t kSideShort1[]    = { 0,1 };
+    constexpr uint8_t kSideLong1[]     = { 2,3,4 };
+    constexpr uint8_t kSideShort2[]    = { 5,6 };
+    constexpr uint8_t kSideLong2[]     = { 7,8,9 };
+
+    // "Rungs" level across the rectangle's width, short1-end to short2-end;
+    // long2 is indexed in reverse because it runs antiparallel to long1.
+    // Used by the VerticalScan effect (ping-pong sweep along the length).
+    constexpr uint8_t kStation0[]      = { 0, 1 };
+    constexpr uint8_t kStation1[]      = { 2, 9, 10 };
+    constexpr uint8_t kStation2[]      = { 3, 8, 11 };
+    constexpr uint8_t kStation3[]      = { 4, 7, 12 };
+    constexpr uint8_t kStation4[]      = { 5, 6 };
+    constexpr uint8_t kStationCount    = 5;
+
+    // Strip length.  Derived from the hardware pin header (totem_pins.h,
+    // included above) so there's one source of truth; the static_assert
+    // guards against the zone tables drifting out of sync with it.
+    constexpr uint8_t kNumLeds = TOTEM_NUM_LEDS;
+    static_assert(kNumLeds == kPerimeterCount + kCenterLineCount,
+                  "TotemLedLayout zones must cover exactly TOTEM_NUM_LEDS LEDs");
+}
+
+// ---------------------------------------------------------------
 // Player identity tables
 //
 // Player IDs are uint8_t values 0-15 used both as the logical
@@ -345,6 +395,34 @@ namespace TeamColors {
         {   0,   0, 255 },  // team 6 : blue
         { 128,   0, 255 },  // team 7 : purple
     };
+}
+
+// ---------------------------------------------------------------
+// Per-team LED rhythm
+//
+// Layered onto a role's *idle* animation so two totems doing the same job
+// for different teams are tellable apart by tempo (speed + beat count),
+// not just colour — important for colour-blind players and for the up-to-8
+// teams that share TeamColors::kColors.  periodMs = one motion cycle;
+// pulseCount = how many cycles play before a silent beat, then repeat.
+// ---------------------------------------------------------------
+namespace TeamLedRhythm {
+    struct Rhythm { uint16_t periodMs; uint8_t pulseCount; };
+    constexpr uint8_t kCount = TeamColors::kCount;  // stays in sync with colours
+    constexpr Rhythm kTable[kCount] = {
+        { 1800, 1 },  // team 0 : slow single pulse
+        {  900, 2 },  // team 1 : fast double pulse
+        { 1300, 3 },  // team 2 : medium triple pulse
+        {  500, 1 },  // team 3 : very fast single pulse
+        { 1800, 2 },  // team 4
+        {  900, 3 },  // team 5
+        { 1300, 1 },  // team 6
+        {  500, 2 },  // team 7
+    };
+    // Safe lookup: clamps out-of-range team indices to entry 0.
+    constexpr Rhythm forTeam(uint8_t team) {
+        return kTable[(team < kCount) ? team : 0];
+    }
 }
 
 namespace PlayerColors {

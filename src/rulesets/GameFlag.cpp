@@ -272,7 +272,7 @@ static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput
 }
 
 static void onFlagEventTaken(const RadioPacket& pkt,
-                              LightAir_DisplayCtrl&, GameOutput& out) {
+                              LightAir_DisplayCtrl& disp, GameOutput& out) {
     uint8_t flagTeam = pkt.payload[1];
     if (flagTeam == enemyTeam()) {
         // A player (teammate or opponent player) picked up the enemy flag.
@@ -282,11 +282,15 @@ static void onFlagEventTaken(const RadioPacket& pkt,
         // Enemy picked up our flag.
         myFlagCarrierId = pkt.senderId;
         out.ui.trigger(LightAir_UICtrl::UIEvent::FlagTaken);   // "FLAG LOST"
+        uint8_t pid = (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) ? pkt.senderId : 0;
+        char buf[20];
+        snprintf(buf, sizeof(buf), "%s HAS YOUR FLAG", PlayerDefs::playerShort[pid]);
+        disp.showMessage(buf, 0);
     }
 }
 
 static void onFlagEventDropped(const RadioPacket& pkt,
-                                LightAir_DisplayCtrl&, GameOutput& out) {
+                                LightAir_DisplayCtrl& disp, GameOutput& out) {
     uint8_t flagTeam = pkt.payload[1];
     if (flagTeam == enemyTeam()) {
         enemyFlagCarrierId = 0xFF;
@@ -294,11 +298,12 @@ static void onFlagEventDropped(const RadioPacket& pkt,
         // Enemy dropped our flag — it resets to its totem.
         myFlagCarrierId = 0xFF;
         out.ui.trigger(LightAir_UICtrl::UIEvent::FlagReturn);  // "FLAG BACK"
+        disp.clearTray();
     }
 }
 
 static void onFlagEventScored(const RadioPacket& pkt,
-                               LightAir_DisplayCtrl&, GameOutput& out) {
+                               LightAir_DisplayCtrl& disp, GameOutput& out) {
     uint8_t flagTeam = pkt.payload[1];
     if (flagTeam == enemyTeam()) {
         // A teammate captured the enemy's flag: our team just scored.
@@ -308,6 +313,7 @@ static void onFlagEventScored(const RadioPacket& pkt,
         // Enemy scored using our flag; flag resets to our totem.
         myFlagCarrierId = 0xFF;
         out.ui.trigger(LightAir_UICtrl::UIEvent::FlagReturn);  // "FLAG BACK"
+        disp.clearTray();
     }
 }
 
@@ -394,6 +400,7 @@ static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
         enemyFlagCarrierId = 0xFF;
         out.ui.trigger(LightAir_UICtrl::UIEvent::FlagTaken);  // "FLAG LOST"
         if (uiCtrl) uiCtrl->clearBackground();
+        disp.clearTray();
     }
     shoneTimes++;
     respawnAt  = millis() + (uint32_t)respawnSecs * 1000;
@@ -486,6 +493,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             out.radio.broadcast(MSG_FLAG_EVENT, pl, 2);
             out.ui.trigger(LightAir_UICtrl::UIEvent::FlagGain);   // "FLAG +"
             if (uiCtrl) uiCtrl->setBackground(kFlagCarryBg);
+            disp.showMessage("YOU HAVE FLAG", 0);
             break;
         }
     }
@@ -510,6 +518,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             out.radio.broadcast(MSG_FLAG_EVENT, pl, 2);
             out.ui.trigger(LightAir_UICtrl::UIEvent::FlagGain);   // "FLAG +"
             if (uiCtrl) uiCtrl->clearBackground();
+            disp.clearTray();
             disp.showMessage("FLAG SCORED!", 2000);
             break;
         }

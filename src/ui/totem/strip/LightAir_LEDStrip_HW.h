@@ -6,21 +6,23 @@
 // ----------------------------------------------------------------
 // LightAir_LEDStrip_HW — WS2812B animation engine.
 //
-// Effects:
-//   Off        — all LEDs off.
-//   Fill       — all LEDs set to colour instantly.
-//   Wipe       — sequential per-LED advance (~stepMs per LED).
-//   Pulse      — fade full→dim→full over durationMs; loops if background.
-//   Blink      — on/off toggle every durationMs/2; loops if background.
-//   BlinkFast  — on/off toggle every 150 ms (fixed); loops if background.
-//   Chase      — single lit LED advances along strip.
-//   Alternate  — odd/even LEDs swap between two colours every durationMs/2.
+// Renders the StripAnimation building blocks (zone + effect + timing)
+// from LightAir_LEDStrip.h.  Each frame is computed purely from the time
+// elapsed since play()/loop() was called, so there is no per-effect step
+// state to keep in sync.
+//
+// Beat groups (pulseCount):
+//   pulseCount == 0 → the effect runs continuously (one cycle = durationMs,
+//                     repeating forever); used for roaming idles (Chase).
+//   pulseCount >= 1 → that many motion cycles play back-to-back, then one
+//                     silent cycle (all off), then the group repeats; used
+//                     to give per-team "1 slow pulse" vs "2 fast blinks".
 //
 // Usage:
 //   LightAir_LEDStrip_HW strip;
-//   strip.begin(13, 13);             // DATA_PIN=13, NUM_LEDS=13
-//   strip.loop({ 255,0,0, StripEffect::Blink, 1000 });   // red blink forever
-//   strip.play({ 0,255,0, StripEffect::Wipe,  500  });   // green wipe once
+//   strip.begin(13, 13);                                  // DATA_PIN, NUM_LEDS
+//   strip.loop({ 255,0,0, StripEffect::Blink, 1000 });    // red blink forever
+//   strip.play({ 0,255,0, StripEffect::Wipe,  500  });    // green wipe once
 //   // in game loop:
 //   strip.update();
 // ----------------------------------------------------------------
@@ -40,25 +42,23 @@ private:
     uint8_t _numLeds  = 0;
 
     // Foreground (one-shot)
-    StripAnimation _fg         = {};
-    bool           _fgActive   = false;
-    uint32_t       _fgStartMs  = 0;
-    uint8_t        _fgStep     = 0;    // for Wipe / Chase current LED index
+    StripAnimation _fg        = {};
+    bool           _fgActive  = false;
+    uint32_t       _fgStartMs = 0;
 
     // Background (looping)
-    StripAnimation _bg         = {};
-    bool           _bgActive   = false;
-    uint32_t       _bgCycleMs  = 0;   // millis() when current bg cycle started
-    uint8_t        _bgStep     = 0;
-    bool           _bgPhase    = false;
+    StripAnimation _bg        = {};
+    bool           _bgActive  = false;
+    uint32_t       _bgStartMs = 0;
 
-    void renderAnim(const StripAnimation& a,
-                    uint32_t elapsed,
-                    uint8_t& step,
-                    bool&  phase,
-                    bool   looping);
+    // Render `a` into _leds for the given elapsed time (ms since start).
+    void renderAnim(const StripAnimation& a, uint32_t elapsed);
+
+    // Zone helpers: number of LEDs in a zone, and the physical LED index of
+    // the i-th member of that zone (so effects iterate a zone uniformly).
+    uint8_t zoneCount(StripZone zone) const;
+    uint8_t zoneLed(StripZone zone, uint8_t i) const;
+    void    setZone(StripZone zone, uint8_t r, uint8_t g, uint8_t b);
+
     void setAll(uint8_t r, uint8_t g, uint8_t b);
-    void setAlternate(uint8_t r1, uint8_t g1, uint8_t b1,
-                      uint8_t r2, uint8_t g2, uint8_t b2,
-                      bool phase);
 };
