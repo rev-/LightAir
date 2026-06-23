@@ -227,8 +227,17 @@ void LightAir_Radio::processPacket(const RadioPacket& pkt, int8_t rssi) {
         _typeId    != RadioTypeId::UNIVERSAL &&
         pkt.typeId != _typeId) return;
 
-    // 3. Flood relay: re-broadcast if not seen before
-    if (pkt.resend > 0 && !isDuplicate(pkt.senderId, pkt.timestamp)) {
+    // 3. Flood relay + de-duplication.
+    // A flood packet (resend > 0) is relayed by every receiver, so the same
+    // logical broadcast (identical senderId + timestamp) arrives here once per
+    // relaying neighbour.  Deliver it only the first time: once seen, drop the
+    // packet entirely (no re-relay, no second delivery).  This keeps counters
+    // driven by broadcast events (kills, flag captures, presence, …) from being
+    // incremented multiple times for a single event.  Legitimate periodic
+    // broadcasts are unaffected: each carries a fresh millis() timestamp, so
+    // they never collide with one another in the dedup ring.
+    if (pkt.resend > 0) {
+        if (isDuplicate(pkt.senderId, pkt.timestamp)) return;
         recordDedup(pkt.senderId, pkt.timestamp);
         RadioPacket relay = pkt;
         relay.resend--;

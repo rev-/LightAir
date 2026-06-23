@@ -256,7 +256,10 @@ void LightAir_GameRunner::update() {
         // Flood MSG_END_GAME so devices still in a non-scoring state transition.
         output.radio.broadcast(GameDefaults::MSG_END_GAME, nullptr, 0, 2);
         // Flood MSG_TOTEM_ROSTER so any activated totem reverts to stateless.
+        // A single broadcast can be lost, so scoreUpdate() keeps re-sending it
+        // for the duration of the end-game screen (see _rosterSentAt).
         output.radio.broadcast(RadioMsg::MSG_TOTEM_ROSTER, nullptr, 0, 2);
+        _rosterSentAt = millis();
         scoreBroadcastFused(output);
         _scoreSentAt = millis();
 
@@ -366,12 +369,14 @@ void LightAir_GameRunner::scoreUpdate(const InputReport& inputs,
         }
     }
 
-    // MSG_TOTEM_BEACON: no DirectRadioRules run in scoring phase; reply directly.
-    for (uint8_t e = 0; e < radio.count; e++) {
-        const RadioEvent& ev = radio.events[e];
-        if (ev.type           != RadioEventType::MessageReceived) continue;
-        if (ev.packet.msgType != RadioMsg::MSG_TOTEM_BEACON)      continue;
-        replyToTotemBeacon(ev, output);
+    // MSG_TOTEM_BEACON: the game is over, so do NOT answer beacons with a role
+    // activation here — doing so would immediately re-activate any totem that
+    // just reverted to its stateless state, bouncing it back into game mode.
+    // Instead we periodically re-broadcast MSG_TOTEM_ROSTER (below) to drive all
+    // totems back to stateless; reverted totems ignore repeats harmlessly.
+    if (millis() - _rosterSentAt >= GameDefaults::PRESTART_BROADCAST_MS) {
+        output.radio.broadcast(RadioMsg::MSG_TOTEM_ROSTER, nullptr, 0, 2);
+        _rosterSentAt = millis();
     }
 
     // Timed retry — re-broadcast fused scores while waiting for all devices.

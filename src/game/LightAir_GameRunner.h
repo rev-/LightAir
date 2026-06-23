@@ -125,6 +125,7 @@ private:
     uint32_t _scorePresent     = 0;       // bit id set = _scoreSlots[id] is valid (player-ID-indexed)
     uint32_t _scoreSentAt      = 0;       // millis() of last broadcast; 0 = not yet sent
     uint32_t _scoreEntryAt     = 0;       // millis() when scoring phase began (for timeout)
+    uint32_t _rosterSentAt     = 0;       // millis() of last end-game MSG_TOTEM_ROSTER re-broadcast
     uint8_t  _scoreSlots[PlayerDefs::MAX_PLAYER_ID][GameDefaults::MAX_WINNER_VARS * 4];
 
     // ---- Helpers ----
