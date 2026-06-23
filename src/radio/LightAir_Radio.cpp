@@ -79,18 +79,20 @@ int LightAir_Radio::findPending(uint8_t replyMsgType, uint32_t timestamp) const 
     return -1;
 }
 
-bool LightAir_Radio::isDuplicate(uint8_t senderId, uint32_t timestamp) const {
+bool LightAir_Radio::isDuplicate(uint8_t senderId, uint32_t timestamp, uint8_t msgType) const {
     for (int i = 0; i < RADIO_DEDUP_WINDOW; i++)
         if (_dedup[i].valid &&
             _dedup[i].senderId  == senderId &&
-            _dedup[i].timestamp == timestamp)
+            _dedup[i].timestamp == timestamp &&
+            _dedup[i].msgType   == msgType)
             return true;
     return false;
 }
 
-void LightAir_Radio::recordDedup(uint8_t senderId, uint32_t timestamp) {
+void LightAir_Radio::recordDedup(uint8_t senderId, uint32_t timestamp, uint8_t msgType) {
     _dedup[_dedupIdx].senderId  = senderId;
     _dedup[_dedupIdx].timestamp = timestamp;
+    _dedup[_dedupIdx].msgType   = msgType;
     _dedup[_dedupIdx].valid     = true;
     _dedupIdx = (_dedupIdx + 1) % RADIO_DEDUP_WINDOW;
 }
@@ -227,18 +229,21 @@ void LightAir_Radio::processPacket(const RadioPacket& pkt, int8_t rssi) {
         _typeId    != RadioTypeId::UNIVERSAL &&
         pkt.typeId != _typeId) return;
 
-    // 3. Flood relay + de-duplication.
-    // A flood packet (resend > 0) is relayed by every receiver, so the same
-    // logical broadcast (identical senderId + timestamp) arrives here once per
-    // relaying neighbour.  Deliver it only the first time: once seen, drop the
-    // packet entirely (no re-relay, no second delivery).  This keeps counters
-    // driven by broadcast events (kills, flag captures, presence, …) from being
-    // incremented multiple times for a single event.  Legitimate periodic
-    // broadcasts are unaffected: each carries a fresh millis() timestamp, so
-    // they never collide with one another in the dedup ring.
+    // 3. De-duplication, then flood relay.
+    // A flood packet is relayed by every receiver, so the same logical message
+    // arrives here multiple times: the original plus one copy per relaying
+    // neighbour, each with a lower resend count.  Deliver (and relay) it exactly
+    // once.  The dedup key is (senderId, timestamp, msgType), which is preserved
+    // across every hop — including the final hop where resend has counted down to
+    // 0 and the packet is otherwise indistinguishable from a non-flood send.
+    // Gating dedup on resend>0 (as before) let that resend==0 tail slip through
+    // and be delivered a second time, double-counting broadcast-driven counters
+    // (e.g. flag captures, ending the game early).  Legitimate periodic
+    // broadcasts are unaffected: each carries a fresh millis() timestamp.
+    if (isDuplicate(pkt.senderId, pkt.timestamp, pkt.msgType)) return;
+    recordDedup(pkt.senderId, pkt.timestamp, pkt.msgType);
+
     if (pkt.resend > 0) {
-        if (isDuplicate(pkt.senderId, pkt.timestamp)) return;
-        recordDedup(pkt.senderId, pkt.timestamp);
         RadioPacket relay = pkt;
         relay.resend--;
         sendRaw(kBroadcastMac, relay);
