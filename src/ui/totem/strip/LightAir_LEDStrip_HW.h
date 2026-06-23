@@ -15,6 +15,8 @@
 //   BlinkFast  — on/off toggle every 150 ms (fixed); loops if background.
 //   Chase      — single lit LED advances along strip.
 //   Alternate  — odd/even LEDs swap between two colours every durationMs/2.
+//   IdleMarker — only the second-to-last LED, half power, 50% duty blink.
+//   DoubleBlink— two quick flashes then a long pause, repeating.
 //
 // Usage:
 //   LightAir_LEDStrip_HW strip;

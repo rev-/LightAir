@@ -14,8 +14,11 @@
 //   strip  — a StripAnimation (one-shot or looping)
 //   rgb    — an RGB colour (on/off)
 //
-// Looping background states (Idle, FlagMissing, Control,
+// Looping background states (Idle, Active, FlagMissing, Control,
 // ControlContest) call strip.loop() and set a persistent RGB colour.
+// Idle is reserved for the fully-stateless/unassigned totem; every
+// activated role uses Active (with its own colour) for its idle/ready
+// state instead, so an assigned totem never looks unassigned.
 // One-shot events (Respawn, FlagTaken, etc.) call strip.play() which
 // pre-empts the background for its duration, then the background resumes.
 //

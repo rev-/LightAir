@@ -24,6 +24,10 @@ enum class StripEffect : uint8_t {
     BlinkFast,
     Chase,
     Alternate,
+    IdleMarker,  // single LED (second-to-last), 50% power, 50% duty blink.
+                 // Reserved for the fully-stateless (unassigned) totem state.
+    DoubleBlink, // two quick flashes then a long pause, repeating.
+                 // Distinguishes "active but missing/away" from a steady Blink.
 };
 
 struct StripAnimation {

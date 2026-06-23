@@ -163,6 +163,27 @@ void LightAir_LEDStrip_HW::renderAnim(const StripAnimation& a,
         case StripEffect::Alternate:
             setAlternate(a.r, a.g, a.b, a.r2, a.g2, a.b2, phase);
             break;
+
+        case StripEffect::IdleMarker: {
+            // Only the second-to-last LED, half power, 50% duty over `period`.
+            setAll(0, 0, 0);
+            uint32_t t  = elapsed % period;
+            bool     on = t < (period / 2);
+            if (on && _numLeds >= 2) {
+                uint8_t idx = _numLeds - 2;
+                _leds[idx] = CRGB(a.r / 2, a.g / 2, a.b / 2);
+            }
+            break;
+        }
+
+        case StripEffect::DoubleBlink: {
+            // Two short flashes near the start of each period, then a long pause.
+            uint32_t t  = elapsed % period;
+            bool     on = (t < 150) || (t >= 300 && t < 450);
+            if (on) setAll(a.r, a.g, a.b);
+            else    setAll(0, 0, 0);
+            break;
+        }
     }
 }
 

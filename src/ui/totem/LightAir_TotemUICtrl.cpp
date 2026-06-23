@@ -3,7 +3,7 @@
 
 // ---- Strip animation presets -----------------------------------------------------------
 static const StripAnimation kAnimOff        = { 0,0,0, StripEffect::Off,       0 };
-static const StripAnimation kAnimIdlePulse  = { 0,30,60, StripEffect::Pulse,  2000 };
+static const StripAnimation kAnimIdleMarker = { 255,255,255, StripEffect::IdleMarker, 2000 };
 static const StripAnimation kAnimWhiteFill  = { 255,255,255, StripEffect::Fill, 500 };
 static const StripAnimation kAnimGreenPulse = { 0,255,0, StripEffect::Pulse,   400 };
 static const StripAnimation kAnimRedPulse   = { 255,0,0, StripEffect::Pulse,   400 };
@@ -15,7 +15,7 @@ LightAir_TotemUICtrl::LightAir_TotemUICtrl(LightAir_TotemRGB& rgb,
 {}
 
 void LightAir_TotemUICtrl::begin() {
-    _strip.loop(kAnimIdlePulse);
+    _strip.loop(kAnimIdleMarker);
     _rgb.off();
 }
 
@@ -38,6 +38,7 @@ void LightAir_TotemUICtrl::update() {
 bool LightAir_TotemUICtrl::isBackground(TotemUIEvent ev) const {
     switch (ev) {
         case TotemUIEvent::Idle:
+        case TotemUIEvent::Active:
         case TotemUIEvent::FlagMissing:
         case TotemUIEvent::Control:
         case TotemUIEvent::ControlContest:
@@ -51,12 +52,19 @@ bool LightAir_TotemUICtrl::isBackground(TotemUIEvent ev) const {
 void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
     switch (cmd.event) {
         case TotemUIEvent::Idle:
-            _strip.loop(kAnimIdlePulse);
+            _strip.loop(kAnimIdleMarker);
             _rgb.set(cmd.r, cmd.g, cmd.b);
             break;
 
+        case TotemUIEvent::Active: {
+            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Pulse, 2500 };
+            _strip.loop(a);
+            _rgb.set(cmd.r, cmd.g, cmd.b);
+            break;
+        }
+
         case TotemUIEvent::FlagMissing: {
-            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Blink, 1200 };
+            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::DoubleBlink, 2000 };
             _strip.loop(a);
             _rgb.set(cmd.r, cmd.g, cmd.b);
             break;
@@ -103,7 +111,8 @@ void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
 void LightAir_TotemUICtrl::dispatchOneShot(const TotemUICmd& cmd) {
     switch (cmd.event) {
         case TotemUIEvent::Respawn: {
-            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Wipe, 0 };
+            // Running dot along the strip, in the respawned player's colour.
+            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Chase, 0 };
             _strip.play(a);
             _rgb.set(cmd.r, cmd.g, cmd.b);
             break;
@@ -117,7 +126,8 @@ void LightAir_TotemUICtrl::dispatchOneShot(const TotemUICmd& cmd) {
         }
 
         case TotemUIEvent::FlagReturn: {
-            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Fill, 600 };
+            // Flash all LEDs (return or score), same primitive as FlagTaken.
+            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::BlinkFast, 600 };
             _strip.play(a);
             _rgb.set(cmd.r, cmd.g, cmd.b);
             break;

@@ -7,7 +7,7 @@
 // States
 //   READY    : broadcasting MSG_BONUS_BEACON every BEACON_INTERVAL_MS.
 //              On player reply (0x5F) → COOLDOWN; triggers Bonus anim.
-//   COOLDOWN : silent; waits _cooldownSecs seconds then → READY; triggers Idle.
+//   COOLDOWN : silent; waits _cooldownSecs seconds then → READY; triggers Active (dim green).
 //
 // Activation
 //   info.roleId       = BONUS
@@ -42,7 +42,7 @@ public:
         _cooldownSecs = info.hasConfigSecs ? info.configSecs : DEFAULT_COOLDOWN_SECS;
         _cooldownEnd  = 0;
         _lastBeacon   = 0;
-        out.ui.trigger(TotemUIEvent::Idle);
+        out.ui.trigger(TotemUIEvent::Active, 0, 180, 0);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
@@ -60,7 +60,7 @@ public:
         if (_state == BONUS_COOLDOWN) {
             if (now >= _cooldownEnd) {
                 _state = BONUS_READY;
-                out.ui.trigger(TotemUIEvent::Idle);
+                out.ui.trigger(TotemUIEvent::Active, 0, 180, 0);
             }
             return;
         }
