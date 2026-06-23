@@ -11,7 +11,7 @@
 // ----------------------------------------------------------------
 #define RADIO_MAX_PAYLOAD  237  // max bytes in payload[] (250 ESP-NOW limit − 13 header)
 #define RADIO_MAX_PENDING  10   // max sent msgs awaiting reply
-#define RADIO_DEDUP_WINDOW 16   // flood-relay dedup history depth
+#define RADIO_DEDUP_WINDOW 32   // flood-relay dedup history depth
 
 // ----------------------------------------------------------------
 // Packet field sentinels
@@ -190,8 +190,11 @@ private:
     };
     PendingMsg _pending[RADIO_MAX_PENDING];
 
-    // ---- deduplication ring for flood relay ----
-    struct DedupEntry { uint8_t senderId; uint32_t timestamp; bool valid; };
+    // ---- deduplication ring ----
+    // Keyed on (senderId, timestamp, msgType): a logical message keeps the same
+    // key across every flood hop, while two distinct messages a sender emits in
+    // the same millisecond differ by msgType and are not confused.
+    struct DedupEntry { uint8_t senderId; uint32_t timestamp; uint8_t msgType; bool valid; };
     DedupEntry _dedup[RADIO_DEDUP_WINDOW];
     uint8_t    _dedupIdx;
 
@@ -202,7 +205,7 @@ private:
     bool sendRaw(const uint8_t mac[6], const RadioPacket& pkt);
     bool storePending(const RadioPacket& pkt);
     int  findPending(uint8_t replyMsgType, uint32_t timestamp) const;
-    bool isDuplicate(uint8_t senderId, uint32_t timestamp) const;
-    void recordDedup(uint8_t senderId, uint32_t timestamp);
+    bool isDuplicate(uint8_t senderId, uint32_t timestamp, uint8_t msgType) const;
+    void recordDedup(uint8_t senderId, uint32_t timestamp, uint8_t msgType);
     void processPacket(const RadioPacket& pkt, int8_t rssi);  // classify and add to _report
 };

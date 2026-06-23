@@ -73,12 +73,10 @@ constexpr uint8_t MSG_BASE_BEACON   = 0x56;
 // Reply (0x59): enemy-team player picking up the flag.
 constexpr uint8_t MSG_FLAG_BEACON   = 0x58;
 
-// Broadcast flood by flag carrier when shot — flag returns to its totem.
-// payload[0] = flagTeam (0=O, 1=X).  No reply expected.
+// Reserved (retired): flag drop/score is now carried by MSG_FLAG_EVENT
+// sub-types FlagEvent::DROPPED / FlagEvent::SCORED, which both the Flag
+// ruleset and FlagTotem already use.  Do not reuse these byte values.
 constexpr uint8_t MSG_FLAG_RETURN   = 0x5A;
-
-// Broadcast flood by flag carrier when scoring — flag returns to its totem.
-// payload[0] = flagTeam (0=O, 1=X).  No reply expected.
 constexpr uint8_t MSG_FLAG_SCORE    = 0x5C;
 
 // BONUS totem beacon (new role-based architecture). payload[0] = 0 when ready.
@@ -131,6 +129,18 @@ constexpr uint8_t MSG_TOTEM_BEACON  = 0xF0;
 constexpr uint8_t MSG_TOTEM_ROSTER  = 0xF2;
 
 } // namespace RadioMsg
+
+// ---------------------------------------------------------------
+// FlagEvent — payload[0] sub-types of MSG_FLAG_EVENT (0x50).
+// Shared by the Flag ruleset (broadcaster) and FlagTotem (listener)
+// so both agree on the flag pickup/score/drop protocol.
+//   payload[0] = FlagEvent sub-type; payload[1] = flag's owning team (0=O,1=X).
+// ---------------------------------------------------------------
+namespace FlagEvent {
+    constexpr uint8_t TAKEN   = 1;  // a player picked up the flag
+    constexpr uint8_t DROPPED = 2;  // carrier was shot; flag returns home
+    constexpr uint8_t SCORED  = 3;  // flag captured at a base; flag returns home
+}
 
 // ---------------------------------------------------------------
 // Hardware identity — stored in NVS to select player vs totem

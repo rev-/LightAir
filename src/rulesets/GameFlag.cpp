@@ -89,10 +89,12 @@ enum ReplySubType : uint8_t {
 };
 
 // ---- Flag event sub-types ----
+// Aliased to the shared FlagEvent constants (config.h) so the broadcaster here
+// and the FlagTotem listener can never drift out of sync.
 enum FlagEventType : uint8_t {
-    FEVENT_TAKEN   = 1,
-    FEVENT_DROPPED = 2,
-    FEVENT_SCORED  = 3,
+    FEVENT_TAKEN   = FlagEvent::TAKEN,
+    FEVENT_DROPPED = FlagEvent::DROPPED,
+    FEVENT_SCORED  = FlagEvent::SCORED,
 };
 
 // ---- Proximity thresholds ----

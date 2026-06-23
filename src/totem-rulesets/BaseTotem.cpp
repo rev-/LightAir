@@ -56,8 +56,14 @@ public:
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        // Accept player reply to our beacon only.
+        // Accept a player's *intentional* respawn reply to our beacon only.
+        // The reply carries subType = team+1 (payload[0] >= 1); the player sends
+        // it solely when it is within its own RSSI proximity gate of this base.
+        // Reject the empty 0x57 auto-reply the GameRunner emits for every beacon
+        // (payloadLen == 0) — it carries no distance information and would make
+        // the base react to any player anywhere in radio range.
         if (msg.msgType != MSG_BASE_BEACON + 1) return;
+        if (msg.payloadLen == 0 || msg.payload[0] == 0) return;
         uint8_t r, g, b;
         if (_team == 0xFF) {
             // Teamless base: wipe in the respawning player's personal colour.

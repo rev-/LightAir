@@ -13,30 +13,29 @@
 //   onActivate() : enters FLAG_IN; shows Idle background (team colour glow).
 //   update()     : in FLAG_IN, broadcasts MSG_FLAG_BEACON every
 //                  FLAG_BEACON_INTERVAL_MS.
-//   onMessage()  :
-//     FLAG_IN  — on enemy-player reply (0x59) → FLAG_OUT + FlagMissing anim
-//                (double-blink, team colour) + FlagTaken flash (picker's colour).
-//     FLAG_OUT — on MSG_FLAG_RETURN or MSG_FLAG_SCORE flood matching our
-//                team → FLAG_IN + FlagReturn anim (flash, team colour).
+//   onMessage()  : driven entirely by MSG_FLAG_EVENT broadcasts from players
+//                  (payload[1] == _team selects events for this flag):
+//     FlagEvent::TAKEN   — FLAG_IN → FLAG_OUT + FlagMissing anim (team colour)
+//                          + FlagTaken flash (picker's colour).
+//     FlagEvent::DROPPED — FLAG_OUT → FLAG_IN + FlagReturn anim (flash).
+//     FlagEvent::SCORED  — FLAG_OUT → FLAG_IN + FlagReturn anim (flash).
 //   reset()      : returns to FLAG_IN; clears timer.
 //
 // Two singletons: flagO (owns the O flag) and flagX (owns the X flag).
 // The team is fixed at construction and encodes which team's flag this is.
 //
-// Flag pickup protocol
-//   A player who spots MSG_FLAG_BEACON(state=IN) from the enemy flag with
-//   sufficient RSSI sends a reply (0x59) to claim the flag.  The flag
-//   totem detects this reply and transitions to FLAG_OUT.
-//
-// Flag return protocol
-//   MSG_FLAG_RETURN : broadcast flood from carrier who was shot.
-//   MSG_FLAG_SCORE  : broadcast flood from carrier who scored.
-//   Both carry payload[0] = flagTeam; only packets matching _team are acted on.
+// Flag protocol (must stay in sync with the Flag ruleset, GameFlag.cpp)
+//   The totem reacts only to MSG_FLAG_EVENT broadcasts a player emits when it
+//   actually picks up, scores, or drops a flag — and the player emits those
+//   only once it is within its own RSSI proximity gate of the flag/base.  The
+//   totem therefore inherits that proximity gate and never reacts to a distant
+//   player.  (It must NOT react to the empty 0x59 auto-reply the GameRunner
+//   sends for every beacon, which carries no distance information.)
 // ================================================================
 
 using RadioMsg::MSG_FLAG_BEACON;
-using RadioMsg::MSG_FLAG_RETURN;
-using RadioMsg::MSG_FLAG_SCORE;
+using RadioMsg::MSG_FLAG_EVENT;
+namespace FE = FlagEvent;
 
 static constexpr uint32_t FLAG_BEACON_INTERVAL_MS = 500;
 static constexpr uint8_t  FLAG_STATE_IN  = 0;
@@ -82,9 +81,17 @@ public:
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
+        // Only MSG_FLAG_EVENT broadcasts drive this totem; payload[1] selects
+        // events for the flag this totem owns.  Player-side RSSI gating means
+        // these only fire when a player is actually at the flag/base.
+        if (msg.msgType != MSG_FLAG_EVENT) return;
+        if (msg.payloadLen < 2)            return;
+        if (msg.payload[1] != _team)       return;  // not our flag's event
+
+        const uint8_t sub = msg.payload[0];
+
         if (_state == FLAG_STATE_IN) {
-            // Enemy-team player replies to our beacon → flag picked up.
-            if (msg.msgType == MSG_FLAG_BEACON + 1 && msg.team != _team) {
+            if (sub == FE::TAKEN) {
                 _state = FLAG_STATE_OUT;
                 uint8_t r, g, b;
                 teamColor(r, g, b);
@@ -100,11 +107,8 @@ public:
             return;
         }
 
-        // FLAG_STATE_OUT: wait for return or score broadcast.
-        if (msg.payloadLen < 1) return;
-        if (msg.payload[0] != _team) return;  // not our flag's event
-
-        if (msg.msgType == MSG_FLAG_RETURN || msg.msgType == MSG_FLAG_SCORE) {
+        // FLAG_STATE_OUT: a drop (carrier shot) or a score returns the flag home.
+        if (sub == FE::DROPPED || sub == FE::SCORED) {
             returnFlag(out);
         }
     }
