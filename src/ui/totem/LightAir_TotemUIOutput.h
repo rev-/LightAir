@@ -16,11 +16,14 @@ enum class TotemUIEvent : uint8_t {
     Malus,         // malus imposed; red pulse
     Roster,        // game ended (roster exchange); brief white fill then off
     // ---- Looping background states ----
-    Idle,          // fully stateless / unassigned totem — single dim marker LED.
-                   //   Only used by the driver before activation / after revert.
-    Active,        // role assigned, nothing happening right now; slow pulse in
-                   //   cmd colour. Used by every role's idle/ready/neutral state
-                   //   so an assigned totem never looks like a stateless one.
+    Idle,          // "nothing currently happening" background, dual purpose:
+                   //   cmd colour == (0,0,0) → fully stateless / unassigned totem
+                   //     (driver only, before activation / after revert):
+                   //     single dim marker LED, RGB off.
+                   //   cmd colour != (0,0,0) → role assigned, idle/ready/neutral:
+                   //     slow pulse in that colour, so an assigned totem reads as
+                   //     distinct from a stateless one and the colour identifies
+                   //     its role/team.
     FlagMissing,   // flag away from home; double-blink in flag-team colour
     Control,       // CP owned: steady fill in team or player colour.
                    //   cmd.r = 0 or 1  → team index; colour from TeamColors::kColors.
@@ -43,8 +46,8 @@ struct TotemUICmd {
                             //   Respawn       → player RGB colour
                             //   FlagMissing/Return/Taken → flag-team (or player) colour
                             //   Control       → cmd.r = team (0/1) or 0xFF; cmd.g = player ID
-                            //   Active        → role-appropriate colour (strip + RGB)
-                            //   Idle          → RGB LED colour (0,0,0 = off); strip ignores colour
+                            //   Idle          → (0,0,0) = stateless marker; otherwise
+                            //                    role-coloured idle pulse (strip + RGB)
                             //   others        → ignored (use 0,0,0)
 };
 

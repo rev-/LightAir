@@ -38,7 +38,6 @@ void LightAir_TotemUICtrl::update() {
 bool LightAir_TotemUICtrl::isBackground(TotemUIEvent ev) const {
     switch (ev) {
         case TotemUIEvent::Idle:
-        case TotemUIEvent::Active:
         case TotemUIEvent::FlagMissing:
         case TotemUIEvent::Control:
         case TotemUIEvent::ControlContest:
@@ -51,14 +50,14 @@ bool LightAir_TotemUICtrl::isBackground(TotemUIEvent ev) const {
 // ----------------------------------------------------------------
 void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
     switch (cmd.event) {
-        case TotemUIEvent::Idle:
-            _strip.loop(kAnimIdleMarker);
-            _rgb.set(cmd.r, cmd.g, cmd.b);
-            break;
-
-        case TotemUIEvent::Active: {
-            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Pulse, 2500 };
-            _strip.loop(a);
+        case TotemUIEvent::Idle: {
+            bool stateless = (cmd.r == 0 && cmd.g == 0 && cmd.b == 0);
+            if (stateless) {
+                _strip.loop(kAnimIdleMarker);
+            } else {
+                StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Pulse, 2500 };
+                _strip.loop(a);
+            }
             _rgb.set(cmd.r, cmd.g, cmd.b);
             break;
         }

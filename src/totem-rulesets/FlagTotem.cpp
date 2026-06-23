@@ -10,7 +10,7 @@
 //   FLAG_OUT (1) : flag carried by enemy; silent until returned.
 //
 // Lifecycle
-//   onActivate() : enters FLAG_IN; shows Active background (team colour glow).
+//   onActivate() : enters FLAG_IN; shows Idle background (team colour glow).
 //   update()     : in FLAG_IN, broadcasts MSG_FLAG_BEACON every
 //                  FLAG_BEACON_INTERVAL_MS.
 //   onMessage()  :
@@ -70,7 +70,7 @@ public:
         _lastBeacon = 0;
         uint8_t r, g, b;
         teamColor(r, g, b);
-        out.ui.trigger(TotemUIEvent::Active, r, g, b);
+        out.ui.trigger(TotemUIEvent::Idle, r, g, b);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
