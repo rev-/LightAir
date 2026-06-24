@@ -128,17 +128,19 @@ public:
                 const uint8_t* payload = nullptr, uint8_t payloadLen = 0,
                 uint8_t resend = 0);
 
-    // Broadcast to all peers.  resend > 0 triggers mesh relay.
+    // Broadcast to all peers.  resend > 0 triggers mesh relay; default is
+    // single-hop only (resend=0) — callers must opt in explicitly to flood.
     bool broadcast(uint8_t msgType,
                    const uint8_t* payload = nullptr, uint8_t payloadLen = 0,
-                   uint8_t resend = 1);
+                   uint8_t resend = 0);
 
     // Broadcast with typeId forced to UNIVERSAL (0) regardless of active _typeId.
     // Use for infrastructure messages that must be received by all devices
     // (e.g. MSG_TOTEM_BEACON, MSG_ROSTER) even after a game typeId is set.
+    // Default is single-hop only (resend=0) — callers must opt in to flood.
     bool broadcastUniversal(uint8_t msgType,
                             const uint8_t* payload = nullptr, uint8_t payloadLen = 0,
-                            uint8_t resend = 1);
+                            uint8_t resend = 0);
 
     // Send a reply to a received packet.
     //   Sets msgType = original.msgType + 1.

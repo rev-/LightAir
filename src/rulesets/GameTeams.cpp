@@ -239,7 +239,7 @@ static void onReplyShone(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
     points++;
     myTeamPoints++;
-    out.radio.broadcast(MSG_POINT_REPORT, nullptr, 0);
+    out.radio.broadcast(MSG_POINT_REPORT, nullptr, 0, 2);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Lit);
 }
 static void onReplyFriend(const RadioPacket&, const RadioPacket&,

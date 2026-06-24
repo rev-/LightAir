@@ -321,7 +321,7 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
     while (true) {
         // Periodic presence broadcast so DM and peers discover this device.
         if (millis() >= nextBroadcast) {
-            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0);
+            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0, 2);
             nextBroadcast = millis() + GameDefaults::PRESTART_BROADCAST_MS;
         }
 
@@ -335,7 +335,7 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
             if (ke.key == 'B') return MenuResult::Cancelled;
             if (ke.key == 'A' && _game && !joined) {
                 joined = true;
-                _radio.broadcast(GameDefaults::MSG_JOIN, nullptr, 0);
+                _radio.broadcast(GameDefaults::MSG_JOIN, nullptr, 0, 2);
                 _display.clear();
                 _display.setColor(true);
                 _display.print(0, 0,                             "Joined!");
@@ -672,9 +672,10 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
     _display.clear();
     _display.setColor(true);
 
-    for (int8_t delta = -1; delta <= 1; delta++) {
+    // Show up to 5 entries: cursor-2 … cursor+2, cursor pinned to row 2.
+    for (int8_t delta = -2; delta <= 2; delta++) {
         int8_t idx = (int8_t)cursor + delta;
-        uint8_t row = (uint8_t)(delta + 1);
+        uint8_t row = (uint8_t)(delta + 2);  // rows 0-4
         if (idx < 0 || idx >= (PlayerDefs::MAX_PLAYER_ID - 1)) continue;
 
         uint8_t pid = (uint8_t)(idx + 1);  // player IDs 1–15
@@ -857,7 +858,7 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
 
     uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
     uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, _totemAssignment, _teams, token);
-    if (len > 0) _radio.broadcast(_msgType, blob, len);
+    if (len > 0) _radio.broadcast(_msgType, blob, len, 2);
 
     _seenCount = 0;
     recordSeen(_radio.playerId());
@@ -871,7 +872,7 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
     while (true) {
         // Broadcast MSG_ROSTER periodically so other devices discover us.
         if (millis() >= nextBroadcast) {
-            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0);
+            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0, 2);
             nextBroadcast = millis() + GameDefaults::PRESTART_BROADCAST_MS;
         }
 
@@ -888,33 +889,39 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
         if (_seenCount != prevCount)
             renderSummary(vScroll);
 
-        MenuKeyEvent ev = waitForKey();
-        // Action buttons (A, B) only respond to PRESS
-        if ((ev.key == 'A' || ev.key == 'B') && ev.state != KeyState::PRESSED) continue;
-
-        switch (ev.key) {
-            case 'A': {
-                uint8_t payload = _countdownSecs / 10;
-                _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, &payload, 1);
-                runCountdownSequence(_countdownSecs);
-                commitToRunner();
-                return MenuResult::Confirmed;
+        // Non-blocking key check, so _radio.poll() above keeps draining the
+        // ESP-NOW receive queue every loop tick even while the DM presses
+        // no button — otherwise the fixed-size queue silently overflows
+        // and join announcements are lost while the DM just watches the count.
+        MenuKeyEvent ev = pollKeyEvent();
+        if (ev.key != 0 &&
+            !((ev.key == 'A' || ev.key == 'B') && ev.state != KeyState::PRESSED)) {
+            switch (ev.key) {
+                case 'A': {
+                    uint8_t payload = _countdownSecs / 10;
+                    _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, &payload, 1, 2);
+                    runCountdownSequence(_countdownSecs);
+                    commitToRunner();
+                    return MenuResult::Confirmed;
+                }
+                case 'B':
+                    return MenuResult::Cancelled;
+                case '^':
+                    if (vScroll > 0) { vScroll--; renderSummary(vScroll); }
+                    break;
+                case 'V':
+                    vScroll++; renderSummary(vScroll);
+                    break;
+                case '<':
+                    if (_countdownSecs >= 10) { _countdownSecs -= 10; renderSummary(vScroll); }
+                    break;
+                case '>':
+                    if (_countdownSecs <= 290) { _countdownSecs += 10; renderSummary(vScroll); }
+                    break;
             }
-            case 'B':
-                return MenuResult::Cancelled;
-            case '^':
-                if (vScroll > 0) { vScroll--; renderSummary(vScroll); }
-                break;
-            case 'V':
-                vScroll++; renderSummary(vScroll);
-                break;
-            case '<':
-                if (_countdownSecs >= 10) { _countdownSecs -= 10; renderSummary(vScroll); }
-                break;
-            case '>':
-                if (_countdownSecs <= 290) { _countdownSecs += 10; renderSummary(vScroll); }
-                break;
         }
+
+        delay(GameDefaults::LOOP_MS);
     }
 }
 
@@ -1079,75 +1086,81 @@ void LightAir_GameSetupMenu::resetKeyStates() {
     }
 }
 
-MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
-    while (true) {
-        const InputReport& rep = _input.poll();
+MenuKeyEvent LightAir_GameSetupMenu::pollKeyEvent() {
+    const InputReport& rep = _input.poll();
 
-        // Keypad keys
-        for (uint8_t i = 0; i < rep.keyEventCount; i++) {
-            const InputReport::KeyEntry& ke = rep.keyEvents[i];
-            if (ke.keypadId != _keypadId) continue;
+    // Keypad keys
+    for (uint8_t i = 0; i < rep.keyEventCount; i++) {
+        const InputReport::KeyEntry& ke = rep.keyEvents[i];
+        if (ke.keypadId != _keypadId) continue;
 
-            KeyState prev = gPrevKeyState[(uint8_t)ke.key];
-            gPrevKeyState[(uint8_t)ke.key] = ke.state;
+        KeyState prev = gPrevKeyState[(uint8_t)ke.key];
+        gPrevKeyState[(uint8_t)ke.key] = ke.state;
 
-            // Reset to OFF when released so next press is detected as new edge
-            if (ke.state == KeyState::RELEASED || ke.state == KeyState::RELEASED_HELD) {
-                gPrevKeyState[(uint8_t)ke.key] = KeyState::OFF;
-            }
+        // Reset to OFF when released so next press is detected as new edge
+        if (ke.state == KeyState::RELEASED || ke.state == KeyState::RELEASED_HELD) {
+            gPrevKeyState[(uint8_t)ke.key] = KeyState::OFF;
+        }
 
-            // Return on state transitions: OFF→PRESSED or PRESSED→HELD
-            if (ke.state == KeyState::PRESSED && prev == KeyState::OFF) {
-                gLastHeldReturn[(uint8_t)ke.key] = millis();
-                return {ke.key, KeyState::PRESSED};
-            }
-            if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
-                gLastHeldReturn[(uint8_t)ke.key] = millis();
-                return {ke.key, KeyState::HELD};
-            }
-            // Continue returning HELD if enough time has passed since last return
-            // A and B do not auto-repeat on HELD
-            if (ke.key != 'A' && ke.key != 'B') {
-                if (ke.state == KeyState::HELD && prev == KeyState::HELD) {
-                    uint32_t now = millis();
-                    if (now - gLastHeldReturn[(uint8_t)ke.key] >= InputDefaults::HELD_REPEAT_MS) {
-                        gLastHeldReturn[(uint8_t)ke.key] = now;
-                        return {ke.key, KeyState::HELD};
-                    }
+        // Return on state transitions: OFF→PRESSED or PRESSED→HELD
+        if (ke.state == KeyState::PRESSED && prev == KeyState::OFF) {
+            gLastHeldReturn[(uint8_t)ke.key] = millis();
+            return {ke.key, KeyState::PRESSED};
+        }
+        if (ke.state == KeyState::HELD && prev == KeyState::PRESSED) {
+            gLastHeldReturn[(uint8_t)ke.key] = millis();
+            return {ke.key, KeyState::HELD};
+        }
+        // Continue returning HELD if enough time has passed since last return
+        // A and B do not auto-repeat on HELD
+        if (ke.key != 'A' && ke.key != 'B') {
+            if (ke.state == KeyState::HELD && prev == KeyState::HELD) {
+                uint32_t now = millis();
+                if (now - gLastHeldReturn[(uint8_t)ke.key] >= InputDefaults::HELD_REPEAT_MS) {
+                    gLastHeldReturn[(uint8_t)ke.key] = now;
+                    return {ke.key, KeyState::HELD};
                 }
             }
         }
+    }
 
-        // Buttons (triggers) — same state machine as keys, encoded as virtual chars
-        for (uint8_t i = 0; i < rep.buttonCount; i++) {
-            const InputReport::ButtonEntry& be = rep.buttons[i];
-            if (be.id >= InputDefaults::MAX_BUTTONS) continue;
+    // Buttons (triggers) — same state machine as keys, encoded as virtual chars
+    for (uint8_t i = 0; i < rep.buttonCount; i++) {
+        const InputReport::ButtonEntry& be = rep.buttons[i];
+        if (be.id >= InputDefaults::MAX_BUTTONS) continue;
 
-            ButtonState prev = gPrevButtonState[be.id];
-            gPrevButtonState[be.id] = be.state;
+        ButtonState prev = gPrevButtonState[be.id];
+        gPrevButtonState[be.id] = be.state;
 
-            if (be.state == ButtonState::RELEASED || be.state == ButtonState::RELEASED_HELD) {
-                gPrevButtonState[be.id] = ButtonState::OFF;
-            }
+        if (be.state == ButtonState::RELEASED || be.state == ButtonState::RELEASED_HELD) {
+            gPrevButtonState[be.id] = ButtonState::OFF;
+        }
 
-            const char vk = buttonVirtualKey(be.id);
-            if (be.state == ButtonState::PRESSED && prev == ButtonState::OFF) {
-                gLastButtonHeld[be.id] = millis();
-                return {vk, KeyState::PRESSED};
-            }
-            if (be.state == ButtonState::HELD && prev == ButtonState::PRESSED) {
-                gLastButtonHeld[be.id] = millis();
+        const char vk = buttonVirtualKey(be.id);
+        if (be.state == ButtonState::PRESSED && prev == ButtonState::OFF) {
+            gLastButtonHeld[be.id] = millis();
+            return {vk, KeyState::PRESSED};
+        }
+        if (be.state == ButtonState::HELD && prev == ButtonState::PRESSED) {
+            gLastButtonHeld[be.id] = millis();
+            return {vk, KeyState::HELD};
+        }
+        if (be.state == ButtonState::HELD && prev == ButtonState::HELD) {
+            uint32_t now = millis();
+            if (now - gLastButtonHeld[be.id] >= InputDefaults::HELD_REPEAT_MS) {
+                gLastButtonHeld[be.id] = now;
                 return {vk, KeyState::HELD};
             }
-            if (be.state == ButtonState::HELD && prev == ButtonState::HELD) {
-                uint32_t now = millis();
-                if (now - gLastButtonHeld[be.id] >= InputDefaults::HELD_REPEAT_MS) {
-                    gLastButtonHeld[be.id] = now;
-                    return {vk, KeyState::HELD};
-                }
-            }
         }
+    }
 
+    return {0, KeyState::OFF};  // no event this tick
+}
+
+MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
+    while (true) {
+        MenuKeyEvent ev = pollKeyEvent();
+        if (ev.key != 0) return ev;
         delay(GameDefaults::LOOP_MS);
     }
 }

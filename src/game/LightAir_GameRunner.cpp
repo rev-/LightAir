@@ -461,7 +461,7 @@ void LightAir_GameRunner::scoreBroadcastFused(GameOutput& output) const {
         off += recSize;
     }
     if (off > 0)
-        output.radio.broadcast(_game->scoreMsgType, buf, off);
+        output.radio.broadcast(_game->scoreMsgType, buf, off, 2);
 }
 
 // Find the winner from accumulated slots and call showMessage() on the display.

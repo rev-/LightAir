@@ -44,10 +44,11 @@ struct RadioOutput {
     RadioReplyMsg replies[GameDefaults::RADIO_REPLY_MAX];
     uint8_t       replyCount = 0;
 
-    // Queue a broadcast.  resend > 0 enables mesh relay.
+    // Queue a broadcast.  resend > 0 enables mesh relay; default is
+    // single-hop only (resend=0) — callers must opt in explicitly to flood.
     void broadcast(uint8_t msgType,
                    const uint8_t* payload = nullptr, uint8_t len = 0,
-                   uint8_t resend = 1) {
+                   uint8_t resend = 0) {
         if (count >= GameDefaults::RADIO_OUT_MAX) return;
         if (len > GameDefaults::RADIO_OUT_PAYLOAD) return;  // exceeds physical limit
         RadioOutMsg& m = msgs[count++];

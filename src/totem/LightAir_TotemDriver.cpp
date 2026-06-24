@@ -30,7 +30,7 @@ void LightAir_TotemDriver::loop() {
     uint32_t now = millis();
     if ((now - _lastBeacon) >= GameDefaults::TOTEM_BEACON_INTERVAL_MS) {
         _lastBeacon = now;
-        _radio.broadcastUniversal(MSG_TOTEM_BEACON);
+        _radio.broadcastUniversal(MSG_TOTEM_BEACON, nullptr, 0, 2);
     }
 
     // ---- 2. Self-revert watchdog: no MSG_TOTEM_ROSTER ever arrived ----
