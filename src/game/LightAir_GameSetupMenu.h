@@ -172,6 +172,8 @@ private:
     void     commitToRunner();
 
     // ---- Shared ----
+    // Non-blocking single-pass key/button check. key==0 means "no event this tick".
+    MenuKeyEvent pollKeyEvent();
     MenuKeyEvent waitForKey();
     void     resetKeyStates();  // Reset prevState to reflect current input reality
     void     showMessage2(const char* line0, const char* line1,
