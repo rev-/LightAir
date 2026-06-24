@@ -397,7 +397,7 @@ static bool endPointsReached(const InputReport&, const RadioReport&) {
 static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
     if (hasEnemyFlag) {
         uint8_t pl[2] = { FEVENT_DROPPED, enemyTeam() };
-        out.radio.broadcast(MSG_FLAG_EVENT, pl, 2);
+        out.radio.broadcast(MSG_FLAG_EVENT, pl, 2, 2);
         hasEnemyFlag       = false;
         enemyFlagCarrierId = 0xFF;
         out.ui.trigger(LightAir_UICtrl::UIEvent::FlagTaken);  // "FLAG LOST"
@@ -492,7 +492,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             hasEnemyFlag       = true;
             enemyFlagCarrierId = 0x01;   // mark taken locally; other players update via broadcast
             uint8_t pl[2] = { FEVENT_TAKEN, enemyTeam() };
-            out.radio.broadcast(MSG_FLAG_EVENT, pl, 2);
+            out.radio.broadcast(MSG_FLAG_EVENT, pl, 2, 2);
             out.ui.trigger(LightAir_UICtrl::UIEvent::FlagGain);   // "FLAG +"
             if (uiCtrl) uiCtrl->setBackground(kFlagCarryBg);
             disp.showMessage("YOU HAVE FLAG", 0);
@@ -517,7 +517,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             hasEnemyFlag       = false;
             enemyFlagCarrierId = 0xFF;
             uint8_t pl[2] = { FEVENT_SCORED, enemyTeam() };
-            out.radio.broadcast(MSG_FLAG_EVENT, pl, 2);
+            out.radio.broadcast(MSG_FLAG_EVENT, pl, 2, 2);
             out.ui.trigger(LightAir_UICtrl::UIEvent::FlagGain);   // "FLAG +"
             if (uiCtrl) uiCtrl->clearBackground();
             disp.clearTray();

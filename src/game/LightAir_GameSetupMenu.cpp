@@ -321,7 +321,7 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
     while (true) {
         // Periodic presence broadcast so DM and peers discover this device.
         if (millis() >= nextBroadcast) {
-            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0);
+            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0, 2);
             nextBroadcast = millis() + GameDefaults::PRESTART_BROADCAST_MS;
         }
 
@@ -335,7 +335,7 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
             if (ke.key == 'B') return MenuResult::Cancelled;
             if (ke.key == 'A' && _game && !joined) {
                 joined = true;
-                _radio.broadcast(GameDefaults::MSG_JOIN, nullptr, 0);
+                _radio.broadcast(GameDefaults::MSG_JOIN, nullptr, 0, 2);
                 _display.clear();
                 _display.setColor(true);
                 _display.print(0, 0,                             "Joined!");
@@ -857,7 +857,7 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
 
     uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
     uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, _totemAssignment, _teams, token);
-    if (len > 0) _radio.broadcast(_msgType, blob, len);
+    if (len > 0) _radio.broadcast(_msgType, blob, len, 2);
 
     _seenCount = 0;
     recordSeen(_radio.playerId());
@@ -871,7 +871,7 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
     while (true) {
         // Broadcast MSG_ROSTER periodically so other devices discover us.
         if (millis() >= nextBroadcast) {
-            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0);
+            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0, 2);
             nextBroadcast = millis() + GameDefaults::PRESTART_BROADCAST_MS;
         }
 
@@ -895,7 +895,7 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
         switch (ev.key) {
             case 'A': {
                 uint8_t payload = _countdownSecs / 10;
-                _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, &payload, 1);
+                _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, &payload, 1, 2);
                 runCountdownSequence(_countdownSecs);
                 commitToRunner();
                 return MenuResult::Confirmed;
