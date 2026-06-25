@@ -98,8 +98,8 @@ enum FlagEventType : uint8_t {
 };
 
 // ---- Proximity thresholds ----
-static constexpr int8_t  NEAR_RSSI_THRESHOLD = -60;  // ~2 m: base proximity (respawn + scoring)
-static constexpr int8_t  FLAG_RSSI_THRESHOLD  = -65;  // ~3-4 m: flag pickup zone
+static constexpr int8_t  NEAR_RSSI_THRESHOLD = -57;  // ~2 m: base proximity (respawn + scoring)
+static constexpr int8_t  FLAG_RSSI_THRESHOLD  = -62;  // ~3-4 m: flag pickup zone
 static constexpr uint32_t HIT_IMMUNITY_MS     = 3000;
 
 // ---- Config variables ----
@@ -501,7 +501,9 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
     }
 
     // ---- Flag score ----
-    // Score when carrying and we reach a friendly BASE.
+    // Score when carrying and we reach a friendly BASE — but only if our own
+    // flag is currently in (not taken by the enemy). Returning the enemy's
+    // flag while ours is away must not score.
     if (hasEnemyFlag) {
         for (uint8_t e = 0; e < radio.count; e++) {
             const RadioEvent& ev = radio.events[e];
@@ -510,6 +512,7 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             if (ev.packet.payloadLen < 1)                             continue;
             if (ev.packet.payload[0] != myTeam)                      continue;
             if (ev.rssi           <  NEAR_RSSI_THRESHOLD)             continue;
+            if (myFlagCarrierId   != 0xFF)                            continue;
 
             flagsCaptured++;
             points             = flagsCaptured;

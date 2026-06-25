@@ -73,8 +73,8 @@ enum ReplySubType : uint8_t {
 
 // ---- RSSI proximity threshold ----
 // Packets from a BASE with RSSI below this value are ignored for respawn.
-// -60 dBm corresponds to approximately 2 m indoors at 2.4 GHz.
-static constexpr int8_t  NEAR_RSSI_THRESHOLD = -60;
+// -57 dBm corresponds to approximately 2 m indoors at 2.4 GHz.
+static constexpr int8_t  NEAR_RSSI_THRESHOLD = -57;
 static constexpr uint32_t HIT_IMMUNITY_MS    = 3000;
 
 // ---- Config variables ----

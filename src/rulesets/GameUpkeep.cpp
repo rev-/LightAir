@@ -89,7 +89,7 @@ static constexpr uint8_t CP_TEAM_NONE = 0xFF;  // teamless
 
 // ---- RSSI proximity thresholds ----
 static constexpr int8_t  NEAR_CP_RSSI    = -65;  // ~3 m indoors for CP presence
-static constexpr int8_t  NEAR_BASE_RSSI  = -60;  // ~2 m indoors for BASE respawn
+static constexpr int8_t  NEAR_BASE_RSSI  = -57;  // ~2 m indoors for BASE respawn
 static constexpr uint32_t HIT_IMMUNITY_MS = 3000;
 
 // ---- Config variables ----
