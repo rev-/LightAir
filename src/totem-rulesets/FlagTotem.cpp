@@ -13,8 +13,8 @@
 //   onActivate() : enters FLAG_IN; shows Idle background (team colour glow).
 //   update()     : in FLAG_IN, broadcasts MSG_FLAG_BEACON every
 //                  FLAG_BEACON_INTERVAL_MS.
-//   onMessage()  : driven entirely by MSG_FLAG_EVENT broadcasts from players
-//                  (payload[1] == _team selects events for this flag):
+//   onMessage()  : driven by MSG_FLAG_NOTIFY unicasts addressed to this
+//                  totem (payload[0] = FlagEvent sub-type):
 //     FlagEvent::TAKEN   — FLAG_IN → FLAG_OUT + FlagMissing anim (team colour)
 //                          + FlagTaken flash (picker's colour).
 //     FlagEvent::DROPPED — FLAG_OUT → FLAG_IN + FlagReturn anim (flash).
@@ -25,16 +25,17 @@
 // The team is fixed at construction and encodes which team's flag this is.
 //
 // Flag protocol (must stay in sync with the Flag ruleset, GameFlag.cpp)
-//   The totem reacts only to MSG_FLAG_EVENT broadcasts a player emits when it
-//   actually picks up, scores, or drops a flag — and the player emits those
-//   only once it is within its own RSSI proximity gate of the flag/base.  The
-//   totem therefore inherits that proximity gate and never reacts to a distant
-//   player.  (It must NOT react to the empty 0x59 auto-reply the GameRunner
-//   sends for every beacon, which carries no distance information.)
+//   The carrier remembers which flag totem it took and UNICASTS take/drop/
+//   score (MSG_FLAG_NOTIFY) to that one totem.  Because the player emits the
+//   take only within its own RSSI proximity gate of the flag, the totem
+//   inherits that gate; and because it is unicast, only the specific flag the
+//   carrier holds reacts (multiple flags per team work correctly).
+//   MSG_FLAG_EVENT remains a broadcast used by *players* to sync flag-carrier
+//   state and team points — this totem no longer listens to it.
 // ================================================================
 
 using RadioMsg::MSG_FLAG_BEACON;
-using RadioMsg::MSG_FLAG_EVENT;
+using RadioMsg::MSG_FLAG_NOTIFY;
 namespace FE = FlagEvent;
 
 static constexpr uint32_t FLAG_BEACON_INTERVAL_MS = 500;
@@ -81,12 +82,14 @@ public:
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        // Only MSG_FLAG_EVENT broadcasts drive this totem; payload[1] selects
-        // events for the flag this totem owns.  Player-side RSSI gating means
-        // these only fire when a player is actually at the flag/base.
-        if (msg.msgType != MSG_FLAG_EVENT) return;
-        if (msg.payloadLen < 2)            return;
-        if (msg.payload[1] != _team)       return;  // not our flag's event
+        // This totem is driven by MSG_FLAG_NOTIFY unicasts addressed to it
+        // specifically: the carrier remembers which flag totem it took and
+        // unicasts take/drop/score to that one totem. Unicast targeting means
+        // no team filter is needed (only the right totem receives it), and
+        // multiple flags per team work correctly. payload[0] = FlagEvent sub.
+        // (MSG_FLAG_EVENT remains a broadcast for player-to-player state sync.)
+        if (msg.msgType != MSG_FLAG_NOTIFY) return;
+        if (msg.payloadLen < 1)             return;
 
         const uint8_t sub = msg.payload[0];
 

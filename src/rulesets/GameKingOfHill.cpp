@@ -408,8 +408,13 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
         if (ev.packet.payload[0] != 0xFF)                         continue;  // teamless only
         if (ev.rssi            < NEAR_BASE_RSSI)                  continue;
         canRespawn = true;
-        // Reply so the BASE totem shows a Respawn animation in this player's colour.
-        out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
+        // Unicast so the specific BASE totem we reached shows a Respawn
+        // animation in this player's colour. payload[0] = myTeam+1 non-zero
+        // marker; totem also reads msg.team / msg.senderId.
+        {
+            uint8_t pl[1] = { (uint8_t)(myTeam + 1) };
+            out.radio.sendTo(ev.packet.senderId, RadioMsg::MSG_RESPAWN_NOTIFY, pl, 1);
+        }
         break;
     }
 }

@@ -87,7 +87,21 @@ constexpr uint8_t MSG_BONUS_BEACON  = 0x5E;
 // Reply (0x61): player claims malus.
 constexpr uint8_t MSG_MALUS_BEACON  = 0x60;
 
-// Next available in 0x50 block: 0x62
+// Player → BASE totem unicast: "I am respawning at you" (even; no relay).
+// payload[0] = myTeam+1 (non-zero sanity marker). senderId = the player and
+// team = the player's team (both auto-stamped by sendTo). Replaces the old
+// odd-reply respawn signal, which processPacket() silently dropped because the
+// base's beacon (broadcast) never stored a pending entry to match it against.
+constexpr uint8_t MSG_RESPAWN_NOTIFY = 0x62;
+
+// Player → FLAG totem unicast: flag state change for this specific flag
+// (even; no relay). payload[0] = FlagEvent sub-type (TAKEN/DROPPED/SCORED);
+// senderId = the player (used for the pickup flash colour). Unicast targets
+// the one flag totem the carrier took, so multiple flags per team work
+// correctly. MSG_FLAG_EVENT remains a broadcast for player-to-player sync.
+constexpr uint8_t MSG_FLAG_NOTIFY    = 0x64;
+
+// Next available in 0x50 block: 0x66
 
 // ── 0xA0 block: infrastructure ──────────────────────────────────
 // Sent with typeId == UNIVERSAL (0x0000); not game-scoped.
