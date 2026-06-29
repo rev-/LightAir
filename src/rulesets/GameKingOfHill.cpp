@@ -300,10 +300,15 @@ static void scanCpBeacons(const RadioReport& radio, LightAir_DisplayCtrl& disp,
             }
         }
 
-        // Reply with our presence so the CP totem can update ownership.
-        // subType = myTeam + 1 (same formula as Upkeep: 1 = slot-0, 2 = slot-1, …).
-        if (sendPresence && ev.rssi >= NEAR_CP_RSSI)
-            out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
+        // Unicast our presence so the CP totem can update ownership.
+        // payload[0] = myTeam + 1 (same formula as Upkeep: 1 = slot-0, …).
+        // (The old odd-reply was silently dropped by the radio's pending-match
+        // gate.) Presence is RSSI-gated at the CP, so we are in direct range —
+        // no hops needed.
+        if (sendPresence && ev.rssi >= NEAR_CP_RSSI) {
+            uint8_t pl[1] = { (uint8_t)(myTeam + 1) };
+            out.radio.sendTo(ev.packet.senderId, RadioMsg::MSG_CP_NOTIFY, pl, 1);
+        }
     }
 }
 

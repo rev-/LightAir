@@ -25,13 +25,15 @@
 // The team is fixed at construction and encodes which team's flag this is.
 //
 // Flag protocol (must stay in sync with the Flag ruleset, GameFlag.cpp)
-//   The carrier remembers which flag totem it took and UNICASTS take/drop/
-//   score (MSG_FLAG_NOTIFY) to that one totem.  Because the player emits the
-//   take only within its own RSSI proximity gate of the flag, the totem
-//   inherits that gate; and because it is unicast, only the specific flag the
-//   carrier holds reacts (multiple flags per team work correctly).
-//   MSG_FLAG_EVENT remains a broadcast used by *players* to sync flag-carrier
-//   state and team points — this totem no longer listens to it.
+//   The carrier remembers which flag totem it took and emits take/drop/score
+//   as MSG_FLAG_NOTIFY — a hopped BROADCAST carrying the target flag totem's
+//   id in payload[1].  Drop/score happen away from the flag (the carrier may
+//   be several hops out of the totem's range), so it cannot be a plain
+//   unicast; the broadcast relays across the mesh.  This totem reacts only
+//   when payload[1] == its own id, so the correct flag reacts even with
+//   multiple flags per team and others ignore it.  MSG_FLAG_EVENT remains a
+//   separate broadcast used by *players* to sync flag-carrier state and team
+//   points — this totem no longer listens to it.
 // ================================================================
 
 using RadioMsg::MSG_FLAG_BEACON;
@@ -45,6 +47,7 @@ static constexpr uint8_t  FLAG_STATE_OUT = 1;
 class FlagTotem : public LightAir_TotemRunner {
     const uint8_t _team;        // 0=O, 1=X; fixed at construction
     uint8_t       _state;       // FLAG_STATE_IN or FLAG_STATE_OUT
+    uint8_t       _selfId;      // this totem's own id; matches MSG_FLAG_NOTIFY target
     uint32_t      _lastBeacon;
 
     void teamColor(uint8_t& r, uint8_t& g, uint8_t& b) const {
@@ -72,24 +75,27 @@ class FlagTotem : public LightAir_TotemRunner {
 
 public:
     explicit FlagTotem(uint8_t team)
-        : _team(team), _state(FLAG_STATE_IN), _lastBeacon(0) {}
+        : _team(team), _state(FLAG_STATE_IN), _selfId(0xFF), _lastBeacon(0) {}
 
-    void onActivate(const LightAir_TotemActivation& /*info*/,
+    void onActivate(const LightAir_TotemActivation& info,
                     LightAir_TotemOutput& out) override {
         _state      = FLAG_STATE_IN;
+        _selfId     = info.selfId;
         _lastBeacon = 0;
         showIdle(out);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        // This totem is driven by MSG_FLAG_NOTIFY unicasts addressed to it
-        // specifically: the carrier remembers which flag totem it took and
-        // unicasts take/drop/score to that one totem. Unicast targeting means
-        // no team filter is needed (only the right totem receives it), and
-        // multiple flags per team work correctly. payload[0] = FlagEvent sub.
+        // This totem is driven by MSG_FLAG_NOTIFY: a hopped broadcast the
+        // carrier emits on take/drop/score, addressed to one flag totem by id
+        // in payload[1]. We react only when payload[1] == our own id, so the
+        // right flag reacts even with multiple flags per team, and the message
+        // can still reach us across relays when the carrier is out of direct
+        // range (drop/score happen away from the flag). payload[0] = sub-type.
         // (MSG_FLAG_EVENT remains a broadcast for player-to-player state sync.)
         if (msg.msgType != MSG_FLAG_NOTIFY) return;
-        if (msg.payloadLen < 1)             return;
+        if (msg.payloadLen < 2)             return;
+        if (msg.payload[1] != _selfId)      return;  // not addressed to this flag
 
         const uint8_t sub = msg.payload[0];
 

@@ -400,9 +400,11 @@ static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
     if (hasEnemyFlag) {
         uint8_t pl[2] = { FEVENT_DROPPED, enemyTeam() };
         out.radio.broadcast(MSG_FLAG_EVENT, pl, 2, 2);
-        // Unicast the flag totem we took so it returns home (animate).
-        uint8_t fn[1] = { FEVENT_DROPPED };
-        out.radio.sendTo(enemyFlagTotemId, RadioMsg::MSG_FLAG_NOTIFY, fn, 1);
+        // Notify the flag totem we took so it returns home (animate).
+        // Broadcast with hops + target id: we are shot away from the flag,
+        // so the totem may be several hops out of direct range.
+        uint8_t fn[2] = { FEVENT_DROPPED, enemyFlagTotemId };
+        out.radio.broadcast(RadioMsg::MSG_FLAG_NOTIFY, fn, 2, 2);
         enemyFlagTotemId   = 0xFF;
         hasEnemyFlag       = false;
         enemyFlagCarrierId = 0xFF;
@@ -500,9 +502,11 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             enemyFlagTotemId   = ev.packet.senderId;  // remember which flag totem we took
             uint8_t pl[2] = { FEVENT_TAKEN, enemyTeam() };
             out.radio.broadcast(MSG_FLAG_EVENT, pl, 2, 2);
-            // Unicast the specific flag totem so it (and only it) animates.
-            uint8_t fn[1] = { FEVENT_TAKEN };
-            out.radio.sendTo(enemyFlagTotemId, RadioMsg::MSG_FLAG_NOTIFY, fn, 1);
+            // Notify the specific flag totem so it (and only it) animates.
+            // Broadcast with hops + target id so it reaches the totem even if
+            // we are several hops out of its direct range.
+            uint8_t fn[2] = { FEVENT_TAKEN, enemyFlagTotemId };
+            out.radio.broadcast(RadioMsg::MSG_FLAG_NOTIFY, fn, 2, 2);
             out.ui.trigger(LightAir_UICtrl::UIEvent::FlagGain);   // "FLAG +"
             if (uiCtrl) uiCtrl->setBackground(kFlagCarryBg);
             disp.showMessage("YOU HAVE FLAG", 0);
@@ -531,9 +535,11 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             enemyFlagCarrierId = 0xFF;
             uint8_t pl[2] = { FEVENT_SCORED, enemyTeam() };
             out.radio.broadcast(MSG_FLAG_EVENT, pl, 2, 2);
-            // Unicast the flag totem we took so it returns home (animate).
-            uint8_t fn[1] = { FEVENT_SCORED };
-            out.radio.sendTo(enemyFlagTotemId, RadioMsg::MSG_FLAG_NOTIFY, fn, 1);
+            // Notify the flag totem we took so it returns home (animate).
+            // Broadcast with hops + target id: we score at our base, away from
+            // the flag, so the totem may be several hops out of direct range.
+            uint8_t fn[2] = { FEVENT_SCORED, enemyFlagTotemId };
+            out.radio.broadcast(RadioMsg::MSG_FLAG_NOTIFY, fn, 2, 2);
             enemyFlagTotemId   = 0xFF;
             out.ui.trigger(LightAir_UICtrl::UIEvent::FlagGain);   // "FLAG +"
             if (uiCtrl) uiCtrl->clearBackground();

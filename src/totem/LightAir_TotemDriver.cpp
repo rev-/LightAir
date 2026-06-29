@@ -73,6 +73,7 @@ void LightAir_TotemDriver::loop() {
                                              ev.packet.payload[3];
                     info.hasConfigSecs    = ev.packet.payloadLen >= 5;
                     info.configSecs       = info.hasConfigSecs ? ev.packet.payload[4] : 0;
+                    info.selfId           = _radio.playerId();
 
                     _runner = role->runner;
                     _radio.setTypeId(incomingTypeId);

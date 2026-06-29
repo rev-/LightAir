@@ -368,10 +368,15 @@ static void scanCpBeacons(const RadioReport& radio, LightAir_DisplayCtrl& disp,
             }
         }
 
-        // Reply with our team so the CP totem can track who is nearby.
-        // subType: 1 = team-O player, 2 = team-X player (0 = empty auto-reply, ignored).
-        if (sendPresence && ev.rssi >= NEAR_CP_RSSI)
-            out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
+        // Unicast our presence so the CP totem can track who is nearby.
+        // payload[0]: 1 = team-O player, 2 = team-X player. (The old odd-reply
+        // was silently dropped by the radio's pending-match gate, so CP
+        // ownership never registered.) Presence is RSSI-gated at the CP, so we
+        // are in direct range — no hops needed.
+        if (sendPresence && ev.rssi >= NEAR_CP_RSSI) {
+            uint8_t pl[1] = { (uint8_t)(myTeam + 1) };
+            out.radio.sendTo(ev.packet.senderId, RadioMsg::MSG_CP_NOTIFY, pl, 1);
+        }
     }
 }
 

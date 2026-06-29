@@ -25,10 +25,12 @@
 //     4. Broadcasts MSG_CP_BEACON with payload[0] = cpTeam (0–15 or 0xFF).
 //     5. Clears presence flags for the next window.
 //
-//   Players reply to MSG_CP_BEACON with subType = myTeam + 1
+//   Players unicast MSG_CP_NOTIFY with payload[0] = myTeam + 1
 //   (1 = team 0/player 1, 2 = team 1/player 2, … 16 = player 16)
 //   when their RSSI to this totem is above their own proximity threshold.
-//   subType 0 (auto empty-reply) is ignored.
+//   (Presence is RSSI-gated at the CP, so the player is in direct range and
+//   a unicast suffices — no hops. The old odd-reply was silently dropped by
+//   the radio's pending-match gate, breaking ownership detection.)
 //
 // Activation
 //   info.roleId = CP.  No additional config needed.
@@ -36,6 +38,7 @@
 
 using RadioMsg::MSG_CP_BEACON;
 using RadioMsg::MSG_CP_SCORE;
+using RadioMsg::MSG_CP_NOTIFY;
 
 static constexpr uint32_t CP_BEACON_INTERVAL_MS = 2000;
 static constexpr uint32_t CP_SCORE_INTERVAL_MS  = 10000;
@@ -75,9 +78,9 @@ public:
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& /*out*/) override {
-        // Collect player presence replies.
-        // subType 1–16 → bit 0–15 in presence mask (subType = team + 1).
-        if (msg.msgType != MSG_CP_BEACON + 1) return;
+        // Collect player presence notifications (unicast MSG_CP_NOTIFY).
+        // payload[0] 1–16 → bit 0–15 in presence mask (= team + 1).
+        if (msg.msgType != MSG_CP_NOTIFY) return;
         if (msg.payloadLen == 0) return;
         uint8_t sub = msg.payload[0];
         if (sub >= 1 && sub <= 16)
