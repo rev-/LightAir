@@ -13,8 +13,8 @@
 //   onActivate() : enters FLAG_IN; shows Idle background (team colour glow).
 //   update()     : in FLAG_IN, broadcasts MSG_FLAG_BEACON every
 //                  FLAG_BEACON_INTERVAL_MS.
-//   onMessage()  : driven by MSG_FLAG_NOTIFY unicasts addressed to this
-//                  totem (payload[0] = FlagEvent sub-type):
+//   onMessage()  : driven by MSG_FLAG_EVENT broadcasts addressed to this
+//                  totem via payload[2] (payload[0] = FlagEvent sub-type):
 //     FlagEvent::TAKEN   — FLAG_IN → FLAG_OUT + FlagMissing anim (team colour)
 //                          + FlagTaken flash (picker's colour).
 //     FlagEvent::DROPPED — FLAG_OUT → FLAG_IN + FlagReturn anim (flash).
@@ -25,19 +25,18 @@
 // The team is fixed at construction and encodes which team's flag this is.
 //
 // Flag protocol (must stay in sync with the Flag ruleset, GameFlag.cpp)
-//   The carrier remembers which flag totem it took and emits take/drop/score
-//   as MSG_FLAG_NOTIFY — a hopped BROADCAST carrying the target flag totem's
-//   id in payload[1].  Drop/score happen away from the flag (the carrier may
-//   be several hops out of the totem's range), so it cannot be a plain
-//   unicast; the broadcast relays across the mesh.  This totem reacts only
-//   when payload[1] == its own id, so the correct flag reacts even with
-//   multiple flags per team and others ignore it.  MSG_FLAG_EVENT remains a
-//   separate broadcast used by *players* to sync flag-carrier state and team
-//   points — this totem no longer listens to it.
+//   A single flooded MSG_FLAG_EVENT broadcast per event does both jobs:
+//   players read payload[0]/[1] to sync carrier state and team points, while
+//   payload[2] carries the target flag totem's id (the carrier remembers it
+//   from the beacon it took).  This totem animates only when payload[2] ==
+//   its own id, so the correct flag reacts even with multiple flags per team
+//   and others ignore it.  Drop/score happen away from the flag (the carrier
+//   may be several hops out of range), so the broadcast relays across the
+//   mesh to reach it — a plain unicast could not.
 // ================================================================
 
 using RadioMsg::MSG_FLAG_BEACON;
-using RadioMsg::MSG_FLAG_NOTIFY;
+using RadioMsg::MSG_FLAG_EVENT;
 namespace FE = FlagEvent;
 
 static constexpr uint32_t FLAG_BEACON_INTERVAL_MS = 500;
@@ -47,7 +46,7 @@ static constexpr uint8_t  FLAG_STATE_OUT = 1;
 class FlagTotem : public LightAir_TotemRunner {
     const uint8_t _team;        // 0=O, 1=X; fixed at construction
     uint8_t       _state;       // FLAG_STATE_IN or FLAG_STATE_OUT
-    uint8_t       _selfId;      // this totem's own id; matches MSG_FLAG_NOTIFY target
+    uint8_t       _selfId;      // this totem's own id; matches MSG_FLAG_EVENT payload[2]
     uint32_t      _lastBeacon;
 
     void teamColor(uint8_t& r, uint8_t& g, uint8_t& b) const {
@@ -86,16 +85,14 @@ public:
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        // This totem is driven by MSG_FLAG_NOTIFY: a hopped broadcast the
-        // carrier emits on take/drop/score, addressed to one flag totem by id
-        // in payload[1]. We react only when payload[1] == our own id, so the
-        // right flag reacts even with multiple flags per team, and the message
-        // can still reach us across relays when the carrier is out of direct
-        // range (drop/score happen away from the flag). payload[0] = sub-type.
-        // (MSG_FLAG_EVENT remains a broadcast for player-to-player state sync.)
-        if (msg.msgType != MSG_FLAG_NOTIFY) return;
-        if (msg.payloadLen < 2)             return;
-        if (msg.payload[1] != _selfId)      return;  // not addressed to this flag
+        // Driven by MSG_FLAG_EVENT — the same flooded broadcast players use to
+        // sync carrier state. payload[2] = target flag totem id: we animate
+        // only when it == our own id, so the right flag reacts (multiple flags
+        // per team work) and the hopped broadcast still reaches us when the
+        // carrier drops/scores out of our direct range. payload[0] = sub-type.
+        if (msg.msgType != MSG_FLAG_EVENT) return;
+        if (msg.payloadLen < 3)            return;
+        if (msg.payload[2] != _selfId)     return;  // not addressed to this flag
 
         const uint8_t sub = msg.payload[0];
 
