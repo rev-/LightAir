@@ -230,71 +230,48 @@ return {
     end,
   },
 
-  -- ---- Totem behaviour (runs on the totem device) -----------------------
-  -- The same file is installed on totems.  On activation (0xF1) the
-  -- totem loads the entry matching its assigned role and only runs
-  -- this section; the player sections above are never touched.
-  -- `t` is a per-role scratch table owned by the firmware; it arrives
-  -- at on_activate pre-filled with t.config_secs (from config_var,
-  -- if declared), t.role and t.team.
+  -- ---- Totem behaviour (TotemVM programs, pure data) --------------------
+  -- Totems hold no game files.  Each entry below is a declarative
+  -- state machine that the projector serializes into the single 0xF1
+  -- activation packet; the interpreter is fixed totem firmware.
+  -- (games/lib/std.lua has factories that build these same tables —
+  -- std.totems.bonus() etc.; they are written out here in full as the
+  -- tutorial.)  Model reference: docs/totem-behavior-handshake.md.
+  --
+  -- BONUS: state 1 = READY (idle sparkle, beacon every 2 s; any reply
+  -- claims it), state 2 = COOLDOWN (silent for the configured seconds,
+  -- then back to READY, whose `enter` rule restores the idle look).
   totems = {
-    BONUS = {
-      on_activate = function(t)
-        t.ready        = true
-        t.cooldown_end = 0
-        t.last_beacon  = 0
-        la.totem_ui("BonusIdle", 0, 180, 0)
-      end,
-      on_message = function(t, pkt)
-        -- A player replied to our beacon: bonus claimed.
-        if t.ready and pkt.msg == MSG.BONUS_BEACON + 1 then
-          t.ready        = false
-          t.cooldown_end = la.now() + (t.config_secs or 30) * 1000
-          la.totem_ui("Bonus")
-        end
-      end,
-      update = function(t)
-        if not t.ready then
-          if la.now() >= t.cooldown_end then
-            t.ready = true
-            la.totem_ui("BonusIdle", 0, 180, 0)
-          end
-          return
-        end
-        if la.now() - t.last_beacon >= 2000 then
-          t.last_beacon = la.now()
-          la.broadcast(MSG.BONUS_BEACON, 0)   -- payload byte 0 = ready
-        end
-      end,
-    },
+    BONUS = { vm = 1, cfg_default = 30, states = {
+      { -- state 1: READY
+        { enter = true,
+          run = { {"anim", "BonusIdle", {"rgb", 0, 180, 0}} } },
+        { every = 2000,
+          run = { {"bcast", MSG.BONUS_BEACON, 0} } },  -- payload byte 0 = ready
+        { reply = MSG.BONUS_BEACON,
+          run = { {"start", 0}, {"anim", "Bonus"}, {"goto", 2} } },
+      },
+      { -- state 2: COOLDOWN
+        { every = 250,
+          when = { {"elapsed", 0, ">=", {"cfg"}} },  -- {"cfg"} = this role's
+          run = { {"goto", 1} } },                   -- config seconds
+      },
+    } },
 
-    MALUS = {
-      on_activate = function(t)
-        t.ready        = true
-        t.cooldown_end = 0
-        t.last_beacon  = 0
-        la.totem_ui("MalusIdle", 200, 0, 0)
-      end,
-      on_message = function(t, pkt)
-        if t.ready and pkt.msg == MSG.MALUS_BEACON + 1 then
-          t.ready        = false
-          t.cooldown_end = la.now() + (t.config_secs or 30) * 1000
-          la.totem_ui("Malus")
-        end
-      end,
-      update = function(t)
-        if not t.ready then
-          if la.now() >= t.cooldown_end then
-            t.ready = true
-            la.totem_ui("MalusIdle", 200, 0, 0)
-          end
-          return
-        end
-        if la.now() - t.last_beacon >= 2000 then
-          t.last_beacon = la.now()
-          la.broadcast(MSG.MALUS_BEACON, 0)
-        end
-      end,
-    },
+    MALUS = { vm = 1, cfg_default = 30, states = {
+      { -- state 1: READY
+        { enter = true,
+          run = { {"anim", "MalusIdle", {"rgb", 200, 0, 0}} } },
+        { every = 2000,
+          run = { {"bcast", MSG.MALUS_BEACON, 0} } },
+        { reply = MSG.MALUS_BEACON,
+          run = { {"start", 0}, {"anim", "Malus"}, {"goto", 2} } },
+      },
+      { -- state 2: COOLDOWN
+        { every = 250,
+          when = { {"elapsed", 0, ">=", {"cfg"}} },
+          run = { {"goto", 1} } },
+      },
+    } },
   },
 }

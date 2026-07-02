@@ -138,7 +138,7 @@ example):
 ```lua
 return {
   api           = 1,             -- binding version
-  type_id       = 0x0001,        -- unique; also names the file for totems
+  type_id       = 0x0001,        -- unique game identifier
   name          = "Free for All",
 
   initial_state = S.IN_GAME,
@@ -161,7 +161,7 @@ return {
   rules      = { { from, to, when = fn(vars), action = fn(vars) }, ... },
   update     = { [state] = function(vars) ... end },
 
-  totems     = { [ROLE] = { on_activate, on_message, update, on_roster? }, ... },
+  totems     = { [ROLE] = <TotemVM program table (pure data)>, ... },
 
   on_score_announce = function(scores) ... end,   -- optional (team games)
   on_end            = function(vars) ... end,     -- optional
@@ -226,8 +226,9 @@ at load time.
 `la.send(target, msg, byte...)`, `la.ui(event)`, `la.ui_enlight(ms)`,
 `la.show(text, ms)`, `la.clear_tray()`,
 `la.background(spec)` / `la.background()` (set/clear a continuous
-sound+vibration+RGB alert; `spec` is a steps table, see `games/flag.lua`),
-and on totems `la.totem_ui(event, args...)`.
+sound+vibration+RGB alert; `spec` is a steps table, see `games/flag.lua`).
+No verbs run on totems: totem behaviour is TotemVM data (§5), and totem
+animations are referenced by name inside those programs.
 
 **Loader** — `la.lib(name)` runs `/games/lib/<name>.lua` once per state and
 caches the result (a two-line C function; there is no `require`/`package`).
@@ -284,34 +285,28 @@ arithmetic (integer bit ops).  All are `std` functions instead.
 
 ---
 
-## 5. Totem behaviour in the same file
+## 5. Totem behaviour: TotemVM programs over the handshake
 
-Totems are generic hardware; the role logic (today `src/totem-rulesets/*.cpp`)
-moves into the game file's `totems` table, keyed by role name. The same
-`.lua` file is installed on player and totem devices — a totem simply never
-touches the player sections.
+Totems hold **no game files** — games are shared projector-to-projector
+while totems may be off, out of range, or bought yesterday.  And a totem
+that wakes up *mid-game* cannot afford a long transfer on a busy channel.
 
-Runtime on the totem:
+The game file's `totems` table therefore contains **pure data**, not
+functions: each role is a declarative state-machine program for a fixed
+interpreter in the totem firmware ("TotemVM").  The projector validates the
+table at game load and serializes it into the **single 0xF1 activation
+reply** — activating a totem costs one packet, cold or warm, for standard
+and custom roles alike.  Measured sizes: BASE 41 B, BONUS/MALUS 53 B, FLAG
+91 B, CP 145 B against a 225 B budget.
 
-1. Idle totem beacons 0xF0 as today; the host replies 0xF1 with roleId,
-   session token, time-left and optional config byte. The reply's packet
-   header already carries the game's `typeId` — `LightAir_TotemActivation`
-   gains a `typeId` field (one-line change in `TotemDriver`).
-2. `TotemDriver` first asks the Lua game store for a file with that `type_id`;
-   if found, a single generic `LightAir_LuaTotemRunner` (implements
-   `LightAir_TotemRunner`) loads the file and binds `totems[roleName]`.
-   If not found, the native `TotemRoleManager` path is the fallback — so
-   migration can be role-by-role.
-3. The runner passes each handler a persistent scratch table `t` (pre-filled
-   with `t.role`, `t.team`, `t.config_secs`), calls `on_activate` / `on_message`
-   / `update` on the driver's existing tick, and flushes the same
-   `LightAir_TotemOutput`. `reset()` drops the scratch table and closes the
-   chunk's state.
+`games/lib/std.lua` provides factories (`std.totems.base(0)`, `.cp()`, …)
+returning these tables, so most games write one-liners;
+`games/freeforall.lua` spells two programs out in full as the tutorial.
+Doctrine that keeps the VM small: totems beacon, referee presence and
+render — decisions live player-side, where the Lua files are.
 
-Roles that several games share (BASE, CP) are duplicated per game file at
-first. That is a feature for the stated goal — a game file is fully
-self-contained and exchangeable — and a `require`-able shared library on the
-filesystem can come later if duplication hurts.
+Full model, semantics, wire encoding, versioning and failure modes:
+**`docs/totem-behavior-handshake.md`**.
 
 ---
 
@@ -322,7 +317,8 @@ filesystem can come later if duplication hurts.
 - **Game store** (`LightAir_GameStore`): mounts FS, scans `/games`, loads each
   file once at boot *only far enough* to read `api`, `type_id`, `name`
   (then closes the state — one `lua_State` lives at a time), caches
-  `{name, typeId, path, crc16}` manifests, maps `typeId → path` for totems.
+  `{name, typeId, path, crc16}` manifests.  Totems need no files at all:
+  their behaviour travels as TotemVM programs in the activation reply (§5).
 - **HTTP exchange** (`GameFileServer`): a new Settings → "Games" menu entry
   starts a SoftAP (`LightAir-<id>`) + `WebServer.h` (already declared in
   `library.properties`) with four routes: list page, upload (POST), download
@@ -345,8 +341,8 @@ New (≈ the entire diff; the runner core is untouched):
 | `src/libs/lua-5.5.0/` | vendored Lua core (Makefile already carries `-Isrc/libs/lua-5.5.0/src -DLUA_32BITS`); drop `lua.c`/`onelua.c` standalone frontends |
 | `src/lua/LightAir_LuaEngine.{h,cpp}` | owns `lua_State`; custom `lua_Alloc` preferring PSRAM (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`, internal-RAM fallback); opens base/table/string/math only (no io/os/package); pcall + instruction-budget hook; `gcStep()` |
 | `src/lua/LightAir_LuaGame.{h,cpp}` | loads/validates a game file; owns the slot array; synthesizes the `LightAir_Game` descriptor (§4 mapping) with trampolines; registers the `la` verbs and the `vars` proxy; per-second countdown service |
-| `src/lua/LightAir_LuaTotem.{h,cpp}` | generic `LightAir_TotemRunner` running a file's `totems[role]` section |
-| `src/lua/LightAir_GameStore.{h,cpp}` | LittleFS mount, manifest scan, `typeId → path` |
+| `src/totem/LightAir_TotemVM.{h,cpp}` | fixed state-machine interpreter (`LightAir_TotemRunner`) executing programs received in the 0xF1 reply; see `docs/totem-behavior-handshake.md` |
+| `src/lua/LightAir_GameStore.{h,cpp}` | LittleFS mount, manifest scan |
 | `src/tools/GameFileServer.{h,cpp}` | SoftAP + WebServer upload/download/delete |
 
 Since exactly one Lua game is active at a time, the trampolines are a fixed
@@ -360,7 +356,9 @@ Modified:
 |---|---|
 | `LightAir_GameManager` | registry entries become `{name, typeId, native* or path}`; add lazy `load(idx)` — Lua descriptors are synthesized on selection, not at boot |
 | `LightAir_GameSetupMenu` | game list from manager entries (manifest names); call `load()` on selection before S4; append CRC16 to the config blob and verify on apply; new Settings entry launching `GameFileServer` |
-| `LightAir_TotemDriver` / `LightAir_TotemRunner.h` | add `typeId` to `LightAir_TotemActivation`; runner lookup order: Lua store → native role manager |
+| `LightAir_GameRunner` (beacon intercept only) | 0xF1 reply gains `[vmVersion][progLen][program]` for Lua-defined roles; program bytes come from the Lua binding's serializer |
+| `LightAir_TotemDriver` / `LightAir_TotemUICtrl` | route VM-form 0xF1 payloads to `LightAir_TotemVM` (native role manager stays as fallback during migration); `Control` effect gains the slot-based arg form |
+| 0xF0 beacon / `LightAir_GameSetupMenu` S4c | beacon advertises `[fw api, vmVersion]`; totem-assignment screen checks compatibility at setup time |
 | `sketches/LightAir/LightAir.ino` | mount FS, construct store/engine, hand them to menu (player path) and driver (totem path) |
 | `src/config.h` | `namespace LuaDefaults { MAX_VARS, MAX_RULES, MAX_MSG_RULES, GAMES_DIR, INSTR_BUDGET, ... }` |
 | `Makefile` | extend `SRCS` wildcard so `src/libs/**` participates in dependency tracking (arduino-cli compiles `src/**` regardless) |
@@ -381,8 +379,9 @@ RAM by the allocator fallback ordering if latency ever shows up in profiling.
 1. **Engine + FFA** — vendor Lua, build engine/binding/store, ship
    `freeforall.lua` alongside the native games (registry supports both);
    validate 10 ms budget and radio interop native↔Lua on hardware.
-2. **Totems** — `typeId` in activation, `LightAir_LuaTotemRunner`,
-   BONUS/MALUS from the FFA file; native totem roles as fallback.
+2. **Totems** — `LightAir_TotemVM` interpreter + program serializer +
+   extended 0xF1 (`docs/totem-behavior-handshake.md`); BONUS/MALUS from the
+   FFA programs first; native totem roles as fallback.
 3. **Port the rest** — Teams, Flag (exercises teams, `on_score_announce`,
    backgrounds, flag events), KingOfHill, Outflow, Upkeep; grow verbs only as
    patterns repeat.

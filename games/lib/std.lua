@@ -168,79 +168,73 @@ function std.team_announce(cfg)
 end
 
 -- ================================================================
--- Standard totem roles — ports of src/totem-rulesets/*.cpp.
--- Use in a game file:
---   totems = { BASE_O = std.totems.base(0), BONUS = std.totems.bonus(), ... }
+-- Standard totem roles — TotemVM v1 programs (pure data).
+--
+-- Totems hold no game files.  Each factory below returns a
+-- declarative state-machine table that the projector validates and
+-- serializes into the 0xF1 activation reply — the whole behaviour
+-- travels in that single packet.  No code from this file ever runs
+-- on a totem; the interpreter lives in the totem firmware.
+-- Full model and wire format: docs/totem-behavior-handshake.md.
+--
+-- Program shape:
+--   { vm = 1, cfg_default = secs?, states = { {rule, ...}, ... } }
+--   state 1 is the initial state.
+--   rule = { enter = true | every = ms | msg = type | reply = type,
+--            when = { guard, ... },     -- optional, all must hold
+--            run  = { action, ... },
+--            cont = true }              -- optional: don't consume event
+--
+-- Value specs usable as operands:
+--   number          literal byte / u16
+--   {"r", n}        register R0..R7
+--   {"p", i}        payload byte (1-based, as pkt:byte(i))
+--   {"low"}         lowest set bit index of ACC
+--   {"sender"}      sender player id
+--   {"team"}        sender team
+--   {"cfg"}         this role's config seconds (resolved by the
+--                   projector at serialization; cfg_default if the
+--                   game declares no config_var for the role)
 -- ================================================================
 
-local function team_rgb(team)
-  if team == 0xFF then return 255, 255, 255 end   -- white = teamless
-  local c = la.colors.team[team] or la.colors.team[0]
-  return c[1], c[2], c[3]
-end
-
-local function player_rgb(id)
-  local c = la.colors.player[id] or la.colors.player[0]
-  return c[1], c[2], c[3]
-end
-
 -- ---- BASE: respawn base.  team = 0, 1 or "any" (teamless). --------
+-- Beacons its team byte every second; an *intentional* respawn reply
+-- (sub-type >= 1 — empty auto-replies carry no proximity info) plays
+-- the respawn animation in the player's colour (teamless base) or
+-- the player's team colour.
 function std.totems.base(team)
   local tv = (team == "any") and 0xFF or team
-  return {
-    on_activate = function(t)
-      t.last_beacon = 0
-      local r, g, b = team_rgb(tv)
-      local rh = la.rhythm[tv] or la.rhythm[0]
-      la.totem_ui("BaseIdle", r, g, b, rh.period, rh.pulses)
-    end,
-    on_message = function(t, pkt)
-      -- Accept only *intentional* respawn replies (sub-type >= 1);
-      -- the runner's empty auto-replies carry no proximity info.
-      if pkt.msg ~= la.msg.BASE_BEACON + 1 then return end
-      if pkt.len == 0 or pkt:byte(1) == 0 then return end
-      local r, g, b
-      if tv == 0xFF then r, g, b = player_rgb(pkt.sender)
-      else               r, g, b = team_rgb(pkt.team < 2 and pkt.team or 0) end
-      la.totem_ui("Respawn", r, g, b)
-    end,
-    update = function(t)
-      if la.now() - t.last_beacon >= 1000 then
-        t.last_beacon = la.now()
-        la.broadcast(la.msg.BASE_BEACON, tv)
-      end
-    end,
-  }
+  local respawn_color = (tv == 0xFF) and {"sender_player"} or {"sender_team"}
+  return { vm = 1, states = { {
+    { enter = true,
+      run = { {"anim", "BaseIdle", {"team", tv}, {"rhythm", tv}} } },
+    { every = 1000,
+      run = { {"bcast", la.msg.BASE_BEACON, tv} } },
+    { reply = la.msg.BASE_BEACON,
+      when = { {"len", ">=", 1}, {"p", 1, ">=", 1} },
+      run = { {"anim", "Respawn", respawn_color} } },
+  } } }
 end
 
 -- ---- BONUS / MALUS: claimable pickup with cooldown. ---------------
+-- State 1 (READY): beacon every 2 s; any reply claims the pickup.
+-- State 2 (COOLDOWN): silent until the configured seconds elapse.
 local function pickup(cfg)
-  return {
-    on_activate = function(t)
-      t.ready, t.cooldown_end, t.last_beacon = true, 0, 0
-      la.totem_ui(cfg.idle, cfg.rgb[1], cfg.rgb[2], cfg.rgb[3])
-    end,
-    on_message = function(t, pkt)
-      if t.ready and pkt.msg == cfg.beacon + 1 then
-        t.ready        = false
-        t.cooldown_end = la.now() + (t.config_secs or 30) * 1000
-        la.totem_ui(cfg.claim)
-      end
-    end,
-    update = function(t)
-      if not t.ready then
-        if la.now() >= t.cooldown_end then
-          t.ready = true
-          la.totem_ui(cfg.idle, cfg.rgb[1], cfg.rgb[2], cfg.rgb[3])
-        end
-        return
-      end
-      if la.now() - t.last_beacon >= 2000 then
-        t.last_beacon = la.now()
-        la.broadcast(cfg.beacon, 0)     -- payload byte 0 = ready
-      end
-    end,
-  }
+  return { vm = 1, cfg_default = 30, states = {
+    { -- state 1: READY
+      { enter = true,
+        run = { {"anim", cfg.idle, {"rgb", cfg.rgb[1], cfg.rgb[2], cfg.rgb[3]}} } },
+      { every = 2000,
+        run = { {"bcast", cfg.beacon, 0} } },       -- payload byte 0 = ready
+      { reply = cfg.beacon,
+        run = { {"start", 0}, {"anim", cfg.claim}, {"goto", 2} } },
+    },
+    { -- state 2: COOLDOWN
+      { every = 250,
+        when = { {"elapsed", 0, ">=", {"cfg"}} },
+        run = { {"goto", 1} } },                    -- READY's enter restores idle
+    },
+  } }
 end
 
 function std.totems.bonus()
@@ -254,107 +248,75 @@ function std.totems.malus()
 end
 
 -- ---- FLAG: home/away flag stand for team 0 or 1. ------------------
+-- Driven entirely by player MSG.FLAG_EVENT broadcasts, which players
+-- emit only inside their own RSSI proximity gate — the totem inherits
+-- that gate and needs no distance logic of its own.
 function std.totems.flag(team)
-  -- Flag colours match FlagTotem.cpp: warm for O, cold for X.
-  local fr = (team == 0) and 255 or 0
-  local fg = 80
+  local fr = (team == 0) and 255 or 0      -- warm for O, cold for X
   local fb = (team == 0) and 0 or 255
-
-  local function show_idle()
-    local rh = la.rhythm[team] or la.rhythm[0]
-    la.totem_ui("FlagIdle", fr, fg, fb, rh.period, rh.pulses)
-  end
-
-  return {
-    on_activate = function(t)
-      t.home, t.last_beacon = true, 0
-      show_idle()
-    end,
-    on_message = function(t, pkt)
-      -- Driven entirely by player MSG.FLAG_EVENT broadcasts, which the
-      -- players emit only inside their own RSSI proximity gate.
-      if pkt.msg ~= la.msg.FLAG_EVENT then return end
-      if pkt.len < 2 or pkt:byte(2) ~= team then return end
-      local sub = pkt:byte(1)
-      if t.home then
-        if sub == la.flag_event.TAKEN then
-          t.home = false
-          la.totem_ui("FlagMissing", fr, fg, fb)
-          local pr, pg, pb = player_rgb(pkt.sender)
-          la.totem_ui("FlagTaken", pr, pg, pb)
-        end
-      elseif sub == la.flag_event.DROPPED or sub == la.flag_event.SCORED then
-        t.home = true
-        show_idle()
-        la.totem_ui("FlagReturn", fr, fg, fb)
-      end
-    end,
-    update = function(t)
-      if not t.home then return end
-      if la.now() - t.last_beacon >= 500 then
-        t.last_beacon = la.now()
-        la.broadcast(la.msg.FLAG_BEACON, 0, team)   -- 0 = FLAG_IN
-      end
-    end,
-  }
+  local FE = la.flag_event
+  return { vm = 1, states = {
+    { -- state 1: HOME
+      { enter = true,
+        run = { {"anim", "FlagIdle", {"rgb", fr, 80, fb}, {"rhythm", team}} } },
+      { every = 500,
+        run = { {"bcast", la.msg.FLAG_BEACON, 0, team} } },   -- 0 = FLAG_IN
+      { msg = la.msg.FLAG_EVENT,
+        when = { {"len", ">=", 2}, {"p", 2, "==", team},
+                 {"p", 1, "==", FE.TAKEN} },
+        run = { {"anim", "FlagMissing", {"rgb", fr, 80, fb}},
+                {"anim", "FlagTaken", {"sender_player"}},
+                {"goto", 2} } },
+    },
+    { -- state 2: AWAY (silent; DROPPED or SCORED returns the flag)
+      { msg = la.msg.FLAG_EVENT,
+        when = { {"len", ">=", 2}, {"p", 2, "==", team},
+                 {"p", 1, ">=", FE.DROPPED}, {"p", 1, "<=", FE.SCORED} },
+        -- goto runs HOME's enter (idle background) first, then the
+        -- one-shot return flash plays over it.
+        run = { {"goto", 1}, {"anim", "FlagReturn", {"rgb", fr, 80, fb}} } },
+    },
+  } }
 end
 
 -- ---- CP: control point (Upkeep: teams 0/1; KoH: slots 0-15). ------
+-- R0 = owner slot (0xFF = neutral).  ACC accumulates presence bits
+-- from reply sub-types 1..16 during each 2 s window; the window
+-- rules then run in order (cont) and the epilogue clears ACC and
+-- beacons the owner.  T0 times unchallenged control (10 s = point).
 function std.totems.cp()
-  return {
-    on_activate = function(t)
-      t.owner        = 0xFF                -- 0xFF = neutral
-      t.presence     = 0                   -- bit i = slot i replied this window
-      t.window_start = la.now()
-      t.attach_start = la.now()
-      la.totem_ui("CPIdle", 80, 80, 80)
-    end,
-    on_message = function(t, pkt)
-      -- Presence replies: sub-type 1..16 -> slot 0..15.
-      if pkt.msg ~= la.msg.CP_BEACON + 1 then return end
-      if pkt.len == 0 then return end
-      local sub = pkt:byte(1)
-      if sub >= 1 and sub <= 16 then
-        t.presence = t.presence | (1 << (sub - 1))
-      end
-    end,
-    update = function(t)
-      local now = la.now()
-      if now - t.window_start < 2000 then return end
-
-      -- Evaluate the 2 s window that just closed.
-      local any    = t.presence ~= 0
-      local single = any and (t.presence & (t.presence - 1)) == 0
-      if any then
-        local new_owner = t.owner
-        if single then
-          new_owner = 0
-          while (t.presence >> new_owner) & 1 == 0 do
-            new_owner = new_owner + 1
-          end
-        end
-        if new_owner ~= t.owner then
-          t.owner        = new_owner       -- switch: no point, restart countdown
-          t.attach_start = now
-          if t.owner < 2 then la.totem_ui("Control", t.owner)
-          else                la.totem_ui("Control", 0xFF, t.owner + 1) end
-        elseif single and t.owner ~= 0xFF
-               and now - t.attach_start >= 10000 then
-          la.broadcast(la.msg.CP_SCORE, t.owner)
-          la.totem_ui("Bonus")
-          t.attach_start = now
-        end
-        if not single then la.totem_ui("ControlContest") end
-      elseif t.owner == 0xFF then
-        la.totem_ui("CPIdle", 80, 80, 80)
-      end
-
-      -- Open the next window.
-      t.presence     = 0
-      t.window_start = now
-      la.broadcast(la.msg.CP_BEACON, t.owner)
-    end,
-  }
+  local MSG = la.msg
+  return { vm = 1, states = { {
+    { enter = true,
+      run = { {"set", 0, 0xFF}, {"start", 0},
+              {"anim", "CPIdle", {"rgb", 80, 80, 80}} } },
+    -- collect presence replies: sub-type 1..16 -> ACC bit 0..15
+    { reply = MSG.CP_BEACON, cont = true,
+      when = { {"len", ">=", 1}, {"p", 1, ">=", 1}, {"p", 1, "<=", 16} },
+      run = { {"accbit", {"p", 1}} } },
+    -- single occupant, different from owner: attach, restart countdown
+    { every = 2000, cont = true,
+      when = { {"acc", "single"}, {"low", "~=", {"r", 0}} },
+      run = { {"set", 0, {"low"}}, {"start", 0},
+              {"anim", "Control", {"args", 0xFE, {"r", 0}}} } },
+    -- same lone owner for 10 s: award a point, restart countdown
+    { every = 2000, cont = true,
+      when = { {"acc", "single"}, {"low", "==", {"r", 0}},
+               {"r", 0, "~=", 0xFF}, {"elapsed", 0, ">=", 10000} },
+      run = { {"bcast", MSG.CP_SCORE, {"r", 0}}, {"start", 0},
+              {"anim", "Bonus"} } },
+    -- contested: hold the current owner, show the contest
+    { every = 2000, cont = true,
+      when = { {"acc", "many"} },
+      run = { {"anim", "ControlContest"} } },
+    -- empty and never owned: stay visibly unclaimed
+    { every = 2000, cont = true,
+      when = { {"acc", "empty"}, {"r", 0, "==", 0xFF} },
+      run = { {"anim", "CPIdle", {"rgb", 80, 80, 80}} } },
+    -- window epilogue: open the next window, beacon the owner
+    { every = 2000,
+      run = { {"accclr"}, {"bcast", MSG.CP_BEACON, {"r", 0}} } },
+  } } }
 end
 
 return std
