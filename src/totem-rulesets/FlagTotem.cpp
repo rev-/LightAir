@@ -13,8 +13,8 @@
 //   onActivate() : enters FLAG_IN; shows Idle background (team colour glow).
 //   update()     : in FLAG_IN, broadcasts MSG_FLAG_BEACON every
 //                  FLAG_BEACON_INTERVAL_MS.
-//   onMessage()  : driven entirely by MSG_FLAG_EVENT broadcasts from players
-//                  (payload[1] == _team selects events for this flag):
+//   onMessage()  : driven by MSG_FLAG_EVENT broadcasts addressed to this
+//                  totem via payload[2] (payload[0] = FlagEvent sub-type):
 //     FlagEvent::TAKEN   — FLAG_IN → FLAG_OUT + FlagMissing anim (team colour)
 //                          + FlagTaken flash (picker's colour).
 //     FlagEvent::DROPPED — FLAG_OUT → FLAG_IN + FlagReturn anim (flash).
@@ -25,12 +25,14 @@
 // The team is fixed at construction and encodes which team's flag this is.
 //
 // Flag protocol (must stay in sync with the Flag ruleset, GameFlag.cpp)
-//   The totem reacts only to MSG_FLAG_EVENT broadcasts a player emits when it
-//   actually picks up, scores, or drops a flag — and the player emits those
-//   only once it is within its own RSSI proximity gate of the flag/base.  The
-//   totem therefore inherits that proximity gate and never reacts to a distant
-//   player.  (It must NOT react to the empty 0x59 auto-reply the GameRunner
-//   sends for every beacon, which carries no distance information.)
+//   A single flooded MSG_FLAG_EVENT broadcast per event does both jobs:
+//   players read payload[0]/[1] to sync carrier state and team points, while
+//   payload[2] carries the target flag totem's id (the carrier remembers it
+//   from the beacon it took).  This totem animates only when payload[2] ==
+//   its own id, so the correct flag reacts even with multiple flags per team
+//   and others ignore it.  Drop/score happen away from the flag (the carrier
+//   may be several hops out of range), so the broadcast relays across the
+//   mesh to reach it — a plain unicast could not.
 // ================================================================
 
 using RadioMsg::MSG_FLAG_BEACON;
@@ -44,6 +46,7 @@ static constexpr uint8_t  FLAG_STATE_OUT = 1;
 class FlagTotem : public LightAir_TotemRunner {
     const uint8_t _team;        // 0=O, 1=X; fixed at construction
     uint8_t       _state;       // FLAG_STATE_IN or FLAG_STATE_OUT
+    uint8_t       _selfId;      // this totem's own id; matches MSG_FLAG_EVENT payload[2]
     uint32_t      _lastBeacon;
 
     void teamColor(uint8_t& r, uint8_t& g, uint8_t& b) const {
@@ -71,22 +74,25 @@ class FlagTotem : public LightAir_TotemRunner {
 
 public:
     explicit FlagTotem(uint8_t team)
-        : _team(team), _state(FLAG_STATE_IN), _lastBeacon(0) {}
+        : _team(team), _state(FLAG_STATE_IN), _selfId(0xFF), _lastBeacon(0) {}
 
-    void onActivate(const LightAir_TotemActivation& /*info*/,
+    void onActivate(const LightAir_TotemActivation& info,
                     LightAir_TotemOutput& out) override {
         _state      = FLAG_STATE_IN;
+        _selfId     = info.selfId;
         _lastBeacon = 0;
         showIdle(out);
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        // Only MSG_FLAG_EVENT broadcasts drive this totem; payload[1] selects
-        // events for the flag this totem owns.  Player-side RSSI gating means
-        // these only fire when a player is actually at the flag/base.
+        // Driven by MSG_FLAG_EVENT — the same flooded broadcast players use to
+        // sync carrier state. payload[2] = target flag totem id: we animate
+        // only when it == our own id, so the right flag reacts (multiple flags
+        // per team work) and the hopped broadcast still reaches us when the
+        // carrier drops/scores out of our direct range. payload[0] = sub-type.
         if (msg.msgType != MSG_FLAG_EVENT) return;
-        if (msg.payloadLen < 2)            return;
-        if (msg.payload[1] != _team)       return;  // not our flag's event
+        if (msg.payloadLen < 3)            return;
+        if (msg.payload[2] != _selfId)     return;  // not addressed to this flag
 
         const uint8_t sub = msg.payload[0];
 

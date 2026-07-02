@@ -8,8 +8,8 @@
 // Lifecycle
 //   onActivate() : starts identity animation; resets beacon timer.
 //   update()     : broadcasts MSG_BASE_BEACON every BASE_BEACON_INTERVAL_MS.
-//   onMessage()  : on player reply (0x57) shows Respawn animation in
-//                  the replying player's team colour.
+//   onMessage()  : on a player's MSG_RESPAWN_NOTIFY unicast shows the
+//                  Respawn animation in the respawning player's colour.
 //   reset()      : clears beacon timer; runner ready for next session.
 //
 // Three singletons share this class: baseO (team 0), baseX (team 1),
@@ -27,6 +27,7 @@
 // ================================================================
 
 using RadioMsg::MSG_BASE_BEACON;
+using RadioMsg::MSG_RESPAWN_NOTIFY;
 
 static constexpr uint32_t BASE_BEACON_INTERVAL_MS = 1000;
 
@@ -56,13 +57,13 @@ public:
     }
 
     void onMessage(const RadioPacket& msg, LightAir_TotemOutput& out) override {
-        // Accept a player's *intentional* respawn reply to our beacon only.
-        // The reply carries subType = team+1 (payload[0] >= 1); the player sends
-        // it solely when it is within its own RSSI proximity gate of this base.
-        // Reject the empty 0x57 auto-reply the GameRunner emits for every beacon
-        // (payloadLen == 0) — it carries no distance information and would make
-        // the base react to any player anywhere in radio range.
-        if (msg.msgType != MSG_BASE_BEACON + 1) return;
+        // Accept a player's *intentional* respawn notification only. The player
+        // unicasts MSG_RESPAWN_NOTIFY to this specific base when it is within
+        // its own RSSI proximity gate; payload[0] = team+1 (>= 1) is a non-zero
+        // sanity marker. Unicast targeting means only the base actually reached
+        // reacts. (The old odd-reply scheme was silently dropped by the radio's
+        // pending-match gate, so this animation never fired.)
+        if (msg.msgType != MSG_RESPAWN_NOTIFY) return;
         if (msg.payloadLen == 0 || msg.payload[0] == 0) return;
         uint8_t r, g, b;
         if (_team == 0xFF) {

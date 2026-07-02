@@ -319,9 +319,13 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
     _display.flush();
 
     while (true) {
-        // Periodic presence broadcast so DM and peers discover this device.
+        // Periodic heartbeat so DM and peers discover this device.  Before
+        // accepting we send MSG_ROSTER (presence only, not counted by the DM);
+        // once joined we repeat MSG_JOIN so the DM reliably and repeatedly
+        // hears the accept even if the one-shot join packet was lost.
         if (millis() >= nextBroadcast) {
-            _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0, 2);
+            _radio.broadcast(joined ? GameDefaults::MSG_JOIN
+                                    : GameDefaults::MSG_ROSTER, nullptr, 0, 2);
             nextBroadcast = millis() + GameDefaults::PRESTART_BROADCAST_MS;
         }
 
@@ -870,20 +874,25 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
     renderSummary(vScroll);
 
     while (true) {
-        // Broadcast MSG_ROSTER periodically so other devices discover us.
+        // Periodically re-broadcast the roster heartbeat AND the config blob so
+        // any player that missed the initial config (lossy/unacked ESP-NOW
+        // broadcast, momentarily full receive queue) eventually catches a copy.
+        // game_apply_config() is idempotent, so repeats are harmless.
         if (millis() >= nextBroadcast) {
             _radio.broadcast(GameDefaults::MSG_ROSTER, nullptr, 0, 2);
+            if (len > 0) _radio.broadcast(_msgType, blob, len, 2);
             nextBroadcast = millis() + GameDefaults::PRESTART_BROADCAST_MS;
         }
 
-        // Collect MSG_ROSTER and MSG_JOIN; refresh summary when player count grows.
+        // Count MSG_JOIN only; refresh summary when accepted-player count grows.
+        // MSG_ROSTER is presence-only and is NOT counted — only players that
+        // actually accepted (MSG_JOIN) appear in the matchup tally.
         const RadioReport& rep = _radio.poll();
         uint8_t prevCount = _seenCount;
         for (uint8_t i = 0; i < rep.count; i++) {
             const RadioEvent& ev = rep.events[i];
             if (ev.type != RadioEventType::MessageReceived) continue;
-            if (ev.packet.msgType != GameDefaults::MSG_ROSTER &&
-                ev.packet.msgType != GameDefaults::MSG_JOIN) continue;
+            if (ev.packet.msgType != GameDefaults::MSG_JOIN) continue;
             recordSeen(ev.packet.senderId);
         }
         if (_seenCount != prevCount)

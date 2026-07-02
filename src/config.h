@@ -49,7 +49,16 @@ constexpr uint8_t MSG_POINT_REPORT  = 0x14;
 // Messages that travel between a player and a totem (not player→player).
 
 // Flag state change broadcast: pickup / capture / drop (Flag game).
-// payload[0] = FlagEventType; no meaningful reply expected.
+// Flooded broadcast that serves BOTH duties for one event (one flood, not two):
+//   payload[0] = FlagEventType (TAKEN/DROPPED/SCORED).
+//   payload[1] = flag's owning team (0=O, 1=X) — players use [0]/[1] to sync
+//                carrier state and team points.
+//   payload[2] = target flag totem's id (the carrier remembers it from the
+//                beacon it took). The owning FLAG totem animates only when
+//                [2] == its own id, so the right flag reacts (multiple flags
+//                per team work) and the hopped broadcast still reaches it when
+//                the carrier drops/scores out of the totem's direct range.
+// No meaningful reply expected.
 constexpr uint8_t MSG_FLAG_EVENT    = 0x50;
 
 // Control-point beacon broadcast by CP totem every 2 s (Upkeep, KingOfHill).
@@ -87,7 +96,23 @@ constexpr uint8_t MSG_BONUS_BEACON  = 0x5E;
 // Reply (0x61): player claims malus.
 constexpr uint8_t MSG_MALUS_BEACON  = 0x60;
 
-// Next available in 0x50 block: 0x62
+// Player → BASE totem unicast: "I am respawning at you" (even; no relay).
+// payload[0] = myTeam+1 (non-zero sanity marker). senderId = the player and
+// team = the player's team (both auto-stamped by sendTo). Replaces the old
+// odd-reply respawn signal, which processPacket() silently dropped because the
+// base's beacon (broadcast) never stored a pending entry to match it against.
+constexpr uint8_t MSG_RESPAWN_NOTIFY = 0x62;
+
+// Player → CP totem unicast: "I am present at you" (even; no relay).
+// Presence is RSSI-gated at the CP, so the player is in direct range — a
+// unicast addressed to the CP suffices (no hops). payload[0] = myTeam+1
+// (1..16; 0 reserved/ignored). Replaces the old odd-reply presence signal,
+// which processPacket() silently dropped (same bug as base respawn),
+// breaking CP ownership detection. CPTotem folds payload[0] into its
+// presence mask exactly as it did the old reply subType.
+constexpr uint8_t MSG_CP_NOTIFY      = 0x64;
+
+// Next available in 0x50 block: 0x66
 
 // ── 0xA0 block: infrastructure ──────────────────────────────────
 // Sent with typeId == UNIVERSAL (0x0000); not game-scoped.

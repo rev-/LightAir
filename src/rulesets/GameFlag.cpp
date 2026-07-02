@@ -132,6 +132,7 @@ static uint32_t litAt[PlayerDefs::MAX_PLAYER_ID];
 static bool     hasEnemyFlag;
 static uint8_t  enemyFlagCarrierId;  // 0xFF = flag available at its totem
 static uint8_t  myFlagCarrierId;     // 0xFF = our flag at home
+static uint8_t  enemyFlagTotemId;    // id of the FLAG totem we took; for unicast notify
 
 static uint8_t  myTeam;      // 0=O, 1=X
 static uint8_t  teamMap[PlayerDefs::MAX_PLAYER_ID];  // per-player team index; filled from config blob
@@ -217,6 +218,7 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
     hasEnemyFlag       = false;
     enemyFlagCarrierId = 0xFF;
     myFlagCarrierId    = 0xFF;
+    enemyFlagTotemId   = 0xFF;
     lastTickAt         = millis();
     triggerWasActive   = false;
     releaseAt          = 0;
@@ -396,8 +398,12 @@ static bool endPointsReached(const InputReport&, const RadioReport&) {
 // ---- Transition actions ----
 static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
     if (hasEnemyFlag) {
-        uint8_t pl[2] = { FEVENT_DROPPED, enemyTeam() };
-        out.radio.broadcast(MSG_FLAG_EVENT, pl, 2, 2);
+        // One flooded broadcast does both jobs: payload[0]/[1] sync players,
+        // payload[2] = the flag totem we took so it (and only it) returns home.
+        // We are shot away from the flag, so hops carry it across the mesh.
+        uint8_t pl[3] = { FEVENT_DROPPED, enemyTeam(), enemyFlagTotemId };
+        out.radio.broadcast(MSG_FLAG_EVENT, pl, 3, 2);
+        enemyFlagTotemId   = 0xFF;
         hasEnemyFlag       = false;
         enemyFlagCarrierId = 0xFF;
         out.ui.trigger(LightAir_UICtrl::UIEvent::FlagTaken);  // "FLAG LOST"
@@ -491,8 +497,12 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
 
             hasEnemyFlag       = true;
             enemyFlagCarrierId = 0x01;   // mark taken locally; other players update via broadcast
-            uint8_t pl[2] = { FEVENT_TAKEN, enemyTeam() };
-            out.radio.broadcast(MSG_FLAG_EVENT, pl, 2, 2);
+            enemyFlagTotemId   = ev.packet.senderId;  // remember which flag totem we took
+            // One flooded broadcast does both jobs: payload[0]/[1] sync
+            // players, payload[2] = this flag totem so it (and only it)
+            // animates the pickup.
+            uint8_t pl[3] = { FEVENT_TAKEN, enemyTeam(), enemyFlagTotemId };
+            out.radio.broadcast(MSG_FLAG_EVENT, pl, 3, 2);
             out.ui.trigger(LightAir_UICtrl::UIEvent::FlagGain);   // "FLAG +"
             if (uiCtrl) uiCtrl->setBackground(kFlagCarryBg);
             disp.showMessage("YOU HAVE FLAG", 0);
@@ -519,8 +529,12 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
             myTeamPoints++;
             hasEnemyFlag       = false;
             enemyFlagCarrierId = 0xFF;
-            uint8_t pl[2] = { FEVENT_SCORED, enemyTeam() };
-            out.radio.broadcast(MSG_FLAG_EVENT, pl, 2, 2);
+            // One flooded broadcast does both jobs: payload[0]/[1] sync
+            // players, payload[2] = the flag totem we took so it returns home.
+            // We score at our base, away from the flag, so hops carry it.
+            uint8_t pl[3] = { FEVENT_SCORED, enemyTeam(), enemyFlagTotemId };
+            out.radio.broadcast(MSG_FLAG_EVENT, pl, 3, 2);
+            enemyFlagTotemId   = 0xFF;
             out.ui.trigger(LightAir_UICtrl::UIEvent::FlagGain);   // "FLAG +"
             if (uiCtrl) uiCtrl->clearBackground();
             disp.clearTray();
@@ -548,8 +562,13 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
             ev.packet.payload[0] != 0xFF)                         continue;
         if (ev.rssi           <  NEAR_RSSI_THRESHOLD)             continue;
         canRespawn = true;
-        // Notify the BASE totem so it can show a Respawn animation.
-        out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
+        // Unicast so the specific BASE totem we reached can show a Respawn
+        // animation. payload[0] = myTeam+1 non-zero marker; totem also reads
+        // msg.team / msg.senderId.
+        {
+            uint8_t pl[1] = { (uint8_t)(myTeam + 1) };
+            out.radio.sendTo(ev.packet.senderId, RadioMsg::MSG_RESPAWN_NOTIFY, pl, 1);
+        }
         break;
     }
 }

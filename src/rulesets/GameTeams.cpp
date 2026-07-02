@@ -376,9 +376,13 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
             ev.packet.payload[0] != 0xFF)                         continue;
         if (ev.rssi < NEAR_RSSI_THRESHOLD)                        continue;
         canRespawn = true;
-        // Reply so the BASE totem can show a Respawn animation.
-        // subType 1 = team-O, 2 = team-X.
-        out.radio.reply(ev.packet, (uint8_t)(myTeam + 1));
+        // Unicast so the specific BASE totem we reached can show a Respawn
+        // animation. payload[0] = myTeam+1 (1=team-O, 2=team-X) as a non-zero
+        // marker; the totem also reads msg.team / msg.senderId.
+        {
+            uint8_t pl[1] = { (uint8_t)(myTeam + 1) };
+            out.radio.sendTo(ev.packet.senderId, RadioMsg::MSG_RESPAWN_NOTIFY, pl, 1);
+        }
         break;
     }
 }
