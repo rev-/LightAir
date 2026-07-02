@@ -4,8 +4,23 @@ Move every game ruleset (FreeForAll, Teams, Flag, KingOfHill, Outflow, Upkeep)
 and the totem behaviours they use out of the firmware and into one `.lua` file
 per game, stored on flash and exchangeable as plain files over HTTP.
 
-`games/freeforall.lua` is the reference implementation of this format — a full
-port of `src/rulesets/GameFreeForAll.cpp` plus the BONUS/MALUS totem roles.
+All six rulesets are ported under `games/`, plus a new one (Virus) that only
+exists as Lua:
+
+| File | Notes |
+|---|---|
+| `games/freeforall.lua` | the fully-explicit reference — every idiom spelled out |
+| `games/teams.lua` | teams, friendly fire, point reports, BASE respawn |
+| `games/flag.lua` | flag events, carry background alert, team announce |
+| `games/kingofhill.lua` | per-player CP slots, teamless BASE |
+| `games/outflow.lua` | energy-only, passive drain, custom Enlight config |
+| `games/upkeep.lua` | CP ownership, text monitor var ("myPts/enemyPts") |
+| `games/virus.lua` | new game: infection tag; uses a custom message id |
+| `games/lib/std.lua` | pure-Lua standard library (see §"API layering") |
+
+Vocabulary rule: the API and the game files use the project's non-violent
+terms — *shine* (project light), *lit* (be illuminated), *shone*
+(eliminated).  No "hit/shoot/kill" anywhere in verbs, events or comments.
 
 ---
 
@@ -91,8 +106,8 @@ Per tick, in the runner's existing order:
 | Radio in (requests) | `on_message[state][msgType](vars, pkt)` | one pcall per event; `pkt` is a **reused** userdata proxy over the live `RadioPacket` (fields `sender`, `team`, `role`, `rssi`, `msg`, `len`, `pkt:byte(i)`); valid only during the call; zero allocation |
 | Radio in (replies/timeouts) | `on_reply[origMsg][subType](vars, reply, orig)` | same proxy mechanism; timeouts dispatch under sub-type key `"timeout"` |
 | Transitions | `rules[i].when(vars)` for rules matching the current state | condition trampolines; first match wins, runner switches display set exactly as today |
-| Tick body | `update[state](vars)` | one pcall; inputs are *pulled* via verbs (`la.trigger_down(1)`, `la.shine_hit()`) so quiet ticks cost almost nothing |
-| Hardware in | `la.shine_hit()`, `la.trigger_down(n)`, `la.now()` | C functions reading the current `InputReport` / polling Enlight; no copies |
+| Tick body | `update[state](vars)` | one pcall; inputs are *pulled* via verbs (`la.trigger_down(1)`, `la.shine_lit()`) so quiet ticks cost almost nothing |
+| Hardware in | `la.shine_lit()`, `la.trigger_down(n)`, `la.now()` | C functions reading the current `InputReport` / polling Enlight; no copies |
 | Radio out | `la.broadcast(msg, ...)`, `la.send(target, msg, ...)`, return value of `on_message` = reply sub-type | verbs append to the existing `GameOutput` buffers, flushed in phase 3 as today |
 | UI out | `la.ui("Down")`, `la.ui_enlight(ms)`, `la.show(text, ms)` | verbs → `UIOutput` / tray; event names resolved to enum values once at load |
 | LCD vars | — | nothing crosses: slots (§2) |
@@ -131,7 +146,7 @@ return {
   score_msg     = la.msg.SCORE_COLLECT,
 
   config  = { { id, name, min, max, step, default }, ... },
-  vars    = { { id, default, countdown_in = {...}? }, ... },
+  vars    = { { id, default, countdown_in = {...}?, text = true?, len = N? }, ... },
   monitor = { { var, icon, col, row, states = {...} }, ... },
   winners = { { var, dir = "max"|"min" }, ... },
 
@@ -169,32 +184,103 @@ keeps the C++ diff small:
 | `teams` | `teamCount` + a firmware-owned `teamMap` |
 | `time_left_var` | `gameTimeLeft` pointer into the slot |
 
-### The `la` verb library
+Two spec details the ports rely on:
 
-Registered by the firmware before the chunk runs. Deliberately small; grows
-only when a pattern repeats across ≥2 games.
+- **Text vars** — a `vars` entry with `text = true, len = N` claims a char
+  slot instead of an int slot; the LCD binds it via the existing
+  `bindStringVariable`, and `vars.role = "VIRUS"` copies into the buffer.
+  Used by Upkeep ("myPts/enemyPts") and Virus (the role display).
+- **`on_score_announce(scores)`** — replaces the C++ `ScoreTable` callback for
+  team games.  `scores` is built once when all slots arrive (allocation is
+  fine outside the tick path): an array of `{ id, team, vals = {v1, v2} }`
+  in winner-var order.  `games/lib/std.lua` provides the two-team
+  aggregation used by Teams, Flag and Upkeep.
+- **Custom message ids** — a game may declare its own even msgType (Virus
+  uses `0x16` for infection announcements).  `typeId` + session token already
+  isolate games on the wire; the only rule is to stay out of the 0xA0
+  infrastructure and 0xF0 totem-protocol blocks.
 
-**Constants** — `la.msg.*` (RadioMsg registry), `la.role.*` (TotemRoleId),
-`la.team_colors`, icon names and UI event names are validated at load.
+### The `la` verb kernel
+
+Registered by the firmware before the chunk runs. Deliberately small; §"API
+layering" below is the policy for what may be added here.
+
+**Constant tables (data, not calls; pushed once at load)** — `la.msg.*`
+(RadioMsg registry), `la.flag_event.*`, `la.colors.team[0..7]`,
+`la.colors.player[0..16]` (each `{r,g,b}`), `la.rhythm[0..7]`
+(`{period, pulses}`).  Icon names and UI event names are strings validated
+at load time.
 
 **Identity / queries** — `la.my_id()`, `la.my_team()`, `la.team_of(id)`,
-`la.player_short(id)`, `la.totem_for_role(role, idx)`, `la.state()`,
-`la.now()` (millis).
+`la.player_count()` (roster size), `la.player_short(id)`,
+`la.totem_for_role(role, idx)`, `la.state()`, `la.now()` (millis).
 
 **Inputs (pull)** — `la.trigger_down(n)`, `la.trigger_state(n)`,
 `la.shine()` (start an Enlight burst if allowed → bool),
-`la.shine_hit()` (confirmed optical hit → player id or nil),
-`la.shine_ms()` (burst duration for UI sync).
+`la.shine_lit()` (confirmed lit target → player id or nil),
+`la.shine_ms()` (burst duration for UI sync),
+`la.shine_config{cooldown_ms, reps}` (Outflow tunes the optics per game).
 
 **Outputs (queue, flushed in phase 3)** — `la.broadcast(msg, byte...)`,
+`la.broadcast_relay(msg, byte...)` (mesh flood, resend=2),
 `la.send(target, msg, byte...)`, `la.ui(event)`, `la.ui_enlight(ms)`,
-`la.show(text, ms)`, `la.background(name)` / `la.background()` (Flag's
-carry-alert pattern), and on totems `la.totem_ui(event, r, g, b, ...)`.
+`la.show(text, ms)`, `la.clear_tray()`,
+`la.background(spec)` / `la.background()` (set/clear a continuous
+sound+vibration+RGB alert; `spec` is a steps table, see `games/flag.lua`),
+and on totems `la.totem_ui(event, args...)`.
 
-Candidates surfaced by the existing rulesets for later verbs: an RSSI
-proximity gate (`pkt.rssi >= threshold` is fine in Lua, but a named
-`la.near(pkt, meters)` centralizes calibration), and a per-sender rate/immunity
-helper if the `lit_at` idiom proves annoying.
+**Loader** — `la.lib(name)` runs `/games/lib/<name>.lua` once per state and
+caches the result (a two-line C function; there is no `require`/`package`).
+
+The `vars` proxy is passed to every handler as the first argument *and*
+installed as a global, so load-time closures (e.g. a friendly-fire predicate)
+can reference it.  `pkt:byte(i)` is 1-based over the payload
+(`pkt:byte(1)` = `payload[0]`); `pkt.len`, `pkt.sender`, `pkt.team`,
+`pkt.role`, `pkt.rssi`, `pkt.msg` are fields.
+
+## API layering — verbs vs. easy games vs. future-proofness
+
+Making games easy to write by adding a C++ verb for every pattern would
+bloat the kernel, freeze design decisions into firmware releases, and make
+the API hard to learn.  The resolution is three layers with a hard rule for
+what goes where:
+
+1. **C++ kernel verbs** (the `la` table, above).  A verb is admitted only if
+   it (a) touches hardware or firmware-private state (optics, display tray,
+   radio queues, roster), (b) enforces a protocol invariant (reply framing,
+   flood resend), or (c) cannot be made fast enough in Lua.  Everything on
+   this list is a *capability*, not a policy: `la.shine()` starts a burst,
+   it does not decide when shining is allowed.  Target size: ~25 verbs — one
+   page, learnable in an afternoon, and stable because policies never live
+   here.
+
+2. **The Lua standard library** (`games/lib/std.lua`) — recurring *game
+   patterns* built only out of kernel verbs: the immunity window, the
+   trigger/energy/recharge idiom, the standard lit-handler ladder, BASE
+   respawn gating, team score aggregation, and the five standard totem
+   roles.  It ships as a file next to the games, so it can grow, be fixed,
+   or be forked without reflashing firmware — and a game that wants
+   different semantics simply doesn't call it.  This is where "easy to
+   define new games" comes from: `games/teams.lua` is ~½ the logic of its
+   C++ original because the idioms are one-liners, while
+   `games/freeforall.lua` deliberately uses no library at all and remains
+   the readable, fully-explicit tutorial.
+
+3. **The game file** — only the rules that make this game *this game*.
+
+Future-proofness falls out of the same rule.  A future game that needs a new
+*pattern* (Virus needed infection tracking) writes it in Lua — no firmware
+release.  Only a new *capability* (a new sensor, a new radio primitive)
+needs a kernel verb, and adding one is backward-compatible: the `api` field
+versions the contract, and files can feature-test with
+`if la.background then ... end`.  When a Lua pattern later proves both
+universal and hot enough to matter, it can be promoted to C++ behind the
+same call signature the library already established — `std.shiner` is
+designed as exactly such a promotion candidate.
+
+Historical candidates deliberately *kept out* of the kernel: RSSI proximity
+gating (one comparison), immunity windows (a table and a clock), CP window
+arithmetic (integer bit ops).  All are `std` functions instead.
 
 ---
 

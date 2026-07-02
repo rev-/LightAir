@@ -34,7 +34,7 @@ local IMMUNITY_MS = 3000
 -- Anything that is NOT shown on the LCD, NOT edited in the menu and
 -- NOT part of winner election can live as plain Lua locals.
 local respawn_at         = 0      -- la.now() when respawn fires
-local lit_at             = {}     -- [senderId] = la.now() of last accepted hit
+local lit_at             = {}     -- [senderId] = la.now() of last accepted lit
 local trigger_was_active = false
 local release_at         = 0
 
@@ -203,10 +203,10 @@ return {
   -- (countdown_in) and the end screen is static.
   update = {
     [S.IN_GAME] = function(vars)
-      -- A confirmed optical hit → notify the target over radio.
+      -- A confirmed lit target → notify it over radio.
       -- Points are only awarded when the target replies R.SHONE.
-      local hit = la.shine_hit()             -- player id or nil
-      if hit then la.send(hit, MSG.LIT) end
+      local target = la.shine_lit()          -- player id or nil
+      if target then la.send(target, MSG.LIT) end
 
       -- Fire while the trigger is down and energy remains.
       local active = la.trigger_down(1)
