@@ -1,13 +1,11 @@
 #include "LightAir_TotemDriver.h"
-#include "LightAir_TotemRole.h"
 using RadioMsg::MSG_TOTEM_BEACON;
 using RadioMsg::MSG_TOTEM_ROSTER;
 
 // ----------------------------------------------------------------
-LightAir_TotemDriver::LightAir_TotemDriver(LightAir_Radio&            radio,
-                                            LightAir_TotemUICtrl&      ui,
-                                            LightAir_TotemRoleManager& roleMgr)
-    : _radio(radio), _ui(ui), _roleMgr(roleMgr),
+LightAir_TotemDriver::LightAir_TotemDriver(LightAir_Radio&       radio,
+                                            LightAir_TotemUICtrl& ui)
+    : _radio(radio), _ui(ui),
       _runner(nullptr), _lastBeacon(0), _revertDeadline(0)
 {}
 
@@ -63,13 +61,14 @@ void LightAir_TotemDriver::loop() {
             continue;
         }
 
-        // Activate runner on first 0xF1 activation reply.
-        // Two payload forms (docs/totem-behavior-handshake.md):
-        //   legacy:  [role][session][timeleft2]([configSecs])         len 4-5
-        //   TotemVM: [role][session][timeleft2][vmVer][len16][prog…]  len >= 7
+        // Activate on the first 0xF1 activation reply, which carries the
+        // whole behaviour as a TotemVM program
+        // (docs/totem-behavior-handshake.md):
+        //   [role][session][timeleft2][vmVer][len16][program…]
         if (!_runner && incomingTypeId != RadioTypeId::UNIVERSAL) {
             if (ev.packet.msgType == (RadioMsg::MSG_TOTEM_BEACON + 1) &&
-                ev.packet.payloadLen >= 4) {
+                ev.packet.payloadLen >= 7 &&
+                ev.packet.payload[4] == TotemVMDefs::VERSION) {
                 LightAir_TotemActivation info;
                 info.roleId           = ev.packet.payload[0];
                 info.sessionToken     = ev.packet.payload[1];
@@ -78,29 +77,13 @@ void LightAir_TotemDriver::loop() {
                 info.hasConfigSecs    = false;
                 info.configSecs       = 0;
 
-                LightAir_TotemRunner* runner = nullptr;
-                bool isVm = ev.packet.payloadLen >= 7 &&
-                            ev.packet.payload[4] == TotemVMDefs::VERSION;
-                if (isVm) {
-                    uint16_t progLen = (uint16_t)(ev.packet.payload[5] |
-                                                  (ev.packet.payload[6] << 8));
-                    if (progLen == (uint16_t)(ev.packet.payloadLen - 7) &&
-                        _vm.load(ev.packet.payload + 7, progLen)) {
-                        runner = &_vm;
-                    }
-                    // A malformed program leaves the totem IDLE (fail loud
-                    // on the host side, harmless here).
-                } else {
-                    const TotemRole* role = _roleMgr.findById(info.roleId);
-                    if (role && role->runner) {
-                        runner = role->runner;
-                        info.hasConfigSecs = ev.packet.payloadLen >= 5;
-                        info.configSecs    = info.hasConfigSecs ? ev.packet.payload[4] : 0;
-                    }
-                }
-
-                if (runner) {
-                    _runner = runner;
+                uint16_t progLen = (uint16_t)(ev.packet.payload[5] |
+                                              (ev.packet.payload[6] << 8));
+                // A malformed program leaves the totem IDLE (fail loud on
+                // the host side, harmless here).
+                if (progLen == (uint16_t)(ev.packet.payloadLen - 7) &&
+                    _vm.load(ev.packet.payload + 7, progLen)) {
+                    _runner = &_vm;
                     _radio.setTypeId(incomingTypeId);
                     _radio.setSessionToken(info.sessionToken);
                     _revertDeadline = (info.gameTimeLeftSecs == 0xFFFF)
@@ -112,12 +95,10 @@ void LightAir_TotemDriver::loop() {
             continue;
         }
 
-        // Forward to active runner (RSSI-aware path for the VM: the rssi
-        // guard needs the receive-side signal strength).
-        if (_runner == &_vm) {
+        // Forward to the VM (RSSI-aware: the rssi guard needs the
+        // receive-side signal strength).
+        if (_runner) {
             _vm.onPacket(ev.packet, ev.rssi, out);
-        } else if (_runner) {
-            _runner->onMessage(ev.packet, out);
         }
     }
 

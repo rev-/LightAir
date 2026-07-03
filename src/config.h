@@ -251,7 +251,7 @@ namespace GameDefaults {
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
     constexpr uint8_t  RADIO_OUT_PAYLOAD = 237;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
-    constexpr uint8_t  MAX_GAMES         = 16;   // max games registered in GameManager (native + Lua)
+    constexpr uint8_t  MAX_GAMES         = 8;    // max games registered in GameManager (= MAX_LUA_GAMES)
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
     constexpr uint8_t  RADIO_REPLY_PAYLOAD = 237; // max payload bytes per queued reply (0xF1 carries TotemVM programs)
     constexpr uint8_t  MAX_WINNER_VARS   = 2;    // max entries in a winnerVars[] table (primary + tie-breaker)
@@ -307,7 +307,7 @@ namespace TotemVMDefs {
 namespace TotemDefs {
     constexpr uint8_t MAX_TOTEM_ID    = 254;
     constexpr uint8_t MAX_TOTEMS      = 16;   // IDs 239–254
-    constexpr uint8_t MAX_TOTEM_ROLES = 32;   // max entries in LightAir_TotemRoleManager
+    constexpr uint8_t MAX_TOTEM_ROLES = 8;    // max totem roles one game declares
 
     constexpr uint8_t totemIndex(uint8_t id)   { return MAX_TOTEM_ID - id; }
     constexpr uint8_t idFromIndex(uint8_t idx) { return MAX_TOTEM_ID - idx; }

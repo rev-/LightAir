@@ -3,7 +3,6 @@
 #include "LightAir_TotemOutput.h"
 #include "../ui/totem/LightAir_TotemUICtrl.h"
 #include "../config.h"
-#include "LightAir_TotemRoleManager.h"
 #include "LightAir_TotemVM.h"
 
 // ----------------------------------------------------------------
@@ -14,27 +13,27 @@
 //   1. Periodically broadcasts MSG_TOTEM_BEACON (0xF0) via
 //      broadcastUniversal() so players can detect it by RSSI.
 //   2. Starts IDLE (typeId = UNIVERSAL): accepts all packets.
-//   3. On the first incoming 0xF1 activation reply, looks up the
-//      roleId (payload[0]) in the role registry and activates the
-//      matching runner via onActivate().
-//   4. Forwards every subsequent game-type-matching packet to
-//      runner->onMessage().  Calls runner->update() every tick.
+//   3. On the first incoming 0xF1 activation reply, loads the
+//      TotemVM program it carries and activates the interpreter
+//      (docs/totem-behavior-handshake.md).  Totems hold no game
+//      files: the whole behaviour arrives in this one packet.
+//   4. Forwards every subsequent game-type-matching packet to the
+//      VM (RSSI-aware).  Calls update() every tick.
 //   5. On MSG_TOTEM_ROSTER (universal): calls runner->onRoster(), then
 //      runner->reset() and returns to IDLE (typeId = UNIVERSAL).
 //
 // Lifecycle:
-//   LightAir_TotemDriver driver(radio, ui, roleMgr);
+//   LightAir_TotemDriver driver(radio, ui);
 //   driver.begin();
 //   loop() { driver.loop(); }
 //
-// The same physical firmware image handles every game role
-// (base, flag, CP): the correct runner is looked up at runtime.
+// The same physical firmware image handles every game role — and
+// every role not invented yet: the behaviour is data, not code.
 // ----------------------------------------------------------------
 class LightAir_TotemDriver {
 public:
-    LightAir_TotemDriver(LightAir_Radio&            radio,
-                         LightAir_TotemUICtrl&      ui,
-                         LightAir_TotemRoleManager& roleMgr);
+    LightAir_TotemDriver(LightAir_Radio&       radio,
+                         LightAir_TotemUICtrl& ui);
 
     // Calls radio.begin() and triggers the Idle background animation.
     bool begin();
@@ -44,9 +43,8 @@ public:
     void loop();
 
 private:
-    LightAir_Radio&            _radio;
-    LightAir_TotemUICtrl&      _ui;
-    LightAir_TotemRoleManager& _roleMgr;
+    LightAir_Radio&       _radio;
+    LightAir_TotemUICtrl& _ui;
 
     LightAir_TotemRunner* _runner;          // nullptr = IDLE
     LightAir_TotemVM      _vm;              // interpreter for over-the-air programs

@@ -9,7 +9,7 @@
 #include "../ui/player/LightAir_UICtrl.h"
 #include "../ui/totem/LightAir_TotemUIOutput.h"
 #include "../enlight/Enlight.h"
-#include "../totem-rulesets/TotemRoleIds.h"
+#include "../totem/TotemRoleIds.h"
 
 #ifdef ESP32
 #include <FS.h>

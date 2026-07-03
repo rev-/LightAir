@@ -2,7 +2,7 @@
 #include "../tools/EnlightCalibRoutine.h"
 #include "../tools/EnlightTestMode.h"
 #include "../nvs_config.h"
-#include "../totem-rulesets/TotemRoleIds.h"
+#include "../totem/TotemRoleIds.h"
 #include <Arduino.h>
 #include <esp_log.h>
 #include <esp_random.h>

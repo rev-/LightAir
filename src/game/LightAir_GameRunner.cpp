@@ -299,18 +299,13 @@ void LightAir_GameRunner::update() {
 //                  duration of the game)
 //   payload[2:3] = gameTimeLeft as uint16_t, big-endian, exact seconds;
 //                  0xFFFF if the ruleset has no live countdown to report
-//
-// then ONE of two forms:
-//
-//   legacy (native C++ totem roles):
-//   payload[4]   = *configSecs for this role, only if a requirement has one set
-//
-//   TotemVM (Lua-defined games; game->totemProgram provides the bytes):
 //   payload[4]   = TotemVMDefs::VERSION
 //   payload[5:6] = program length, uint16_t little-endian
-//   payload[7..] = the serialized TotemVM program
+//   payload[7..] = the serialized TotemVM program (the totem's whole
+//                  behaviour; per-role config seconds are baked into it)
 //
-// No reply is sent to non-totem senders or totems with no assigned role.
+// No reply is sent to non-totem senders, totems with no assigned role,
+// or roles the game defines no program for.
 void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& output) {
     uint8_t id = ev.packet.senderId;
     if (!TotemDefs::isTotemId(id)) return;
@@ -327,26 +322,15 @@ void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& o
             buf[3] = (uint8_t)(secs & 0xFF);
         }
 
-        // TotemVM form: the game provides a serialized program for this role.
         const TotemProgramEntry* prog =
             _game->totemProgram ? _game->totemProgram(roleId) : nullptr;
-        if (prog && prog->bytes && prog->len <= TotemVMDefs::MAX_PROG) {
-            buf[4] = TotemVMDefs::VERSION;
-            buf[5] = (uint8_t)(prog->len & 0xFF);
-            buf[6] = (uint8_t)(prog->len >> 8);
-            memcpy(buf + 7, prog->bytes, prog->len);
-            bufLen = 7 + prog->len;
-        } else if (_game->totemRequirements) {
-            // Legacy form: include configSecs if any requirement has one.
-            for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
-                const LightAir_TotemRequirement& req = _game->totemRequirements[r];
-                if (req.roleId == roleId && req.configSecs != nullptr) {
-                    buf[4] = (uint8_t)*req.configSecs;
-                    bufLen = 5;
-                    break;
-                }
-            }
-        }
+        if (!prog || !prog->bytes || prog->len > TotemVMDefs::MAX_PROG)
+            break;                       // no behaviour to send for this role
+        buf[4] = TotemVMDefs::VERSION;
+        buf[5] = (uint8_t)(prog->len & 0xFF);
+        buf[6] = (uint8_t)(prog->len >> 8);
+        memcpy(buf + 7, prog->bytes, prog->len);
+        bufLen = (uint8_t)(7 + prog->len);
         output.radio.replyWithPayload(ev.packet, buf, bufLen);
         break;
     }

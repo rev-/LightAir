@@ -13,7 +13,8 @@
 //   LightAir_GameRunner   runner;
 //
 //   // --- setup() ---
-//   registerAllGames(manager);         // defined in rulesets/AllGames.cpp
+//   gameStore.begin();                    // mount LittleFS + seed stock games
+//   gameStore.registerLuaGames(manager);  // load /games/*.lua
 //   LightAir_GameSetupMenu setupMenu(manager, runner, ...);
 //   if (setupMenu.run() == MenuResult::Confirmed)
 //       runner.begin(setupMenu.selectedGame(), displayCtrl, input, radio);

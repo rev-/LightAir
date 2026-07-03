@@ -31,9 +31,9 @@
 
 // ----------------------------------------------------------------
 // Enlight global pointer
-// Required by every ruleset translation unit.  Set to the real
-// Enlight instance on the player path; left nullptr on the totem
-// path (player ruleset code is compiled in but never called).
+// Required by the Lua game binding (la.shine verbs).  Set to the
+// real Enlight instance on the player path; left nullptr on the
+// totem path (the verbs guard against it).
 // ----------------------------------------------------------------
 Enlight* enlightPtr = nullptr;
 
@@ -47,11 +47,10 @@ static LightAir_Radio*      radio = nullptr;
 // TOTEM PATH — objects are trivially constructed at global scope;
 // hardware init (begin() calls) only runs when hw == TOTEM.
 // ================================================================
-static LightAir_TotemRGB_HW      totemRgb;
-static LightAir_LEDStrip_HW      totemStrip;
-static LightAir_TotemUICtrl      totemUi(totemRgb, totemStrip);
-static LightAir_TotemRoleManager roleMgr;
-static LightAir_TotemDriver*     driver = nullptr;
+static LightAir_TotemRGB_HW  totemRgb;
+static LightAir_LEDStrip_HW  totemStrip;
+static LightAir_TotemUICtrl  totemUi(totemRgb, totemStrip);
+static LightAir_TotemDriver* driver = nullptr;
 
 // ================================================================
 // PLAYER PATH — objects are trivially constructed at global scope;
@@ -124,14 +123,13 @@ void _setup() {
 
     if (hw == DeviceHardware::TOTEM) {
         // ------------------------------------------------------------
-        // TOTEM PATH
+        // TOTEM PATH — no game files, no role registry: behaviour
+        // arrives as a TotemVM program in the activation handshake.
         // ------------------------------------------------------------
-        registerAllTotems(roleMgr);
-
         static RadioConfig radioCfg;
         radio  = new LightAir_Radio(transport, cfg.id,
                                     RadioToken::UNSET, 0, 0, radioCfg);
-        driver = new LightAir_TotemDriver(*radio, totemUi, roleMgr);
+        driver = new LightAir_TotemDriver(*radio, totemUi);
 
         totemRgb.begin(TOTEM_PIN_COMM, TOTEM_PIN_R, TOTEM_PIN_G, TOTEM_PIN_B);
         totemStrip.begin(TOTEM_PIN_DATA, TOTEM_NUM_LEDS);
@@ -183,11 +181,10 @@ void _setup() {
             while (true) delay(1000);
         }
 
-        // Games: Lua files first (they take precedence on typeId), then the
-        // native C++ rulesets fill whatever the filesystem doesn't provide.
+        // Games are .lua files on LittleFS (seeded from the embedded
+        // bundle on first boot); there are no firmware-coded games.
         if (gameStore.begin())
             gameStore.registerLuaGames(manager);
-        registerAllGames(manager);
         LightAir_GameSetupMenu menu(manager, runner,
                                     rawDisplay, input,
                                     InputDefaults::KEYPAD_ID,

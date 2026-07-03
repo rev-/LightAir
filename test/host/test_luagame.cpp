@@ -218,5 +218,5 @@ int main() {
 }
 
 // avoid dragging TotemRoleIds include ordering issues into the test
-#include "totem-rulesets/TotemRoleIds.h"
+#include "totem/TotemRoleIds.h"
 uint8_t TotemRoleId_BONUS() { return TotemRoleId::BONUS; }

@@ -48,12 +48,7 @@
 #include "ui/totem/LightAir_TotemUIOutput.h"
 #include "ui/totem/LightAir_TotemUICtrl.h"
 
-// Totem driver and role registry
+// Totem driver (games arrive as TotemVM programs over the radio)
 #include "totem/LightAir_TotemDriver.h"
-#include "totem/LightAir_TotemRole.h"
-#include "totem/LightAir_TotemRoleManager.h"
-#include "totem/AllTotems.h"
-#include "totem-rulesets/TotemRoleIds.h"
-
-// Rulesets
-#include "rulesets/AllGames.h"
+#include "totem/LightAir_TotemVM.h"
+#include "totem/TotemRoleIds.h"

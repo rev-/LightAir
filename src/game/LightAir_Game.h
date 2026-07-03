@@ -89,69 +89,12 @@ struct ScoreTable {
 //                    nullptr = skip.
 //
 // ----------------------------------------------------------------
-// Minimal example — Free for All:
-//
-//   // --- rulesets/GameFreeForAll.cpp ---
-//   #include <LightAir.h>
-//
-//   enum State : uint8_t { IN_GAME, OUT_GAME };
-//   enum Msg   : uint8_t { MSG_HIT = 0x10 };
-//
-//   static int     lives = 3, score = 0;
-//   static uint8_t gState;
-//   extern Enlight enlight;   // defined in sketch
-//
-//   static const ConfigVar configVars[] = {
-//       { "Lives", &lives, 1, 10, 1 },
-//   };
-//   static const MonitorVar monitorVars[] = {
-//       MonitorVar::Int("Lives", &lives, 1<<IN_GAME, ICON_LIFE,  0, 0),
-//       MonitorVar::Int("Score", &score, 1<<IN_GAME, ICON_SCORE, 1, 0),
-//   };
-//
-//   static bool gotHit(const InputReport&, const RadioReport& r) {
-//       for (uint8_t i = 0; i < r.count; i++)
-//           if (r.events[i].type == RadioEventType::MessageReceived &&
-//               r.events[i].packet.msgType == MSG_HIT) return true;
-//       return false;
-//   }
-//   static const StateRule rules[] = {
-//       { IN_GAME, gotHit,   OUT_GAME, nullptr },
-//       { OUT_GAME, nullptr, IN_GAME,  nullptr },
-//   };
-//
-//   static void doInGame(const InputReport& inp, const RadioReport&,
-//                        LightAir_DisplayCtrl&, RadioOutput& out) {
-//       for (uint8_t i = 0; i < inp.buttonCount; i++)
-//           if (inp.buttons[i].id == InputDefaults::TRIG_1_ID &&
-//               inp.buttons[i].state == ButtonState::RELEASED) {
-//               enlight.run();
-//               out.broadcast(MSG_HIT);
-//           }
-//   }
-//   static const StateBehavior behaviors[] = {
-//       { IN_GAME, doInGame }, { OUT_GAME, nullptr },
-//   };
-//
-//   const LightAir_Game game_ffa = {
-//       .typeId         = GameTypeId::FREE_FOR_ALL,
-//       .name           = "Free for All",
-//       .configVars     = configVars,  .configCount    = 1,
-//       .monitorVars    = monitorVars, .monitorCount   = 2,
-//       .rules          = rules,       .ruleCount      = 2,
-//       .behaviors      = behaviors,   .behaviorCount  = 2,
-//       .currentState   = &gState,     .initialState   = IN_GAME,
-//       .onBegin        = nullptr,
-//       .winnerVars     = winnerVars,  .winnerVarCount = 2,
-//       .scoringState   = GAME_END,
-//       .scoreMsgType   = MSG_SCORE_COLLECT,
-//   };
-//
-//   // --- rulesets/AllGames.cpp ---
-//   extern const LightAir_Game game_ffa;
-//   void registerAllGames(LightAir_GameManager& mgr) {
-//       mgr.registerGame(game_ffa);
-//   }
+// Games are not written in C++: every ruleset is a .lua file (see
+// games/*.lua and docs/lua-games-design.md).  LightAir_LuaGame loads
+// a file and synthesizes this descriptor from it — the ConfigVar /
+// MonitorVar / WinnerVar tables point into its variable slots and the
+// callbacks are trampolines into the game's Lua handlers.  GameRunner
+// consumes the descriptor without knowing Lua exists.
 // ----------------------------------------------------------------
 struct LightAir_Game {
     uint16_t             typeId;

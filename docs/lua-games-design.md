@@ -364,7 +364,7 @@ Modified:
 | `LightAir_GameManager` | registry entries become `{name, typeId, native* or path}`; add lazy `load(idx)` — Lua descriptors are synthesized on selection, not at boot |
 | `LightAir_GameSetupMenu` | game list from manager entries (manifest names); call `load()` on selection before S4; append CRC16 to the config blob and verify on apply; new Settings entry launching `GameFileServer` |
 | `LightAir_GameRunner` (beacon intercept only) | 0xF1 reply gains `[vmVersion][progLen][program]` for Lua-defined roles; program bytes come from the Lua binding's serializer |
-| `LightAir_TotemDriver` / `LightAir_TotemUICtrl` | route VM-form 0xF1 payloads to `LightAir_TotemVM` (native role manager stays as fallback during migration); `Control` effect gains the slot-based arg form |
+| `LightAir_TotemDriver` / `LightAir_TotemUICtrl` | 0xF1 activation is VM-form only (the role manager and native runners are gone); `Control` effect gains the slot-based arg form |
 | 0xF0 beacon / `LightAir_GameSetupMenu` S4c | beacon advertises `[fw api, vmVersion]`; totem-assignment screen checks compatibility at setup time |
 | `sketches/LightAir/LightAir.ino` | mount FS, construct store/engine, hand them to menu (player path) and driver (totem path) |
 | `src/config.h` | `namespace LuaDefaults { MAX_VARS, MAX_RULES, MAX_MSG_RULES, GAMES_DIR, INSTR_BUDGET, ... }` |
@@ -393,5 +393,6 @@ RAM by the allocator fallback ordering if latency ever shows up in profiling.
    backgrounds, flag events), KingOfHill, Outflow, Upkeep; grow verbs only as
    patterns repeat.
 4. **Exchange** — `GameFileServer`, CRC guard in the config blob.
-5. **Cleanup** — delete `src/rulesets/` and `src/totem-rulesets/` natives,
-   drop `AllGames.cpp`/`AllTotems.cpp` registration.
+5. **Cleanup** (done) — `src/rulesets/`, `src/totem-rulesets/` and the
+   totem role-manager infrastructure are deleted; games exist only as
+   .lua files and totem behaviour only as TotemVM programs.
