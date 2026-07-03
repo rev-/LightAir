@@ -9,3 +9,5 @@ static inline esp_err_t nvs_set_u8(nvs_handle_t, const char*, uint8_t) { return 
 static inline esp_err_t nvs_get_u8(nvs_handle_t, const char*, uint8_t*) { return 0; }
 static inline esp_err_t nvs_commit(nvs_handle_t) { return 0; }
 static inline void nvs_close(nvs_handle_t) {}
+static inline esp_err_t nvs_set_u32(nvs_handle_t, const char*, uint32_t) { return 0; }
+static inline esp_err_t nvs_get_u32(nvs_handle_t, const char*, uint32_t*) { return 0; }

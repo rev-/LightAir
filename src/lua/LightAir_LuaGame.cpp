@@ -14,6 +14,7 @@
 #ifdef ESP32
 #include <FS.h>
 #include <LittleFS.h>
+#include <nvs.h>
 #endif
 
 // Enlight singleton, owned by the sketch (player path only).
@@ -610,7 +611,8 @@ typedef void (*ActFn)(LightAir_DisplayCtrl&, GameOutput&);
 
 #define B(n) &LuaGameTramps::begin<n>
 static const BeginFn kBeginTramps[LuaDefaults::MAX_LUA_GAMES] = {
-    B(0), B(1), B(2), B(3), B(4), B(5), B(6), B(7)
+    B(0), B(1), B(2), B(3), B(4),  B(5),  B(6), B(7),
+    B(8), B(9), B(10), B(11)
 };
 #undef B
 #define W(n) &LuaGameTramps::ruleWhen<n>
@@ -634,12 +636,74 @@ const TotemProgramEntry* LightAir_LuaGame::progTramp(uint8_t roleId) {
  *   RUNTIME DISPATCH
  * ========================================================= */
 
-void LightAir_LuaGame::luaFault(const char* where) {
-    Log.errorln("LuaGame[%s] fault in %s: %s", _name, where, _engine.lastError());
-    if (s_disp) s_disp->showMessage("Lua error!", 5000);
-    // Contain: force the game into its scoring state so the match ends
-    // cleanly instead of the device wedging mid-game.
-    if (_game.scoringState != 255) _state = _game.scoringState;
+// Policy: log, notify, continue.
+//
+// The failed callback is a no-op for this event; both the Lua state and all
+// C++ state are consistent after the pcall, so the game simply proceeds
+// from the previous condition on the next tick.  The one exception is
+// on_begin — a game that cannot establish its starting condition refuses
+// to play (forced straight into scoring_state).
+//
+// Everything is counted in _faults (per site + total + last message) so a
+// stricter future policy — end the match, prompt "return to boxes",
+// per-site circuit breaker — only has to be added in maybeEscalate().
+static const char* const kFaultSiteNames[] = {
+    "on_begin", "rule.when", "rule.action", "update", "on_message",
+    "on_reply", "on_reply.timeout", "on_score_announce", "on_end",
+};
+
+static constexpr uint32_t kFaultNoticeCooldownMs = 10000;
+
+void LightAir_LuaGame::luaFault(FaultSite site) {
+    _faults.total++;
+    _faults.perSite[(uint8_t)site]++;
+    _faults.lastSite = site;
+    _faults.lastAtMs = millis();
+    strncpy(_faults.lastError, _engine.lastError(), sizeof(_faults.lastError) - 1);
+    _faults.lastError[sizeof(_faults.lastError) - 1] = 0;
+
+    Log.errorln("LuaGame[%s] fault #%d in %s: %s",
+                _name, _faults.total,
+                kFaultSiteNames[(uint8_t)site], _faults.lastError);
+
+    // Tray notice, throttled: players should know the game file is buggy,
+    // but a hot-path fault must not repaint the tray 100x per second.
+    uint32_t now = millis();
+    if (s_disp && (now - _lastFaultNoticeAt >= kFaultNoticeCooldownMs ||
+                   _lastFaultNoticeAt == 0)) {
+        _lastFaultNoticeAt = now;
+        s_disp->showMessage("Lua error!", 5000);
+    }
+
+    maybeEscalate(site);
+}
+
+// The single hook for any future stricter policy.  Current policy: only a
+// failed on_begin ends the match (the game never started properly).
+// Everything needed to go further is already accounted in _faults, e.g.:
+//   if (_faults.total > 50) { _state = _game.scoringState; }        // end
+//   if (_faults.perSite[(uint8_t)site] > 8) { /* disable site */ }  // breaker
+void LightAir_LuaGame::maybeEscalate(FaultSite site) {
+    if (site == FaultSite::Begin && _game.scoringState != 255)
+        _state = _game.scoringState;
+}
+
+// Persist the lifetime fault total to NVS so field diagnostics survive the
+// end-of-match reboot.  Called from doEnd() (the A+B restart path).
+void LightAir_LuaGame::persistFaultTotal() {
+#ifdef ESP32
+    if (_faults.total == 0) return;
+    nvs_handle_t h;
+    if (nvs_open("lightair", NVS_READWRITE, &h) != ESP_OK) return;
+    uint32_t lifetime = 0;
+    nvs_get_u32(h, "lua_faults", &lifetime);
+    lifetime += _faults.total;
+    nvs_set_u32(h, "lua_faults", lifetime);
+    nvs_commit(h);
+    nvs_close(h);
+    Log.infoln("LuaGame[%s]: %d fault(s) this match, %d lifetime",
+               _name, _faults.total, lifetime);
+#endif
 }
 
 void LightAir_LuaGame::doBegin(LightAir_DisplayCtrl& d, LightAir_Radio& r,
@@ -650,11 +714,13 @@ void LightAir_LuaGame::doBegin(LightAir_DisplayCtrl& d, LightAir_Radio& r,
     s_runner = &gr;
     s_out    = nullptr;
     _lastSecTick = millis();
+    memset(&_faults, 0, sizeof(_faults));
+    _lastFaultNoticeAt = 0;
     if (_beginRef == LUA_NOREF) return;
     lua_State* L = _engine.L();
     lua_rawgeti(L, LUA_REGISTRYINDEX, _beginRef);
     pushVarsProxy();
-    if (!_engine.pcall(1, 0)) luaFault("on_begin");
+    if (!_engine.pcall(1, 0)) luaFault(FaultSite::Begin);
 }
 
 bool LightAir_LuaGame::doRuleWhen(uint8_t idx) {
@@ -662,7 +728,7 @@ bool LightAir_LuaGame::doRuleWhen(uint8_t idx) {
     lua_State* L = _engine.L();
     lua_rawgeti(L, LUA_REGISTRYINDEX, _ruleWhenRef[idx]);
     pushVarsProxy();
-    if (!_engine.pcall(1, 1)) { luaFault("rule.when"); return false; }
+    if (!_engine.pcall(1, 1)) { luaFault(FaultSite::RuleWhen); return false; }
     bool ok = lua_toboolean(L, -1);
     lua_pop(L, 1);
     return ok;
@@ -673,7 +739,7 @@ void LightAir_LuaGame::doRuleAct(uint8_t idx) {
     lua_State* L = _engine.L();
     lua_rawgeti(L, LUA_REGISTRYINDEX, _ruleActRef[idx]);
     pushVarsProxy();
-    if (!_engine.pcall(1, 0)) luaFault("rule.action");
+    if (!_engine.pcall(1, 0)) luaFault(FaultSite::RuleAction);
 }
 
 void LightAir_LuaGame::tickCountdowns() {
@@ -694,7 +760,7 @@ void LightAir_LuaGame::doBehavior() {
         lua_State* L = _engine.L();
         lua_rawgeti(L, LUA_REGISTRYINDEX, _updateRef[_state]);
         pushVarsProxy();
-        if (!_engine.pcall(1, 0)) luaFault("update");
+        if (!_engine.pcall(1, 0)) luaFault(FaultSite::Update);
     }
     _engine.gcStep();                    // collect in the loop's slack window
 }
@@ -710,7 +776,7 @@ void LightAir_LuaGame::doMessage(const RadioPacket& pkt, GameOutput& out) {
             pushVarsProxy();
             pushPkt(0, &pkt, 0);
             if (!_engine.pcall(2, 1)) {
-                luaFault("on_message");
+                luaFault(FaultSite::Message);
             } else {
                 if (lua_isinteger(L, -1)) sub = (uint8_t)lua_tointeger(L, -1);
                 lua_pop(L, 1);
@@ -739,7 +805,7 @@ void LightAir_LuaGame::doReply(const RadioPacket& reply, const RadioPacket& orig
     pushVarsProxy();
     pushPkt(1, &reply, 0);
     pushPkt(2, &orig, 0);
-    if (!_engine.pcall(3, 0)) luaFault("on_reply");
+    if (!_engine.pcall(3, 0)) luaFault(FaultSite::Reply);
     s_pkts[1] = s_pkts[2] = nullptr;
 }
 
@@ -755,7 +821,7 @@ void LightAir_LuaGame::doTimeout(const RadioPacket& orig) {
     if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
     pushVarsProxy();
     pushPkt(2, &orig, 0);
-    if (!_engine.pcall(2, 0)) luaFault("on_reply.timeout");
+    if (!_engine.pcall(2, 0)) luaFault(FaultSite::Timeout);
     s_pkts[2] = nullptr;
 }
 
@@ -783,15 +849,17 @@ void LightAir_LuaGame::doScoreAnnounce(const ScoreTable& t) {
         lua_setfield(L, -2, "vals");
         lua_rawseti(L, -2, ++n);
     }
-    if (!_engine.pcall(1, 0)) luaFault("on_score_announce");
+    if (!_engine.pcall(1, 0)) luaFault(FaultSite::Score);
 }
 
 void LightAir_LuaGame::doEnd() {
-    if (_endRef == LUA_NOREF) return;
-    lua_State* L = _engine.L();
-    lua_rawgeti(L, LUA_REGISTRYINDEX, _endRef);
-    pushVarsProxy();
-    if (!_engine.pcall(1, 0)) luaFault("on_end");
+    if (_endRef != LUA_NOREF) {
+        lua_State* L = _engine.L();
+        lua_rawgeti(L, LUA_REGISTRYINDEX, _endRef);
+        pushVarsProxy();
+        if (!_engine.pcall(1, 0)) luaFault(FaultSite::End);
+    }
+    persistFaultTotal();
 }
 
 const TotemProgramEntry* LightAir_LuaGame::patchedProgram(uint8_t roleId) {

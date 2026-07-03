@@ -301,9 +301,11 @@ int l_traceback(lua_State* L) {
 ```
 
 On error, `lua_pcall` leaves exactly one value (the handler's result) on
-top; we log it, show `"Lua: <first line>"` on the tray, and force the game
-into `scoring_state` — a broken game file must never brick a device
-mid-match.
+top; we count it per call-site (`faultStats()`), log it with the traceback,
+show a throttled tray notice, and **continue the match from the previous
+condition** — pcall guarantees the Lua and C++ state stay consistent, so a
+broken handler costs one missed event, never the device or the match.  Only
+a failed `on_begin` is fatal (the game refuses to start).
 
 Runaway loops are caught with a count hook installed before every pcall:
 

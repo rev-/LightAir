@@ -124,9 +124,18 @@ guaranteed headroom). Games written to the "no tables per tick" style produce
 almost no garbage; `lit_at[sender] = now` style bookkeeping is fine.
 
 Robustness: every crossing is a `lua_pcall` with a `lua_sethook` instruction
-budget (~200 k instructions). An error or runaway loop shows the message on
-the tray, logs it, and forces the game into `scoring_state` instead of
-freezing the device mid-match.
+budget (~200 k instructions). The policy is **log, notify, continue**: an
+error or runaway loop makes the failed callback a no-op for that event, is
+logged with a traceback, shows a throttled "Lua error!" tray notice, and the
+match proceeds from the previous condition — the pcall guarantees both Lua
+and C++ state stay consistent (effects a handler applied *before* failing
+stand, so write handlers with the important mutation last). Faults are
+counted per call-site in `LightAir_LuaGame::faultStats()` and the lifetime
+total is persisted to NVS at match end, so a stricter policy (ending the
+game, a "return to boxes" prompt, per-site circuit breakers) can be layered
+on later in one place (`maybeEscalate()`). The single fatal case is a
+failed `on_begin`: a game that cannot establish its starting condition
+refuses to play.
 
 ---
 

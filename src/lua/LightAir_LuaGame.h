@@ -41,6 +41,35 @@ public:
     uint16_t             typeId()     const { return _game.typeId; }
     bool                 loaded()     const { return _loaded; }
 
+    // ---- Fault accounting (policy: log, notify, continue) ----
+    //
+    // A runtime Lua error never ends the match: the failed callback is a
+    // no-op for that event and the game continues from the previous
+    // condition (any effects the handler applied before failing stand —
+    // write handlers so the important mutation comes last).  The single
+    // exception is on_begin: a game that cannot establish its starting
+    // condition refuses to play (forced into scoring_state immediately).
+    //
+    // Every fault is logged and counted here, per call-site kind, so a
+    // stricter policy (end the game, "return to boxes" prompt, per-site
+    // circuit breaker, ...) can be layered on later by reading faultStats()
+    // — see maybeEscalate() in the .cpp, the single place to put it.
+    // The lifetime total is additionally persisted to NVS ("lightair" /
+    // "lua_faults") when the match ends.
+    enum class FaultSite : uint8_t {
+        Begin, RuleWhen, RuleAction, Update, Message, Reply, Timeout,
+        Score, End,
+        Count
+    };
+    struct FaultStats {
+        uint16_t  total;
+        uint16_t  perSite[(uint8_t)FaultSite::Count];
+        uint32_t  lastAtMs;                 // millis() of the last fault
+        FaultSite lastSite;
+        char      lastError[120];           // message + truncated traceback
+    };
+    const FaultStats& faultStats() const { return _faults; }
+
     // ---- Static registry (bounded pool; instances register on load) ----
     static uint8_t         instanceCount();
     static LightAir_LuaGame* instance(uint8_t i);
@@ -140,7 +169,12 @@ private:
     void doScoreAnnounce(const ScoreTable& t);
     void doEnd();
     void tickCountdowns();
-    void luaFault(const char* where);        // error containment
+    void luaFault(FaultSite site);           // count + log + throttled notice
+    void maybeEscalate(FaultSite site);      // future-policy hook (see .cpp)
+    void persistFaultTotal();                // NVS lifetime counter (match end)
+
+    FaultStats _faults = {};
+    uint32_t   _lastFaultNoticeAt = 0;       // tray-notice throttle
     bool pushHandler2(int tabRef, int key1, int key2); // tab[key1][key2] → stack
     void pushVarsProxy();
     void pushPkt(uint8_t which, const RadioPacket* pkt, int8_t rssi);

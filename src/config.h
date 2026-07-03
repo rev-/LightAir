@@ -251,7 +251,7 @@ namespace GameDefaults {
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
     constexpr uint8_t  RADIO_OUT_PAYLOAD = 237;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
-    constexpr uint8_t  MAX_GAMES         = 8;    // max games registered in GameManager (= MAX_LUA_GAMES)
+    constexpr uint8_t  MAX_GAMES         = 12;   // max games registered in GameManager (= MAX_LUA_GAMES)
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
     constexpr uint8_t  RADIO_REPLY_PAYLOAD = 237; // max payload bytes per queued reply (0xF1 carries TotemVM programs)
     constexpr uint8_t  MAX_WINNER_VARS   = 2;    // max entries in a winnerVars[] table (primary + tie-breaker)
@@ -266,7 +266,7 @@ namespace GameDefaults {
 // ---------------------------------------------------------------
 namespace LuaDefaults {
     constexpr uint8_t  API_VERSION     = 1;      // game-file `api` contract version
-    constexpr uint8_t  MAX_LUA_GAMES   = 8;      // .lua games loaded simultaneously
+    constexpr uint8_t  MAX_LUA_GAMES   = 12;     // .lua games loaded simultaneously (7 stock + room for uploads)
     constexpr uint8_t  MAX_VARS        = 24;     // int + text slots per game
     constexpr uint8_t  MAX_TEXT_LEN    = 16;     // capacity of one text slot (incl. NUL)
     constexpr uint8_t  MAX_VAR_ID      = 20;     // max chars of a var/config id

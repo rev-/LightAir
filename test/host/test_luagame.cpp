@@ -213,6 +213,64 @@ int main() {
     const TotemProgramEntry* bonus = game.totemProgram(TotemRoleId_BONUS());
     CHECK(bonus && bonus->len > 0 && bonus->len <= 225, "bonus program provided");
 
+    // ---- 10. Fault policy: log, notify, continue ----
+    {
+        LightAir_LuaGame* faulty = new LightAir_LuaGame();
+        if (!faulty->load("test/host/fixtures/faulty.lua")) {
+            CHECK(false, "faulty fixture loads");
+            return 1;
+        }
+        const LightAir_Game& fg = faulty->descriptor();
+        *fg.currentState = fg.initialState;
+        fg.onBegin(disp, radio, &ui, runner);
+        CHECK(faulty->faultStats().total == 0, "clean begin, zero faults");
+
+        // The update handler errors every tick: the game must stay in its
+        // state and keep counting, never ending the match.
+        for (int t = 0; t < 5; t++) {
+            out = GameOutput();
+            fg.behaviors[0].onUpdate(inputs, rr, disp, out);
+        }
+        CHECK(*fg.currentState == fg.initialState, "faults do not change state");
+        CHECK(faulty->faultStats().total == 5, "every fault counted");
+        CHECK(faulty->faultStats().perSite[(uint8_t)LightAir_LuaGame::FaultSite::Update] == 5,
+              "counted per site");
+        CHECK(faulty->faultStats().lastError[0] != 0, "last error recorded");
+
+        // A handler that dies after a partial mutation: the pre-error
+        // effect stands (documented caveat) and the empty reply still
+        // goes out so the sender never times out.
+        int* flives = nullptr;
+        for (uint8_t i = 0; i < fg.monitorCount; i++)
+            if (strcmp(fg.monitorVars[i].name, "lives") == 0)
+                flives = fg.monitorVars[i].asInt;
+        CHECK(flives && *flives == 3, "fixture lives start at 3");
+        out = GameOutput();
+        fg.directRadioRules[0].onReceive(lit, disp, out);
+        CHECK(*flives == 2, "partial effect before the error stands");
+        CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payloadLen == 0,
+              "empty reply still sent after handler fault");
+        CHECK(faulty->faultStats().perSite[(uint8_t)LightAir_LuaGame::FaultSite::Message] == 1,
+              "message fault counted");
+
+        // The healthy parts keep working: the transition rule still fires.
+        *flives = 0;
+        CHECK(fg.rules[0].condition(inputs, rr), "healthy rule still evaluates");
+
+        // on_begin failure is the one fatal case: refuse to play.
+        LightAir_LuaGame* fb = new LightAir_LuaGame();
+        if (!fb->load("test/host/fixtures/faulty_begin.lua")) {
+            CHECK(false, "begin fixture loads");
+            return 1;
+        }
+        const LightAir_Game& bg = fb->descriptor();
+        *bg.currentState = bg.initialState;
+        bg.onBegin(disp, radio, &ui, runner);
+        CHECK(*bg.currentState == bg.scoringState, "failed on_begin refuses to play");
+        CHECK(fb->faultStats().perSite[(uint8_t)LightAir_LuaGame::FaultSite::Begin] == 1,
+              "begin fault counted");
+    }
+
     printf(failures == 0 ? "\nLUAGAME HOST TESTS PASS\n" : "\n%d FAILURES\n", failures);
     return failures == 0 ? 0 : 1;
 }

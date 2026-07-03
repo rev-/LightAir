@@ -7,9 +7,13 @@
 //
 //   begin()            mounts LittleFS (formatting a blank partition)
 //                      and seeds the embedded stock games into
-//                      /games when missing or size-changed, so a
-//                      freshly flashed device is playable without
-//                      the HTTP upload path.
+//                      /games whenever the on-flash copy differs
+//                      byte-for-byte from the one compiled into the
+//                      firmware — a freshly flashed device is
+//                      playable with no upload step, and a firmware
+//                      update refreshes its stock games.  Stock
+//                      filenames are firmware-owned; custom games
+//                      live under their own filenames.
 //
 //   registerLuaGames() scans /games/*.lua, loads each file into a
 //                      heap-allocated LightAir_LuaGame and registers

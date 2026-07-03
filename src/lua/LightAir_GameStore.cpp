@@ -26,19 +26,30 @@ bool LightAir_GameStore::begin() {
     return true;
 }
 
+// True when the file at path exists and its content equals data[0..len).
+static bool fileMatches(const char* path, const unsigned char* data, size_t len) {
+    File f = LittleFS.open(path, "r");
+    if (!f) return false;
+    if ((size_t)f.size() != len) { f.close(); return false; }
+    uint8_t buf[256];
+    size_t  off = 0;
+    while (off < len) {
+        size_t chunk = (len - off < sizeof(buf)) ? (len - off) : sizeof(buf);
+        if (f.read(buf, chunk) != chunk) { f.close(); return false; }
+        if (memcmp(buf, data + off, chunk) != 0) { f.close(); return false; }
+        off += chunk;
+    }
+    f.close();
+    return true;
+}
+
 void LightAir_GameStore::seedDefaults() {
     for (const EmbeddedGameFile& ef : kEmbeddedGames) {
-        bool write = true;
-        File existing = LittleFS.open(ef.path, "r");
-        if (existing) {
-            // Cheap freshness check: same size = same shipped version.
-            // User-edited files of a different size are overwritten by the
-            // stock copy only if the size differs — uploading customised
-            // games under a new filename is the supported path.
-            write = ((size_t)existing.size() != ef.len);
-            existing.close();
-        }
-        if (!write) continue;
+        // Content-exact check: stock filenames are firmware-owned — any
+        // difference (new firmware version OR a local edit) restores the
+        // shipped copy.  Customised games belong under a new filename,
+        // which seeding never touches.
+        if (fileMatches(ef.path, ef.data, ef.len)) continue;
         File f = LittleFS.open(ef.path, "w");
         if (!f) {
             Log.errorln("GameStore: cannot write %s", ef.path);
