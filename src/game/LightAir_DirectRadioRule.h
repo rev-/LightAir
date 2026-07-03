@@ -44,6 +44,12 @@ struct GameOutput;
 //   };
 // ----------------------------------------------------------------
 struct DirectRadioRule {
+    // Sentinel for replySubType: the rule's onReceive callback queues its
+    // own reply (with a runtime-decided sub-type); GameRunner must NOT send
+    // the automatic reply.  Used by the Lua binding, whose handlers return
+    // the sub-type dynamically.
+    static constexpr uint8_t DYNAMIC_REPLY = 0xFF;
+
     uint8_t fromState;    // state in which this rule is active
     uint8_t msgType;      // incoming even msgType to match
 

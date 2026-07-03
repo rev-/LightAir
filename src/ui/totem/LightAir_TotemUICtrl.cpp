@@ -142,7 +142,24 @@ void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
 
         case TotemUIEvent::Control: {
             uint8_t r, g, b;
-            if (cmd.r == 0xFF) {
+            if (cmd.r == 0xFE) {
+                // Slot-based (TotemVM): cmd.g = owner slot 0-15.
+                // Slots 0/1 are teams; 2+ map to player id = slot+1.
+                // Keeps the colour policy in the renderer so the VM
+                // needs no arithmetic (docs/totem-behavior-handshake.md).
+                uint8_t slot = cmd.g;
+                if (slot < 2) {
+                    r = TeamColors::kColors[slot][0];
+                    g = TeamColors::kColors[slot][1];
+                    b = TeamColors::kColors[slot][2];
+                } else {
+                    uint8_t pid = (uint8_t)(slot + 1);
+                    if (pid >= PlayerDefs::MAX_PLAYER_ID) pid = 0;
+                    r = PlayerColors::kColors[pid][0];
+                    g = PlayerColors::kColors[pid][1];
+                    b = PlayerColors::kColors[pid][2];
+                }
+            } else if (cmd.r == 0xFF) {
                 // Player-based: look up by player ID in cmd.g
                 uint8_t pid = (cmd.g < PlayerDefs::MAX_PLAYER_ID) ? cmd.g : 0;
                 r = PlayerColors::kColors[pid][0];

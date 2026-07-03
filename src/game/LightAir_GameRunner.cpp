@@ -196,7 +196,10 @@ void LightAir_GameRunner::update() {
             if (r.condition && !r.condition(ev.packet)) continue;
 
             if (r.onReceive) r.onReceive(ev.packet, *_display, output);
-            output.radio.reply(ev.packet, r.replySubType);
+            // DYNAMIC_REPLY: the callback queued its own reply with a
+            // runtime-decided sub-type (Lua handlers return it).
+            if (r.replySubType != DirectRadioRule::DYNAMIC_REPLY)
+                output.radio.reply(ev.packet, r.replySubType);
             matched = true;
             break;
         }
@@ -296,7 +299,17 @@ void LightAir_GameRunner::update() {
 //                  duration of the game)
 //   payload[2:3] = gameTimeLeft as uint16_t, big-endian, exact seconds;
 //                  0xFFFF if the ruleset has no live countdown to report
+//
+// then ONE of two forms:
+//
+//   legacy (native C++ totem roles):
 //   payload[4]   = *configSecs for this role, only if a requirement has one set
+//
+//   TotemVM (Lua-defined games; game->totemProgram provides the bytes):
+//   payload[4]   = TotemVMDefs::VERSION
+//   payload[5:6] = program length, uint16_t little-endian
+//   payload[7..] = the serialized TotemVM program
+//
 // No reply is sent to non-totem senders or totems with no assigned role.
 void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& output) {
     uint8_t id = ev.packet.senderId;
@@ -305,7 +318,7 @@ void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& o
     for (uint8_t t = 0; t < _totemCount; t++) {
         if (_totems[t].id != id) continue;
         uint8_t roleId = _totems[t].roleId;
-        uint8_t buf[5] = { roleId, _radio->sessionToken(), 0xFF, 0xFF, 0 };
+        uint8_t buf[7 + TotemVMDefs::MAX_PROG] = { roleId, _radio->sessionToken(), 0xFF, 0xFF };
         uint8_t bufLen = 4;
 
         if (_game->gameTimeLeft) {
@@ -314,8 +327,17 @@ void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& o
             buf[3] = (uint8_t)(secs & 0xFF);
         }
 
-        // Include configSecs if any requirement for this role has one.
-        if (_game->totemRequirements) {
+        // TotemVM form: the game provides a serialized program for this role.
+        const TotemProgramEntry* prog =
+            _game->totemProgram ? _game->totemProgram(roleId) : nullptr;
+        if (prog && prog->bytes && prog->len <= TotemVMDefs::MAX_PROG) {
+            buf[4] = TotemVMDefs::VERSION;
+            buf[5] = (uint8_t)(prog->len & 0xFF);
+            buf[6] = (uint8_t)(prog->len >> 8);
+            memcpy(buf + 7, prog->bytes, prog->len);
+            bufLen = 7 + prog->len;
+        } else if (_game->totemRequirements) {
+            // Legacy form: include configSecs if any requirement has one.
             for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
                 const LightAir_TotemRequirement& req = _game->totemRequirements[r];
                 if (req.roleId == roleId && req.configSecs != nullptr) {

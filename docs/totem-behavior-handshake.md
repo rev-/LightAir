@@ -236,13 +236,13 @@ In order of preference:
 
 ---
 
-## 6. C++ work implied (design only — not yet implemented)
+## 6. C++ implementation (done, host-tested)
 
 | Piece | Contents |
 |---|---|
-| `src/totem/LightAir_TotemVM.{h,cpp}` | decoder + interpreter (~400 lines); implements `LightAir_TotemRunner`, replaces the five per-role runners at the end of migration |
-| `src/lua/LightAir_LuaGame` (serializer part) | walk a role's data table → program bytes; validate limits; resolve `{"cfg"}` from `totem_slots` config vars |
-| `LightAir_GameRunner::replyToTotemBeacon` | append `[vmVersion][progLen][program]` to the 0xF1 reply for Lua-defined roles |
-| `LightAir_TotemDriver` | distinguish short/VM 0xF1 forms; route VM programs to the interpreter; native role manager stays as fallback during migration |
+| `src/totem/LightAir_TotemVM.{h,cpp}` | decoder + interpreter; implements `LightAir_TotemRunner`; validated on host against reference-encoder programs for all five roles plus malformed-program rejection |
+| `src/lua/LightAir_LuaGame.cpp` (serializer) | walks a role's data table → program bytes; validates limits at load; `{"cfg"}` sites recorded and patched with the live config value when the program is fetched at reply time |
+| `LightAir_GameRunner::replyToTotemBeacon` | appends `[vmVersion][progLen][program]` to the 0xF1 reply when `game->totemProgram` provides one; legacy short form otherwise |
+| `LightAir_TotemDriver` | distinguishes short/VM 0xF1 forms by payload shape; routes packets to the VM RSSI-aware (`onPacket`); native role manager stays as fallback during migration |
 | `LightAir_TotemUICtrl` | `Control` effect: slot-based arg form (`0xFE, slot`) |
-| 0xF0 beacon | add `[fw api, vmVersion]` payload; S4c compatibility check |
+| 0xF0 beacon | carries `[fw api, vmVersion]`; the S4c menu compatibility check is still TODO |

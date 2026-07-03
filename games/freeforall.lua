@@ -97,7 +97,7 @@ return {
 
   -- ---- Totem requirements (assigned by the host in the menu) -------
   totem_slots = {
-    { role = "BONUS", min = 0, max = 16, config_var = "bonus_cooldown" },
+    { role = "BONUS", min = 0, max = 16 },
     { role = "MALUS", min = 0, max = 16 },
   },
   teams = 0,                       -- teamless game

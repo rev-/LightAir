@@ -94,6 +94,15 @@ public:
     void    setTeam(uint8_t id, uint8_t team);
     uint8_t teamOf(uint8_t id)  const;
 
+    // Number of players registered in the roster (for game logic, e.g.
+    // Virus's "last clean player" condition via la.player_count()).
+    uint8_t rosterCount() const {
+        uint32_t m = _expectedPlayerMask;
+        uint8_t  c = 0;
+        while (m) { c += (uint8_t)(m & 1u); m >>= 1; }
+        return c;
+    }
+
 private:
     const LightAir_Game*  _game    = nullptr;
     LightAir_DisplayCtrl* _display = nullptr;

@@ -4,6 +4,7 @@
 #include "../ui/totem/LightAir_TotemUICtrl.h"
 #include "../config.h"
 #include "LightAir_TotemRoleManager.h"
+#include "LightAir_TotemVM.h"
 
 // ----------------------------------------------------------------
 // LightAir_TotemDriver — main loop driver for a totem device.
@@ -48,6 +49,7 @@ private:
     LightAir_TotemRoleManager& _roleMgr;
 
     LightAir_TotemRunner* _runner;          // nullptr = IDLE
+    LightAir_TotemVM      _vm;              // interpreter for over-the-air programs
     uint32_t              _lastBeacon;      // millis() of last beacon broadcast
     uint32_t              _revertDeadline;  // millis() deadline for self-revert; 0 = no watchdog armed
 

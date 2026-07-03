@@ -251,8 +251,9 @@ namespace GameDefaults {
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
     constexpr uint8_t  RADIO_OUT_PAYLOAD = 237;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
-    constexpr uint8_t  MAX_GAMES         = 8;    // max games registered in GameManager
+    constexpr uint8_t  MAX_GAMES         = 16;   // max games registered in GameManager (native + Lua)
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
+    constexpr uint8_t  RADIO_REPLY_PAYLOAD = 237; // max payload bytes per queued reply (0xF1 carries TotemVM programs)
     constexpr uint8_t  MAX_WINNER_VARS   = 2;    // max entries in a winnerVars[] table (primary + tie-breaker)
     constexpr uint32_t SCORE_RETRY_MS           = 2000; // ms between score re-broadcasts during scoringState
     constexpr uint32_t SCORE_TIMEOUT_MS         = 10000;// ms before winner shown despite missing scores
@@ -260,6 +261,43 @@ namespace GameDefaults {
     constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
     constexpr uint8_t  MSG_END_GAME             = RadioMsg::MSG_END_GAME;
 }
+// ---------------------------------------------------------------
+// Lua game engine configuration
+// ---------------------------------------------------------------
+namespace LuaDefaults {
+    constexpr uint8_t  API_VERSION     = 1;      // game-file `api` contract version
+    constexpr uint8_t  MAX_LUA_GAMES   = 8;      // .lua games loaded simultaneously
+    constexpr uint8_t  MAX_VARS        = 24;     // int + text slots per game
+    constexpr uint8_t  MAX_TEXT_LEN    = 16;     // capacity of one text slot (incl. NUL)
+    constexpr uint8_t  MAX_VAR_ID      = 20;     // max chars of a var/config id
+    constexpr uint8_t  MAX_CFG_NAME    = 13;     // menu label buffer (12 chars + NUL)
+    constexpr uint8_t  MAX_RULES       = 16;     // state-transition rules per game
+    constexpr uint8_t  MAX_MSG_RULES   = 24;     // (state, msgType) handler pairs
+    constexpr uint8_t  MAX_MONITOR     = 16;     // monitor entries per game
+    constexpr uint8_t  MAX_STATES      = 8;      // game states (mask fits uint32)
+    constexpr uint8_t  MAX_COUNTDOWNS  = 4;      // vars with countdown_in per game
+    constexpr uint8_t  MAX_GAME_NAME   = 16;     // display name buffer (15 + NUL)
+    constexpr uint32_t INSTR_BUDGET    = 200000; // Lua instructions per callback
+    constexpr const char* GAMES_DIR    = "/games";
+    constexpr const char* LIB_DIR      = "/games/lib";
+}
+
+// ---------------------------------------------------------------
+// TotemVM — fixed state-machine interpreter in totem firmware,
+// configured by the program carried in the 0xF1 activation reply.
+// See docs/totem-behavior-handshake.md for the normative encoding.
+// ---------------------------------------------------------------
+namespace TotemVMDefs {
+    constexpr uint8_t VERSION        = 1;
+    constexpr uint8_t MAX_STATES     = 8;
+    constexpr uint8_t MAX_REGS       = 8;
+    constexpr uint8_t MAX_TIMERS     = 4;
+    constexpr uint8_t MAX_RULES      = 32;   // total across all states
+    constexpr uint8_t MAX_PROG       = 225;  // program bytes inside the 0xF1 payload
+    constexpr uint8_t MAX_BCAST_TPL  = 8;    // template bytes per bcast action
+    constexpr uint8_t MAX_ENTER_DEPTH = 4;   // goto/enter recursion cap
+}
+
 // ---------------------------------------------------------------
 // Totem identity tables
 //

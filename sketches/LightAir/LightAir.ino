@@ -27,6 +27,7 @@
 
 #include <tools/EnlightCalibRoutine.h>
 #include <tools/EnlightTestMode.h>
+#include <lua/LightAir_GameStore.h>
 
 // ----------------------------------------------------------------
 // Enlight global pointer
@@ -88,6 +89,7 @@ static LightAir_InputCtrl input;
 // ---- Game ----
 static LightAir_GameManager manager;
 static LightAir_GameRunner  runner;
+static LightAir_GameStore   gameStore;   // LittleFS-backed .lua games
 
 // ================================================================
 // Runtime path flag (set in setup(), read in loop())
@@ -181,7 +183,10 @@ void _setup() {
             while (true) delay(1000);
         }
 
-        // Game setup menu (blocking)
+        // Games: Lua files first (they take precedence on typeId), then the
+        // native C++ rulesets fill whatever the filesystem doesn't provide.
+        if (gameStore.begin())
+            gameStore.registerLuaGames(manager);
         registerAllGames(manager);
         LightAir_GameSetupMenu menu(manager, runner,
                                     rawDisplay, input,

@@ -334,6 +334,13 @@ Full model, semantics, wire encoding, versioning and failure modes:
 
 ## 7. C++ change list
 
+Status: implemented (Lua 5.5.1 vendored under `src/libs/lua-5.5.0/`; the
+engine, binding, TotemVM and store below exist and are host-tested — every
+game file loads through the real binding, and a scripted FFA session runs
+begin/messages/replies/rules/updates on host).  Still open:
+`GameFileServer` (HTTP exchange), the S4c vmVersion check, and on-target
+validation, which needs real hardware.
+
 New (≈ the entire diff; the runner core is untouched):
 
 | File | Contents |

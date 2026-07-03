@@ -6,6 +6,7 @@
 #include "LightAir_ReplyRadioRule.h"
 #include "LightAir_WinnerVar.h"
 #include "LightAir_TotemRequirement.h"
+#include "LightAir_TotemProgram.h"
 #include "../ui/player/LightAir_UICtrl.h"
 #include "../config.h"
 
@@ -239,4 +240,15 @@ struct LightAir_Game {
     // presses A+B on the end-game screen.  Use for last-moment display updates
     // or NVS writes.  nullptr = skip.
     void (*onEnd)(LightAir_DisplayCtrl&);
+
+    // ---- TotemVM programs (Lua-defined games) ----
+    //
+    // Returns the serialized TotemVM program for a role, or nullptr if the
+    // game defines none for it.  When non-null for a beaconing totem's
+    // assigned role, GameRunner appends [vmVersion][progLen][program] to the
+    // 0xF1 activation reply so the totem needs no game files at all.
+    // nullptr (the default for native C++ games, whose descriptors simply
+    // omit this trailing field) = legacy short reply; the totem falls back
+    // to its built-in role runners.
+    const TotemProgramEntry* (*totemProgram)(uint8_t roleId);
 };

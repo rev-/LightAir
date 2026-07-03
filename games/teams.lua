@@ -86,7 +86,7 @@ return {
     { role = "BASE_O", min = 0, max = 4 },
     { role = "BASE_X", min = 0, max = 4 },
     { role = "BASE",   min = 0, max = 4 },
-    { role = "BONUS",  min = 0, max = 16, config_var = "bonus_cooldown" },
+    { role = "BONUS",  min = 0, max = 16 },
     { role = "MALUS",  min = 0, max = 16 },
   },
   teams = 2,
