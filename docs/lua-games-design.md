@@ -49,7 +49,7 @@ data table** of function pointers and var descriptors. The Lua engine does not
 replace the runner — it *synthesizes* a `LightAir_Game` descriptor at load
 time whose callbacks are trampolines into Lua. `GameRunner`, `GameSetupMenu`,
 score collection, the config blob and the radio protocol all keep working
-unchanged, and native C++ games can coexist with Lua games during migration.
+unchanged — the runner consumes the descriptor without knowing Lua exists.
 
 ---
 

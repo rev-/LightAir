@@ -145,9 +145,8 @@ payload: [0]   roleId          (as today)
          [7..] program bytes   (≤ 225)
 ```
 
-Migration/compat: the pre-VM reply was 4–5 bytes; a totem distinguishes the
-forms by `payloadLen`.  While native C++ roles exist, the host sends the
-short form for them and the VM form for Lua-defined roles.
+This is the only activation form: the pre-VM firmware's short 4–5 byte
+reply is retired together with the native totem runners.
 
 ### Program encoding (normative, v1)
 
