@@ -68,7 +68,9 @@ static int* slotOf(const LightAir_Game& g, const char* name) {
 }
 
 int main() {
-    // ---- 1. Every game file loads and validates ----
+    // ---- 1. Every game file loads and validates — sequentially on ONE
+    // shared instance, exactly like the device's lazy realize path
+    // (GameStore keeps a single loaded game and reloads on selection).
     static const struct { const char* file; uint16_t typeId; } kGames[] = {
         { "games/freeforall.lua", 0x0001 },
         { "games/teams.lua",      0x0002 },
@@ -78,17 +80,35 @@ int main() {
         { "games/kingofhill.lua", 0x0006 },
         { "games/virus.lua",      0x0007 },
     };
-    LightAir_LuaGame* ffa = nullptr;
+    static LightAir_LuaGame shared;   // the one loaded-game instance
+    static LightAir_LuaGame scanner;  // manifest-scan scratch instance
     for (auto& kg : kGames) {
-        LightAir_LuaGame* g = new LightAir_LuaGame();
-        bool ok = g->load(kg.file);
-        printf("load %-24s %s\n", kg.file, ok ? "OK" : "FAILED");
+        // Boot-scan path: peekManifest must read name/typeId without
+        // loading (and without consuming a trampoline slot).
+        char name[16] = {0};
+        uint16_t tid = 0;
+        bool mok = scanner.peekManifest(kg.file, name, sizeof(name), &tid);
+        CHECK(mok, "manifest peek");
+        CHECK(mok && tid == kg.typeId, "manifest typeId matches registry");
+        CHECK(mok && name[0] != 0, "manifest has a name");
+        CHECK(!scanner.loaded(), "peek leaves the scanner unloaded");
+
+        // Selection path: full (re)load on the shared instance.
+        bool ok = shared.load(kg.file);
+        printf("load %-24s %s (%s)\n", kg.file, ok ? "OK" : "FAILED", name);
         CHECK(ok, kg.file);
         if (!ok) continue;
-        CHECK(g->typeId() == kg.typeId, "typeId matches registry");
-        if (kg.typeId == 0x0001) ffa = g;
+        CHECK(shared.typeId() == kg.typeId, "typeId matches registry");
     }
-    if (!ffa) { printf("no FFA, aborting\n"); return 1; }
+    CHECK(LightAir_LuaGame::instanceCount() == 1,
+          "7 sequential loads used one registry slot");
+
+    // Deep-test freeforall: realize it again on the same instance.
+    if (!shared.load("games/freeforall.lua")) {
+        printf("no FFA, aborting\n");
+        return 1;
+    }
+    LightAir_LuaGame* ffa = &shared;
 
     const LightAir_Game& game = ffa->descriptor();
     CHECK(game.configCount == 5, "ffa config count");

@@ -1,6 +1,7 @@
 #include "LightAir_GameSetupMenu.h"
 #include "../tools/EnlightCalibRoutine.h"
 #include "../tools/EnlightTestMode.h"
+#include "../tools/GameFileServer.h"
 #include "../nvs_config.h"
 #include "../totem/TotemRoleIds.h"
 #include <Arduino.h>
@@ -218,8 +219,9 @@ bool LightAir_GameSetupMenu::loadIsDm() {
 }
 
 void LightAir_GameSetupMenu::runSettingsMenu() {
-    static const char* const kEntries[] = { "Calibration", "ID / DM", "Test Mode" };
-    static constexpr uint8_t kCount = 3;
+    static const char* const kEntries[] = { "Calibration", "ID / DM", "Test Mode",
+                                            "Share games" };
+    static constexpr uint8_t kCount = 4;
     uint8_t sel = 0;
 
     while (true) {
@@ -246,8 +248,64 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
             if (sel == 0 && _calibTool) _calibTool->run();
             if (sel == 1) runIdSettings();
             if (sel == 2 && _testTool) _testTool->run();
+            if (sel == 3 && _shareTool) runShareTool();
         }
     }
+}
+
+void LightAir_GameSetupMenu::runShareTool() {
+    if (!_shareTool) return;
+
+    showMessage2("Share games", "Starting WiFi...", "", "");
+    if (!_shareTool->start()) {
+        showMessage2("Share games", "WiFi AP failed.", "Press any key.", "");
+        waitForKey();
+        return;
+    }
+
+    char url[28];
+    snprintf(url, sizeof(url), "http://%s/", _shareTool->ipAddress());
+    char pass[20];
+    snprintf(pass, sizeof(pass), "Pass: %s", _shareTool->password());
+
+    uint8_t  lastStations = 0xFF;      // force first draw
+    uint32_t lastDraw = 0;
+    resetKeyStates();
+
+    while (true) {
+        _shareTool->handleClient();
+
+        // Redraw when a device joins/leaves (and at least once a second,
+        // cheap enough and keeps the screen honest after odd states).
+        uint8_t  st  = _shareTool->stationCount();
+        uint32_t now = millis();
+        if (st != lastStations || now - lastDraw >= 1000) {
+            lastStations = st;
+            lastDraw = now;
+            char devs[20];
+            snprintf(devs, sizeof(devs), "Devices: %u", st);
+            _display.clear();
+            _display.setColor(true);
+            _display.print(0, 0, "-- Share games --");
+            _display.print(0, DisplayDefaults::FONT_HEIGHT,     _shareTool->ssid());
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, pass);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * 3, url);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * 4, devs);
+            printLegend("X:Exit + reboot", DisplayDefaults::BOTTOM_LINE_Y);
+            _display.flush();
+        }
+
+        MenuKeyEvent ev = pollKeyEvent();
+        if (ev.key == 'B' && ev.state == KeyState::PRESSED) break;
+        delay(2);
+    }
+
+    // Uploads may have changed the game list, and SoftAP mode displaced
+    // the ESP-NOW radio — a reboot rescans /games and restores both.
+    _shareTool->stop();
+    showMessage2("Share games", "Rebooting...", "", "");
+    delay(300);
+    ESP.restart();
 }
 
 void LightAir_GameSetupMenu::runIdSettings() {
@@ -365,7 +423,14 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
             }
 
             if (ev.packet.msgType != _msgType) continue;
+            if (ev.packet.payloadLen < 2) continue;
+            uint16_t blobType;
+            memcpy(&blobType, ev.packet.payload, 2);
             for (uint8_t g = 0; g < _mgr.count(); g++) {
+                if (_mgr.game(g).typeId != blobType) continue;
+                // Realize lazy .lua entries: the placeholder has no config
+                // vars yet, and game_apply_config needs the real ones.
+                if (!_mgr.load(g)) break;
                 const LightAir_Game& candidate = _mgr.game(g);
                 uint8_t token = 0;
                 if (game_apply_config(candidate, ev.packet.payload,
@@ -416,6 +481,11 @@ bool LightAir_GameSetupMenu::runRestartPrompt() {
         MenuKeyEvent ev = waitForKey();
         if (ev.state != KeyState::PRESSED) continue;  // Only action buttons on PRESS
         if (ev.key == 'A') {
+            if (!_mgr.load(lastIdx)) {          // realize lazy .lua entries
+                showMessage2("Game failed", "to load.", "", "");
+                waitForKey();
+                return false;                   // fall through to the list
+            }
             _game    = &lastGame;
             _gameIdx = lastIdx;
             initTotemAssignment();
@@ -479,6 +549,12 @@ void LightAir_GameSetupMenu::runGameList() {
                 break;
             case 'A':
                 // Start with default/current config — skip S4.
+                if (!_mgr.load(sel)) {          // realize lazy .lua entries
+                    showMessage2("Game failed", "to load.", "", "");
+                    waitForKey();
+                    renderGameList(sel);
+                    break;
+                }
                 _game    = &_mgr.game(sel);
                 _gameIdx = sel;
                 _mgr.saveLastPlayed(sel);
@@ -486,6 +562,12 @@ void LightAir_GameSetupMenu::runGameList() {
                 return;
             case 'B':
                 // Enter setup.
+                if (!_mgr.load(sel)) {
+                    showMessage2("Game failed", "to load.", "", "");
+                    waitForKey();
+                    renderGameList(sel);
+                    break;
+                }
                 _game    = &_mgr.game(sel);
                 _gameIdx = sel;
                 _mgr.saveLastPlayed(sel);

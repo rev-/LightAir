@@ -33,8 +33,17 @@ public:
     // Load and validate a game file.  On success the descriptor()
     // can be registered with LightAir_GameManager.  On failure the
     // instance is unusable (error logged) — call load() again or
-    // discard.
+    // discard.  Reloading a different file on the same instance is
+    // supported (the menu realizes games lazily on one instance);
+    // the previous descriptor's pointers become invalid.
     bool load(const char* path);
+
+    // Cheap manifest read: run the chunk and extract api/type_id/name
+    // WITHOUT synthesizing a descriptor or claiming a trampoline slot.
+    // Used by the store's boot scan; safe on a dedicated scratch
+    // instance.  Leaves the instance unloaded.
+    bool peekManifest(const char* path, char* nameOut, size_t nameCap,
+                      uint16_t* typeIdOut);
 
     const LightAir_Game& descriptor() const { return _game; }
     const char*          name()       const { return _name; }

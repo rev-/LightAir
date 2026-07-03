@@ -9,6 +9,7 @@
 
 class EnlightCalibRoutine;
 class EnlightTestMode;
+class GameFileServer;
 
 // ----------------------------------------------------------------
 // Config blob format (used by game_serialize_config / game_apply_config):
@@ -96,6 +97,11 @@ public:
     // Must be called before run().
     void setTestTool(EnlightTestMode& t) { _testTool = &t; }
 
+    // Optional: register the game share server (Settings → Share games):
+    // WiFi AP + web page to download the .lua games from this device and
+    // upload new ones to it.  Must be called before run().
+    void setShareTool(GameFileServer& t) { _shareTool = &t; }
+
     // Valid after Confirmed return.
     const LightAir_Game& selectedGame() const { return *_game; }
 
@@ -110,6 +116,7 @@ private:
 
     EnlightCalibRoutine* _calibTool = nullptr;
     EnlightTestMode*     _testTool  = nullptr;
+    GameFileServer*      _shareTool = nullptr;
     bool                 _isDm   = false;
     const LightAir_Game* _game   = nullptr;
     uint8_t              _gameIdx = 0;
@@ -132,6 +139,7 @@ private:
     // ---- Home / Settings ----
     void runSettingsMenu();
     void runIdSettings();
+    void runShareTool();     // Settings → Share games (reboots on exit)
     void saveIsDm(bool val);
     bool loadIsDm();
 

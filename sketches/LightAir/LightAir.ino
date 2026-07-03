@@ -27,6 +27,7 @@
 
 #include <tools/EnlightCalibRoutine.h>
 #include <tools/EnlightTestMode.h>
+#include <tools/GameFileServer.h>
 #include <lua/LightAir_GameStore.h>
 
 // ----------------------------------------------------------------
@@ -89,6 +90,7 @@ static LightAir_InputCtrl input;
 static LightAir_GameManager manager;
 static LightAir_GameRunner  runner;
 static LightAir_GameStore   gameStore;   // LittleFS-backed .lua games
+static GameFileServer       shareServer; // Settings → Share games (WiFi AP)
 
 // ================================================================
 // Runtime path flag (set in setup(), read in loop())
@@ -191,6 +193,7 @@ void _setup() {
                                     *radio);
         menu.setCalibTool(*calibRoutine);
         menu.setTestTool(*testMode);
+        menu.setShareTool(shareServer);
         if (menu.run() != MenuResult::Confirmed) {
             Log.infoln("Setup menu cancelled — rebooting");
             ESP.restart();

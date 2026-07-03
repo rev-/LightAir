@@ -611,8 +611,7 @@ typedef void (*ActFn)(LightAir_DisplayCtrl&, GameOutput&);
 
 #define B(n) &LuaGameTramps::begin<n>
 static const BeginFn kBeginTramps[LuaDefaults::MAX_LUA_GAMES] = {
-    B(0), B(1), B(2), B(3), B(4),  B(5),  B(6), B(7),
-    B(8), B(9), B(10), B(11)
+    B(0), B(1), B(2), B(3)
 };
 #undef B
 #define W(n) &LuaGameTramps::ruleWhen<n>
@@ -1724,9 +1723,15 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
 bool LightAir_LuaGame::load(const char* path) {
     unload();
 
-    if (s_instanceCount >= LuaDefaults::MAX_LUA_GAMES) {
-        Log.errorln("LuaGame: instance pool full");
-        return false;
+    // Claim a trampoline slot once; reloads keep it (the menu realizes
+    // different games on the same instance as the user browses).
+    if (_slotIdx == 0xFF) {
+        if (s_instanceCount >= LuaDefaults::MAX_LUA_GAMES) {
+            Log.errorln("LuaGame: instance pool full");
+            return false;
+        }
+        _slotIdx = s_instanceCount;
+        s_instances[s_instanceCount++] = this;
     }
     if (!_engine.begin()) {
         Log.errorln("LuaGame: lua_State allocation failed");
@@ -1766,11 +1771,8 @@ bool LightAir_LuaGame::load(const char* path) {
         return false;
     }
 
-    // Claim the registry slot (trampoline identity) before walking the
-    // table — loadFromTable wires kBeginTramps[_slotIdx].
-    _slotIdx = s_instanceCount;
-
-    // Walk + validate in protected mode.
+    // Walk + validate in protected mode (kBeginTramps[_slotIdx] is wired
+    // by loadFromTable from the slot claimed above).
     lua_pushcfunction(L, loaderBody);
     lua_pushlightuserdata(L, this);
     lua_pushvalue(L, -3);                                  // the game table
@@ -1778,21 +1780,55 @@ bool LightAir_LuaGame::load(const char* path) {
         Log.errorln("LuaGame: %s rejected: %s", path, _engine.lastError());
         lua_settop(L, 0);
         _engine.end();
-        _slotIdx = 0xFF;
         return false;
     }
 
     _gameRef = luaL_ref(L, LUA_REGISTRYINDEX);             // keep the table alive
-
-    s_instances[s_instanceCount++] = this;
     _loaded = true;
     Log.infoln("LuaGame: loaded '%s' (typeId 0x%x) from %s", _name, _game.typeId, path);
     return true;
 }
 
+bool LightAir_LuaGame::peekManifest(const char* path, char* nameOut,
+                                    size_t nameCap, uint16_t* typeIdOut) {
+    unload();
+    if (!_engine.begin()) return false;
+    for (uint8_t i = 0; i < 3; i++) _pktUdRef[i] = LUA_NOREF;
+    registerKernel();                       // chunks index `la` at top level
+
+    lua_State* L = _engine.L();
+    bool ok = false;
+    if (luaL_loadfile(L, path) == LUA_OK && _engine.pcall(0, 1) &&
+        lua_istable(L, -1)) {
+        lua_getfield(L, -1, "api");
+        bool apiOk = lua_isinteger(L, -1) &&
+                     lua_tointeger(L, -1) == LuaDefaults::API_VERSION;
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "type_id");
+        bool idOk = lua_isinteger(L, -1);
+        if (idOk && typeIdOut) *typeIdOut = (uint16_t)lua_tointeger(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "name");
+        bool nameOk = lua_isstring(L, -1);
+        if (nameOk && nameOut) {
+            strncpy(nameOut, lua_tostring(L, -1), nameCap - 1);
+            nameOut[nameCap - 1] = 0;
+        }
+        lua_pop(L, 1);
+        ok = apiOk && idOk && nameOk;
+    } else {
+        Log.errorln("LuaGame: manifest scan failed for %s", path);
+        lua_settop(L, 0);
+    }
+    _engine.end();
+    return ok;
+}
+
 void LightAir_LuaGame::unload() {
-    // NOTE: instances are load-once in this firmware (the pool never
-    // shrinks); unload() only exists to clean up a failed load().
+    // The pool slot (if claimed) survives an unload so the instance can
+    // reload a different file; closing the engine frees all Lua memory
+    // and invalidates every registry ref with it.
+    if (s_active == this) s_active = nullptr;
     _loaded = false;
     _engine.end();
     _slotCount = 0;

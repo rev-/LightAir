@@ -323,17 +323,32 @@ Full model, semantics, wire encoding, versioning and failure modes:
 
 - **Filesystem**: LittleFS on the existing `default_8MB` partition scheme's
   SPIFFS partition. Games live in `/games/*.lua` (a few KB each; hundreds fit).
-- **Game store** (`LightAir_GameStore`): mounts FS, scans `/games`, loads each
-  file once at boot *only far enough* to read `api`, `type_id`, `name`
-  (then closes the state — one `lua_State` lives at a time), caches
-  `{name, typeId, path, crc16}` manifests.  Totems need no files at all:
-  their behaviour travels as TotemVM programs in the activation reply (§5).
-- **HTTP exchange** (`GameFileServer`): a new Settings → "Games" menu entry
-  starts a SoftAP (`LightAir-<id>`) + `WebServer.h` (already declared in
-  `library.properties`) with four routes: list page, upload (POST), download
-  (`GET /games/<file>` — this is how players share games phone-to-device),
-  delete. On exit the AP stops and WiFi returns to ESP-NOW-only. Keeping file
-  management strictly pre-game avoids ESP-NOW/AP channel coexistence issues.
+- **Game store** (`LightAir_GameStore`): mounts FS (seeding the embedded
+  stock games byte-exact on first boot / firmware update), scans `/games`,
+  and reads each file at boot *only far enough* to extract `api`, `type_id`,
+  `name` (`peekManifest`, on a scratch instance — no descriptor, no
+  trampoline slot).  It registers one lightweight manifest + placeholder
+  descriptor per file (`GameDefaults::MAX_GAMES = 50`) plus a load hook;
+  the full game — Lua state, variable slots, totem programs — is realized
+  on ONE shared `LightAir_LuaGame` instance only when the menu actually
+  selects it (`GameManager::load()`), and reloading a different file on the
+  same instance is how switching games works.  So 50 games on flash cost 50
+  ~80-byte manifests in RAM, not 50 interpreters.  Totems need no files at
+  all: their behaviour travels as TotemVM programs in the activation reply
+  (§5).
+- **HTTP exchange** (`GameFileServer`): the Settings → "Share games" menu
+  entry (next to Calibration and ID/DM) starts a SoftAP
+  (`LightAir-<PLAYERSHORT>`, password `lightair`) + `WebServer.h` on
+  `http://192.168.4.1/`, serving one page that both **sends** games (every
+  `/games/*.lua` and `/games/lib/*.lua` listed with a download link, served
+  as a `.lua` attachment) and **receives** them (multipart upload into
+  `/games` or `/games/lib`; name-sanitized, `.lua`-only, 64 KB cap), plus
+  delete for custom files (stock games reseed at boot).  The LCD shows
+  SSID/password/URL and the joined-station count; exiting reboots the
+  device — SoftAP displaced the ESP-NOW radio and the game list may have
+  changed, and a reboot restores the radio and rescans `/games` in one
+  stroke.  Keeping file management strictly pre-game avoids ESP-NOW/AP
+  channel coexistence issues.
 - **Consistency guard**: the config blob gains the game file's CRC16 after the
   session token byte. A joiner whose file differs (edited copy, older
   version) shows "Game file mismatch" instead of silently diverging
@@ -346,9 +361,9 @@ Full model, semantics, wire encoding, versioning and failure modes:
 Status: implemented (Lua 5.5.1 vendored under `src/libs/lua-5.5.0/`; the
 engine, binding, TotemVM and store below exist and are host-tested — every
 game file loads through the real binding, and a scripted FFA session runs
-begin/messages/replies/rules/updates on host).  Still open:
-`GameFileServer` (HTTP exchange), the S4c vmVersion check, and on-target
-validation, which needs real hardware.
+begin/messages/replies/rules/updates on host).  `GameFileServer` (HTTP
+exchange) and lazy manifest loading are implemented too.  Still open: the
+S4c vmVersion check, and on-target validation, which needs real hardware.
 
 New (≈ the entire diff; the runner core is untouched):
 
@@ -358,8 +373,8 @@ New (≈ the entire diff; the runner core is untouched):
 | `src/lua/LightAir_LuaEngine.{h,cpp}` | owns `lua_State`; custom `lua_Alloc` preferring PSRAM (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`, internal-RAM fallback); opens base/table/string/math only (no io/os/package); pcall + instruction-budget hook; `gcStep()` |
 | `src/lua/LightAir_LuaGame.{h,cpp}` | loads/validates a game file; owns the slot array; synthesizes the `LightAir_Game` descriptor (§4 mapping) with trampolines; registers the `la` verbs and the `vars` proxy; per-second countdown service |
 | `src/totem/LightAir_TotemVM.{h,cpp}` | fixed state-machine interpreter (`LightAir_TotemRunner`) executing programs received in the 0xF1 reply; see `docs/totem-behavior-handshake.md` |
-| `src/lua/LightAir_GameStore.{h,cpp}` | LittleFS mount, manifest scan |
-| `src/tools/GameFileServer.{h,cpp}` | SoftAP + WebServer upload/download/delete |
+| `src/lua/LightAir_GameStore.{h,cpp}` | LittleFS mount + stock-game seeding, manifest scan, lazy realize hook (one shared loaded instance) |
+| `src/tools/GameFileServer.{h,cpp}` | Settings → Share games: SoftAP + WebServer download/upload/delete of `.lua` files |
 
 Since exactly one Lua game is active at a time, the trampolines are a fixed
 templated table (`LuaTramp<0..N>::cond/action/...`) dispatching through a
