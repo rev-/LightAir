@@ -371,7 +371,9 @@ New (≈ the entire diff; the runner core is untouched):
 |---|---|
 | `src/libs/lua-5.5.0/` | vendored Lua core (Makefile already carries `-Isrc/libs/lua-5.5.0/src -DLUA_32BITS`); drop `lua.c`/`onelua.c` standalone frontends |
 | `src/lua/LightAir_LuaEngine.{h,cpp}` | owns `lua_State`; custom `lua_Alloc` preferring PSRAM (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`, internal-RAM fallback); opens base/table/string/math only (no io/os/package); pcall + instruction-budget hook; `gcStep()` |
-| `src/lua/LightAir_LuaGame.{h,cpp}` | loads/validates a game file; owns the slot array; synthesizes the `LightAir_Game` descriptor (§4 mapping) with trampolines; registers the `la` verbs and the `vars` proxy; per-second countdown service |
+| `src/lua/LightAir_LuaGame.{h,cpp}` | loads/validates a game file; owns the slot array; synthesizes the `LightAir_Game` descriptor (§4 mapping) with trampolines; per-second countdown service |
+| `src/lua/LightAir_LuaKernel.cpp` | the `la` verb table and the `vars`/`pkt` proxies (same class, split along its seams; shared glue in `LightAir_LuaGameInternal.h`) |
+| `src/lua/LightAir_TotemEncoder.cpp` | serializes a game's `totems` tables into TotemVM program bytes at load time |
 | `src/totem/LightAir_TotemVM.{h,cpp}` | fixed state-machine interpreter (`LightAir_TotemRunner`) executing programs received in the 0xF1 reply; see `docs/totem-behavior-handshake.md` |
 | `src/lua/LightAir_GameStore.{h,cpp}` | LittleFS mount + stock-game seeding, manifest scan, lazy realize hook (one shared loaded instance) |
 | `src/tools/GameFileServer.{h,cpp}` | Settings → Share games: SoftAP + WebServer download/upload/delete of `.lua` files |

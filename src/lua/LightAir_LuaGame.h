@@ -27,6 +27,13 @@
 //
 // Exactly one Lua game is *active* at a time (the one GameRunner
 // begin()s); several may be loaded so the setup menu can list them.
+//
+// The implementation is split across three .cpp files along its
+// seams (shared glue in LightAir_LuaGameInternal.h):
+//   LightAir_LuaGame.cpp      — loader/descriptor synthesis, runtime
+//                               dispatch, fault accounting
+//   LightAir_LuaKernel.cpp    — the la.* verbs and vars/pkt proxies
+//   LightAir_TotemEncoder.cpp — totems table → TotemVM program bytes
 // ----------------------------------------------------------------
 class LightAir_LuaGame {
 public:
@@ -196,7 +203,7 @@ private:
     static int l_pkt_index(lua_State* L);
     static int l_pkt_byte(lua_State* L);
     static int l_lib(lua_State* L);
-    // (plain-context verbs are file-local in the .cpp)
+    // (plain-context verbs are file-local in LightAir_LuaKernel.cpp)
 
     // ---- static trampoline plumbing ----
     static const TotemProgramEntry* progTramp(uint8_t roleId);

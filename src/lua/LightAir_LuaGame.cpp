@@ -1,4 +1,15 @@
+// ----------------------------------------------------------------
+// LightAir_LuaGame.cpp — loading a game file, synthesizing its
+// LightAir_Game descriptor, and dispatching runtime callbacks into
+// Lua (with the log-notify-continue fault policy).
+//
+// One of the three LightAir_LuaGame translation units (see
+// LightAir_LuaGameInternal.h for the map).  The la.* verbs live in
+// LightAir_LuaKernel.cpp; the TotemVM program serializer lives in
+// LightAir_TotemEncoder.cpp.
+// ----------------------------------------------------------------
 #include "LightAir_LuaGame.h"
+#include "LightAir_LuaGameInternal.h"
 #include <Arduino.h>
 #include <ArduinoLog.h>
 #include <string.h>
@@ -7,43 +18,21 @@
 #include "../radio/LightAir_Radio.h"
 #include "../ui/player/display/LightAir_DisplayCtrl.h"
 #include "../ui/player/LightAir_UICtrl.h"
-#include "../ui/totem/LightAir_TotemUIOutput.h"
-#include "../enlight/Enlight.h"
 #include "../totem/TotemRoleIds.h"
 
 #ifdef ESP32
-#include <FS.h>
-#include <LittleFS.h>
 #include <nvs.h>
 #endif
-
-// Enlight singleton, owned by the sketch (player path only).
-extern Enlight* enlightPtr;
 
 /* =========================================================
  *   NAME TABLES
  * ========================================================= */
 
-// Aligned with LightAir_UICtrl::UIEvent.
-static const char* const kUIEventNames[] = {
-    "Enlight", "Lit", "Taken", "GotLit", "Immune", "Friend", "AlreadyDown",
-    "Down", "Up", "EndGame", "GameStart", "FlagGain", "FlagTaken",
-    "FlagReturn", "ControlGain", "ControlLoss", "RoleChange", "Stop",
-    "Bonus", "Malus", "Special1", "Special2",
-    "Custom1", "Custom2", "Custom3", "Custom4",
-};
-static const uint8_t kUIEventCount = sizeof(kUIEventNames) / sizeof(*kUIEventNames);
-
-// Aligned with TotemUIEvent.
-static const char* const kAnimNames[] = {
-    "Respawn", "FlagTaken", "FlagReturn", "Bonus", "Malus", "Roster",
-    "Idle", "BaseIdle", "CPIdle", "FlagIdle", "BonusIdle", "MalusIdle",
-    "FlagMissing", "Control", "ControlContest",
-    "Custom1", "Custom2", "Custom3", "Custom4",
-};
-static const uint8_t kAnimCount = sizeof(kAnimNames) / sizeof(*kAnimNames);
-
-struct NamedU8 { const char* name; uint8_t val; };
+int lookupName(const NamedU8* tab, uint8_t n, const char* name) {
+    for (uint8_t i = 0; i < n; i++)
+        if (strcmp(tab[i].name, name) == 0) return tab[i].val;
+    return -1;
+}
 
 static const NamedU8 kIcons[] = {
     { "LIGHT", ICON_LIGHT }, { "LIFE", ICON_LIFE }, { "FLAG", ICON_FLAG },
@@ -59,26 +48,7 @@ static const NamedU8 kRoles[] = {
     { "MALUS",  TotemRoleId::MALUS },  { "BASE",   TotemRoleId::BASE },
 };
 
-// la.msg — the RadioMsg registry exposed to game files.
-static const NamedU8 kMsgConsts[] = {
-    { "LIT",           RadioMsg::MSG_LIT },
-    { "SCORE_COLLECT", RadioMsg::MSG_SCORE_COLLECT },
-    { "POINT_REPORT",  RadioMsg::MSG_POINT_REPORT },
-    { "FLAG_EVENT",    RadioMsg::MSG_FLAG_EVENT },
-    { "CP_BEACON",     RadioMsg::MSG_CP_BEACON },
-    { "CP_SCORE",      RadioMsg::MSG_CP_SCORE },
-    { "BASE_BEACON",   RadioMsg::MSG_BASE_BEACON },
-    { "FLAG_BEACON",   RadioMsg::MSG_FLAG_BEACON },
-    { "BONUS_BEACON",  RadioMsg::MSG_BONUS_BEACON },
-    { "MALUS_BEACON",  RadioMsg::MSG_MALUS_BEACON },
-};
-
-static int lookupName(const NamedU8* tab, uint8_t n, const char* name) {
-    for (uint8_t i = 0; i < n; i++)
-        if (strcmp(tab[i].name, name) == 0) return tab[i].val;
-    return -1;
-}
-#define LOOKUP(tab, name) lookupName(tab, sizeof(tab) / sizeof(*tab), name)
+int lookupTotemRole(const char* name) { return LOOKUP(kRoles, name); }
 
 /* =========================================================
  *   PROCESS-WIDE CONTEXT
@@ -87,18 +57,8 @@ static int lookupName(const NamedU8* tab, uint8_t n, const char* name) {
 
 static LightAir_LuaGame* s_instances[LuaDefaults::MAX_LUA_GAMES] = {};
 static uint8_t           s_instanceCount = 0;
-static LightAir_LuaGame* s_active = nullptr;
 
-static GameOutput*                s_out    = nullptr;   // valid inside callbacks
-static LightAir_DisplayCtrl*      s_disp   = nullptr;
-static LightAir_UICtrl*           s_ui     = nullptr;
-static LightAir_Radio*            s_radio  = nullptr;
-static const LightAir_GameRunner* s_runner = nullptr;
-static const InputReport*         s_inputs = nullptr;
-
-// Packet proxies: 0 = incoming request, 1 = reply, 2 = original.
-static const RadioPacket* s_pkts[3]    = {};
-static int8_t             s_pktRssi[3] = {};
+LuaGameContext g_luaCtx = {};
 
 uint8_t LightAir_LuaGame::instanceCount()            { return s_instanceCount; }
 LightAir_LuaGame* LightAir_LuaGame::instance(uint8_t i) {
@@ -106,50 +66,13 @@ LightAir_LuaGame* LightAir_LuaGame::instance(uint8_t i) {
 }
 
 /* =========================================================
- *   PACKET PROXY  (reusable userdata; zero alloc per event)
+ *   PROXY PUSH HELPERS
  * ========================================================= */
-
-int LightAir_LuaGame::l_pkt_byte(lua_State* L) {
-    uint8_t which = *(uint8_t*)luaL_checkudata(L, 1, "LA_PKT");
-    lua_Integer i = luaL_checkinteger(L, 2);        // 1-based
-    const RadioPacket* p = s_pkts[which];
-    if (!p || i < 1 || i > p->payloadLen) { lua_pushnil(L); return 1; }
-    lua_pushinteger(L, p->payload[i - 1]);
-    return 1;
-}
-
-int LightAir_LuaGame::l_pkt_index(lua_State* L) {
-    LightAir_LuaGame* g = self(L);
-    uint8_t which = *(uint8_t*)luaL_checkudata(L, 1, "LA_PKT");
-    const char* k = luaL_checkstring(L, 2);
-    const RadioPacket* p = s_pkts[which];
-    if (strcmp(k, "byte") == 0) {
-        lua_rawgeti(L, LUA_REGISTRYINDEX, g->_pktByteFnRef);
-        return 1;
-    }
-    if (!p) return luaL_error(L, "pkt used outside its handler");
-    if      (strcmp(k, "sender") == 0) lua_pushinteger(L, p->senderId);
-    else if (strcmp(k, "team")   == 0) lua_pushinteger(L, p->team);
-    else if (strcmp(k, "role")   == 0) lua_pushinteger(L, p->role);
-    else if (strcmp(k, "msg")    == 0) lua_pushinteger(L, p->msgType);
-    else if (strcmp(k, "len")    == 0) lua_pushinteger(L, p->payloadLen);
-    else if (strcmp(k, "rssi")   == 0) lua_pushinteger(L, s_pktRssi[which]);
-    else lua_pushnil(L);
-    return 1;
-}
 
 void LightAir_LuaGame::pushPkt(uint8_t which, const RadioPacket* pkt, int8_t rssi) {
-    s_pkts[which]    = pkt;
-    s_pktRssi[which] = rssi;
+    g_luaCtx.pkts[which]    = pkt;
+    g_luaCtx.pktRssi[which] = rssi;
     lua_rawgeti(_engine.L(), LUA_REGISTRYINDEX, _pktUdRef[which]);
-}
-
-/* =========================================================
- *   VARS PROXY  (blackboard slots)
- * ========================================================= */
-
-LightAir_LuaGame* LightAir_LuaGame::self(lua_State* L) {
-    return (LightAir_LuaGame*)lua_touserdata(L, lua_upvalueindex(1));
 }
 
 int LightAir_LuaGame::findSlot(const char* id) const {
@@ -158,388 +81,8 @@ int LightAir_LuaGame::findSlot(const char* id) const {
     return -1;
 }
 
-int LightAir_LuaGame::l_vars_index(lua_State* L) {
-    LightAir_LuaGame* g = self(L);
-    const char* k = luaL_checkstring(L, 2);
-    int i = g->findSlot(k);
-    if (i < 0) return luaL_error(L, "unknown var '%s'", k);
-    if (g->_slots[i].isText) lua_pushstring(L, g->_slots[i].text);
-    else                     lua_pushinteger(L, g->_slots[i].val);
-    return 1;
-}
-
-int LightAir_LuaGame::l_vars_newindex(lua_State* L) {
-    LightAir_LuaGame* g = self(L);
-    const char* k = luaL_checkstring(L, 2);
-    int i = g->findSlot(k);
-    if (i < 0) return luaL_error(L, "unknown var '%s'", k);
-    if (g->_slots[i].isText) {
-        const char* v = luaL_checkstring(L, 3);
-        strncpy(g->_slots[i].text, v, LuaDefaults::MAX_TEXT_LEN - 1);
-        g->_slots[i].text[LuaDefaults::MAX_TEXT_LEN - 1] = 0;
-    } else {
-        g->_slots[i].val = (int)luaL_checkinteger(L, 3);
-    }
-    return 0;
-}
-
 void LightAir_LuaGame::pushVarsProxy() {
     lua_rawgeti(_engine.L(), LUA_REGISTRYINDEX, _varsProxyRef);
-}
-
-/* =========================================================
- *   la VERBS
- * ========================================================= */
-
-static int l_now(lua_State* L)      { lua_pushinteger(L, (lua_Integer)(int32_t)millis()); return 1; }
-static int l_my_id(lua_State* L)    { lua_pushinteger(L, s_radio ? s_radio->playerId() : 0); return 1; }
-static int l_my_team(lua_State* L)  {
-    lua_pushinteger(L, (s_runner && s_radio) ? s_runner->teamOf(s_radio->playerId()) : 0xFF);
-    return 1;
-}
-static int l_team_of(lua_State* L)  {
-    lua_pushinteger(L, s_runner ? s_runner->teamOf((uint8_t)luaL_checkinteger(L, 1)) : 0xFF);
-    return 1;
-}
-static int l_player_count(lua_State* L) {
-    lua_pushinteger(L, s_runner ? s_runner->rosterCount() : 0);
-    return 1;
-}
-static int l_player_short(lua_State* L) {
-    lua_Integer id = luaL_checkinteger(L, 1);
-    if (id < 0 || id >= PlayerDefs::MAX_PLAYER_ID) id = 0;
-    lua_pushstring(L, PlayerDefs::playerShort[id]);
-    return 1;
-}
-static int l_totem_for_role(lua_State* L) {
-    int roleId;
-    if (lua_type(L, 1) == LUA_TSTRING) {
-        roleId = LOOKUP(kRoles, lua_tostring(L, 1));
-        if (roleId < 0) return luaL_error(L, "unknown totem role '%s'", lua_tostring(L, 1));
-    } else {
-        roleId = (int)luaL_checkinteger(L, 1);
-    }
-    uint8_t idx = (uint8_t)luaL_optinteger(L, 2, 0);
-    lua_pushinteger(L, s_runner ? s_runner->totemIdForRole((uint8_t)roleId, idx) : 0);
-    return 1;
-}
-// ---- inputs ----
-static const InputReport::ButtonEntry* findButton(uint8_t id) {
-    if (!s_inputs) return nullptr;
-    for (uint8_t i = 0; i < s_inputs->buttonCount; i++)
-        if (s_inputs->buttons[i].id == id) return &s_inputs->buttons[i];
-    return nullptr;
-}
-static int l_trigger_down(lua_State* L) {
-    uint8_t id = (uint8_t)(luaL_optinteger(L, 1, 1) - 1);   // la counts from 1
-    const InputReport::ButtonEntry* b = findButton(id);
-    lua_pushboolean(L, b && (b->state == ButtonState::PRESSED ||
-                             b->state == ButtonState::HELD));
-    return 1;
-}
-static int l_trigger_state(lua_State* L) {
-    uint8_t id = (uint8_t)(luaL_optinteger(L, 1, 1) - 1);
-    const InputReport::ButtonEntry* b = findButton(id);
-    static const char* const kNames[] = { "off", "pressed", "held", "released", "released_held" };
-    lua_pushstring(L, b ? kNames[(uint8_t)b->state] : "off");
-    return 1;
-}
-
-// ---- Enlight optics ----
-static int l_shine(lua_State* L) {
-    lua_pushboolean(L, enlightPtr ? enlightPtr->run() : false);
-    return 1;
-}
-static int l_shine_lit(lua_State* L) {
-    if (!enlightPtr) { lua_pushnil(L); return 1; }
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT) lua_pushinteger(L, r.id);
-    else lua_pushnil(L);
-    return 1;
-}
-static int l_shine_ms(lua_State* L) {
-    lua_pushinteger(L, enlightPtr ? (lua_Integer)enlightPtr->cycleTime() : 0);
-    return 1;
-}
-static int l_shine_config(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
-    if (!enlightPtr) return 0;
-    lua_getfield(L, 1, "cooldown_ms");
-    if (lua_isinteger(L, -1)) enlightPtr->setCooldown(lua_tointeger(L, -1));
-    lua_pop(L, 1);
-    lua_getfield(L, 1, "reps");
-    if (lua_isinteger(L, -1)) enlightPtr->setRepetitions((uint32_t)lua_tointeger(L, -1));
-    lua_pop(L, 1);
-    return 0;
-}
-
-// ---- radio out ----
-static int collectPayload(lua_State* L, int first, uint8_t* buf, uint8_t max) {
-    int top = lua_gettop(L);
-    uint8_t n = 0;
-    for (int i = first; i <= top && n < max; i++)
-        buf[n++] = (uint8_t)luaL_checkinteger(L, i);
-    return n;
-}
-static int l_send(lua_State* L) {
-    uint8_t target = (uint8_t)luaL_checkinteger(L, 1);
-    uint8_t msg    = (uint8_t)luaL_checkinteger(L, 2);
-    uint8_t pl[16];
-    uint8_t n = collectPayload(L, 3, pl, sizeof(pl));
-    if (s_out)        s_out->radio.sendTo(target, msg, pl, n);
-    else if (s_radio) s_radio->sendTo(target, msg, pl, n);
-    return 0;
-}
-static int doBroadcast(lua_State* L, uint8_t resend) {
-    uint8_t msg = (uint8_t)luaL_checkinteger(L, 1);
-    uint8_t pl[16];
-    uint8_t n = collectPayload(L, 2, pl, sizeof(pl));
-    if (s_out)        s_out->radio.broadcast(msg, pl, n, resend);
-    else if (s_radio) s_radio->broadcast(msg, pl, n, resend);
-    return 0;
-}
-static int l_broadcast(lua_State* L)       { return doBroadcast(L, 0); }
-static int l_broadcast_relay(lua_State* L) { return doBroadcast(L, 2); }
-
-// ---- UI out ----
-static int l_ui(lua_State* L) {
-    const char* name = luaL_checkstring(L, 1);
-    for (uint8_t i = 0; i < kUIEventCount; i++) {
-        if (strcmp(kUIEventNames[i], name) == 0) {
-            LightAir_UICtrl::UIEvent ev = (LightAir_UICtrl::UIEvent)i;
-            if (s_out)     s_out->ui.trigger(ev);
-            else if (s_ui) s_ui->trigger(ev);
-            return 0;
-        }
-    }
-    return luaL_error(L, "unknown UI event '%s'", name);
-}
-static int l_ui_enlight(lua_State* L) {
-    uint16_t ms = (uint16_t)luaL_checkinteger(L, 1);
-    if (s_out)     s_out->ui.triggerEnlight(ms);
-    else if (s_ui) s_ui->triggerEnlight(ms);
-    return 0;
-}
-static int l_show(lua_State* L) {
-    const char* text = luaL_checkstring(L, 1);
-    uint32_t ms = (uint32_t)luaL_optinteger(L, 2, 0);
-    if (s_disp) s_disp->showMessage(text, ms);
-    return 0;
-}
-static int l_clear_tray(lua_State* L) {
-    (void)L;
-    if (s_disp) s_disp->clearTray();
-    return 0;
-}
-static int l_background(lua_State* L) {
-    if (!s_ui) return 0;
-    if (lua_gettop(L) == 0 || lua_isnil(L, 1)) {
-        s_ui->clearBackground();
-        return 0;
-    }
-    luaL_checktype(L, 1, LUA_TTABLE);
-    LightAir_UICtrl::UIAction a = {};
-    lua_getfield(L, 1, "priority");
-    a.priority = (uint8_t)luaL_optinteger(L, -1, 1);
-    lua_pop(L, 1);
-    lua_getfield(L, 1, "steps");
-    luaL_checktype(L, -1, LUA_TTABLE);
-    int nSteps = (int)lua_rawlen(L, -1);
-    if (nSteps > 4) nSteps = 4;
-    for (int i = 1; i <= nSteps; i++) {
-        lua_rawgeti(L, -1, i);                    // step table
-        lua_getfield(L, -1, "ms");
-        a.durations[i - 1] = (uint16_t)luaL_optinteger(L, -1, 0);
-        lua_pop(L, 1);
-        lua_getfield(L, -1, "freq");
-        a.soundFreqs[i - 1] = (uint16_t)luaL_optinteger(L, -1, 0);
-        lua_pop(L, 1);
-        lua_getfield(L, -1, "vib");
-        a.vibIntensity[i - 1] = (uint8_t)luaL_optinteger(L, -1, 0);
-        lua_pop(L, 1);
-        lua_getfield(L, -1, "rgb");
-        if (lua_istable(L, -1)) {
-            for (int c = 1; c <= 3; c++) {
-                lua_rawgeti(L, -1, c);
-                a.rgbColors[i - 1][c - 1] = (uint8_t)luaL_optinteger(L, -1, 0);
-                lua_pop(L, 1);
-            }
-        }
-        lua_pop(L, 2);                            // rgb (or nil) + step table
-    }
-    a.stepCount = (uint8_t)nSteps;
-    lua_pop(L, 1);                                // steps table
-    s_ui->setBackground(a);
-    return 0;
-}
-
-// ---- library loader ----
-int LightAir_LuaGame::l_lib(lua_State* L) {
-    LightAir_LuaGame* g = self(L);
-    const char* name = luaL_checkstring(L, 1);
-
-    lua_rawgeti(L, LUA_REGISTRYINDEX, g->_libCacheRef);   // cache
-    lua_getfield(L, -1, name);
-    if (!lua_isnil(L, -1)) {
-        lua_remove(L, -2);
-        return 1;                                          // cached result
-    }
-    lua_pop(L, 1);                                         // nil; keep cache
-
-#ifdef ESP32
-    char path[64];
-    snprintf(path, sizeof(path), "%s/%s.lua", LuaDefaults::LIB_DIR, name);
-    File f = LittleFS.open(path, "r");
-    if (!f) return luaL_error(L, "library '%s' not found", name);
-    size_t size = f.size();
-    char* buf = (char*)lua_newuserdatauv(L, size, 0);      // scratch, GC-managed
-    size_t got = f.read((uint8_t*)buf, size);
-    f.close();
-    if (got != size) return luaL_error(L, "library '%s' read error", name);
-    if (luaL_loadbuffer(L, buf, size, name) != LUA_OK)
-        return lua_error(L);                               // message already on top
-    lua_remove(L, -2);                                     // drop scratch buffer
-    lua_call(L, 0, 1);                                     // run chunk -> module
-#else
-    // Host builds (tests): read from the working directory.
-    char path[128];
-    snprintf(path, sizeof(path), "games/lib/%s.lua", name);
-    if (luaL_loadfile(L, path) != LUA_OK)
-        return lua_error(L);
-    lua_call(L, 0, 1);
-#endif
-
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -3, name);                             // cache[name] = module
-    lua_remove(L, -2);                                     // drop cache table
-    return 1;
-}
-
-/* =========================================================
- *   KERNEL REGISTRATION
- * ========================================================= */
-
-void LightAir_LuaGame::registerKernel() {
-    lua_State* L = _engine.L();
-
-    lua_newtable(L);                                       // la
-
-    struct Verb { const char* name; lua_CFunction fn; };
-    static const Verb kVerbs[] = {
-        { "now", l_now }, { "my_id", l_my_id }, { "my_team", l_my_team },
-        { "team_of", l_team_of }, { "player_count", l_player_count },
-        { "player_short", l_player_short }, { "totem_for_role", l_totem_for_role },
-        { "trigger_down", l_trigger_down }, { "trigger_state", l_trigger_state },
-        { "shine", l_shine }, { "shine_lit", l_shine_lit },
-        { "shine_ms", l_shine_ms }, { "shine_config", l_shine_config },
-        { "send", l_send }, { "broadcast", l_broadcast },
-        { "broadcast_relay", l_broadcast_relay },
-        { "ui", l_ui }, { "ui_enlight", l_ui_enlight },
-        { "show", l_show }, { "clear_tray", l_clear_tray },
-        { "background", l_background },
-        { "lib", LightAir_LuaGame::l_lib },
-    };
-    for (const Verb& v : kVerbs) {
-        lua_pushlightuserdata(L, this);
-        lua_pushcclosure(L, v.fn, 1);
-        lua_setfield(L, -2, v.name);
-    }
-
-    // la.state — reads this instance's live state byte.
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, [](lua_State* LL) -> int {
-        LightAir_LuaGame* g = self(LL);
-        lua_pushinteger(LL, g->_state);
-        return 1;
-    }, 1);
-    lua_setfield(L, -2, "state");
-
-    // la.msg
-    lua_newtable(L);
-    for (const NamedU8& m : kMsgConsts) {
-        lua_pushinteger(L, m.val);
-        lua_setfield(L, -2, m.name);
-    }
-    lua_setfield(L, -2, "msg");
-
-    // la.flag_event
-    lua_newtable(L);
-    lua_pushinteger(L, FlagEvent::TAKEN);   lua_setfield(L, -2, "TAKEN");
-    lua_pushinteger(L, FlagEvent::DROPPED); lua_setfield(L, -2, "DROPPED");
-    lua_pushinteger(L, FlagEvent::SCORED);  lua_setfield(L, -2, "SCORED");
-    lua_setfield(L, -2, "flag_event");
-
-    // la.colors.team / la.colors.player
-    lua_newtable(L);                                       // colors
-    lua_newtable(L);                                       // team
-    for (uint8_t t = 0; t < TeamColors::kCount; t++) {
-        lua_createtable(L, 3, 0);
-        for (int c = 0; c < 3; c++) {
-            lua_pushinteger(L, TeamColors::kColors[t][c]);
-            lua_rawseti(L, -2, c + 1);
-        }
-        lua_rawseti(L, -2, t);                             // 0-based team keys
-    }
-    lua_setfield(L, -2, "team");
-    lua_newtable(L);                                       // player
-    for (uint8_t p = 0; p < PlayerDefs::MAX_PLAYER_ID; p++) {
-        lua_createtable(L, 3, 0);
-        for (int c = 0; c < 3; c++) {
-            lua_pushinteger(L, PlayerColors::kColors[p][c]);
-            lua_rawseti(L, -2, c + 1);
-        }
-        lua_rawseti(L, -2, p);
-    }
-    lua_setfield(L, -2, "player");
-    lua_setfield(L, -2, "colors");
-
-    // la.rhythm
-    lua_newtable(L);
-    for (uint8_t t = 0; t < TeamLedRhythm::kCount; t++) {
-        lua_createtable(L, 0, 2);
-        lua_pushinteger(L, TeamLedRhythm::kTable[t].periodMs);
-        lua_setfield(L, -2, "period");
-        lua_pushinteger(L, TeamLedRhythm::kTable[t].pulseCount);
-        lua_setfield(L, -2, "pulses");
-        lua_rawseti(L, -2, t);
-    }
-    lua_setfield(L, -2, "rhythm");
-
-    lua_setglobal(L, "la");
-
-    // ---- vars proxy (empty table, metamethods carry the instance) ----
-    lua_newtable(L);                                       // proxy
-    lua_createtable(L, 0, 2);                              // metatable
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, l_vars_index, 1);
-    lua_setfield(L, -2, "__index");
-    lua_pushlightuserdata(L, this);
-    lua_pushcclosure(L, l_vars_newindex, 1);
-    lua_setfield(L, -2, "__newindex");
-    lua_setmetatable(L, -2);
-    lua_pushvalue(L, -1);
-    lua_setglobal(L, "vars");
-    _varsProxyRef = luaL_ref(L, LUA_REGISTRYINDEX);
-
-    // ---- packet proxies ----
-    if (luaL_newmetatable(L, "LA_PKT")) {
-        lua_pushlightuserdata(L, this);
-        lua_pushcclosure(L, l_pkt_index, 1);
-        lua_setfield(L, -2, "__index");
-    }
-    lua_pop(L, 1);
-    for (uint8_t i = 0; i < 3; i++) {
-        uint8_t* ud = (uint8_t*)lua_newuserdatauv(L, 1, 0);
-        *ud = i;
-        luaL_setmetatable(L, "LA_PKT");
-        _pktUdRef[i] = luaL_ref(L, LUA_REGISTRYINDEX);
-    }
-    lua_pushcfunction(L, l_pkt_byte);
-    _pktByteFnRef = luaL_ref(L, LUA_REGISTRYINDEX);
-
-    // ---- la.lib cache ----
-    lua_newtable(L);
-    _libCacheRef = luaL_ref(L, LUA_REGISTRYINDEX);
 }
 
 /* =========================================================
@@ -551,56 +94,56 @@ struct LuaGameTramps {
     static void begin(LightAir_DisplayCtrl& d, LightAir_Radio& r,
                       LightAir_UICtrl* ui, const LightAir_GameRunner& gr) {
         if (N < s_instanceCount && s_instances[N]) {
-            s_active = s_instances[N];
-            s_active->doBegin(d, r, ui, gr);
+            g_luaCtx.active = s_instances[N];
+            g_luaCtx.active->doBegin(d, r, ui, gr);
         }
     }
     template <uint8_t I>
     static bool ruleWhen(const InputReport& inp, const RadioReport&) {
-        s_inputs = &inp;
-        s_out    = nullptr;                    // conditions: direct-output fallback
-        return s_active ? s_active->doRuleWhen(I) : false;
+        g_luaCtx.inputs = &inp;
+        g_luaCtx.out    = nullptr;             // conditions: direct-output fallback
+        return g_luaCtx.active ? g_luaCtx.active->doRuleWhen(I) : false;
     }
     template <uint8_t I>
     static void ruleAct(LightAir_DisplayCtrl& d, GameOutput& out) {
-        s_disp = &d;
-        s_out  = &out;
-        if (s_active) s_active->doRuleAct(I);
+        g_luaCtx.disp = &d;
+        g_luaCtx.out  = &out;
+        if (g_luaCtx.active) g_luaCtx.active->doRuleAct(I);
     }
     static void behavior(const InputReport& inp, const RadioReport&,
                          LightAir_DisplayCtrl& d, GameOutput& out) {
-        s_inputs = &inp;
-        s_disp   = &d;
-        s_out    = &out;
-        if (s_active) s_active->doBehavior();
+        g_luaCtx.inputs = &inp;
+        g_luaCtx.disp   = &d;
+        g_luaCtx.out    = &out;
+        if (g_luaCtx.active) g_luaCtx.active->doBehavior();
     }
     static void message(const RadioPacket& pkt, LightAir_DisplayCtrl& d,
                         GameOutput& out) {
-        s_disp = &d;
-        s_out  = &out;
-        if (s_active) s_active->doMessage(pkt, out);
+        g_luaCtx.disp = &d;
+        g_luaCtx.out  = &out;
+        if (g_luaCtx.active) g_luaCtx.active->doMessage(pkt, out);
     }
     static void reply(const RadioPacket& rep, const RadioPacket& orig,
                       LightAir_DisplayCtrl& d, GameOutput& out) {
-        s_disp = &d;
-        s_out  = &out;
-        if (s_active) s_active->doReply(rep, orig);
+        g_luaCtx.disp = &d;
+        g_luaCtx.out  = &out;
+        if (g_luaCtx.active) g_luaCtx.active->doReply(rep, orig);
     }
     static void timeout(const RadioPacket&, const RadioPacket& orig,
                         LightAir_DisplayCtrl& d, GameOutput& out) {
-        s_disp = &d;
-        s_out  = &out;
-        if (s_active) s_active->doTimeout(orig);
+        g_luaCtx.disp = &d;
+        g_luaCtx.out  = &out;
+        if (g_luaCtx.active) g_luaCtx.active->doTimeout(orig);
     }
     static void score(const ScoreTable& t, LightAir_DisplayCtrl& d) {
-        s_disp = &d;
-        s_out  = nullptr;
-        if (s_active) s_active->doScoreAnnounce(t);
+        g_luaCtx.disp = &d;
+        g_luaCtx.out  = nullptr;
+        if (g_luaCtx.active) g_luaCtx.active->doScoreAnnounce(t);
     }
     static void end(LightAir_DisplayCtrl& d) {
-        s_disp = &d;
-        s_out  = nullptr;
-        if (s_active) s_active->doEnd();
+        g_luaCtx.disp = &d;
+        g_luaCtx.out  = nullptr;
+        if (g_luaCtx.active) g_luaCtx.active->doEnd();
     }
 };
 
@@ -628,7 +171,7 @@ static const ActFn kActTramps[LuaDefaults::MAX_RULES] = {
 #undef A
 
 const TotemProgramEntry* LightAir_LuaGame::progTramp(uint8_t roleId) {
-    return s_active ? s_active->patchedProgram(roleId) : nullptr;
+    return g_luaCtx.active ? g_luaCtx.active->patchedProgram(roleId) : nullptr;
 }
 
 /* =========================================================
@@ -668,10 +211,10 @@ void LightAir_LuaGame::luaFault(FaultSite site) {
     // Tray notice, throttled: players should know the game file is buggy,
     // but a hot-path fault must not repaint the tray 100x per second.
     uint32_t now = millis();
-    if (s_disp && (now - _lastFaultNoticeAt >= kFaultNoticeCooldownMs ||
-                   _lastFaultNoticeAt == 0)) {
+    if (g_luaCtx.disp && (now - _lastFaultNoticeAt >= kFaultNoticeCooldownMs ||
+                          _lastFaultNoticeAt == 0)) {
         _lastFaultNoticeAt = now;
-        s_disp->showMessage("Lua error!", 5000);
+        g_luaCtx.disp->showMessage("Lua error!", 5000);
     }
 
     maybeEscalate(site);
@@ -707,11 +250,11 @@ void LightAir_LuaGame::persistFaultTotal() {
 
 void LightAir_LuaGame::doBegin(LightAir_DisplayCtrl& d, LightAir_Radio& r,
                                LightAir_UICtrl* ui, const LightAir_GameRunner& gr) {
-    s_disp   = &d;
-    s_radio  = &r;
-    s_ui     = ui;
-    s_runner = &gr;
-    s_out    = nullptr;
+    g_luaCtx.disp   = &d;
+    g_luaCtx.radio  = &r;
+    g_luaCtx.ui     = ui;
+    g_luaCtx.runner = &gr;
+    g_luaCtx.out    = nullptr;
     _lastSecTick = millis();
     memset(&_faults, 0, sizeof(_faults));
     _lastFaultNoticeAt = 0;
@@ -780,7 +323,7 @@ void LightAir_LuaGame::doMessage(const RadioPacket& pkt, GameOutput& out) {
                 if (lua_isinteger(L, -1)) sub = (uint8_t)lua_tointeger(L, -1);
                 lua_pop(L, 1);
             }
-            s_pkts[0] = nullptr;
+            g_luaCtx.pkts[0] = nullptr;
         } else {
             lua_pop(L, 1);                                 // non-function entry
         }
@@ -805,7 +348,7 @@ void LightAir_LuaGame::doReply(const RadioPacket& reply, const RadioPacket& orig
     pushPkt(1, &reply, 0);
     pushPkt(2, &orig, 0);
     if (!_engine.pcall(3, 0)) luaFault(FaultSite::Reply);
-    s_pkts[1] = s_pkts[2] = nullptr;
+    g_luaCtx.pkts[1] = g_luaCtx.pkts[2] = nullptr;
 }
 
 void LightAir_LuaGame::doTimeout(const RadioPacket& orig) {
@@ -821,7 +364,7 @@ void LightAir_LuaGame::doTimeout(const RadioPacket& orig) {
     pushVarsProxy();
     pushPkt(2, &orig, 0);
     if (!_engine.pcall(2, 0)) luaFault(FaultSite::Timeout);
-    s_pkts[2] = nullptr;
+    g_luaCtx.pkts[2] = nullptr;
 }
 
 void LightAir_LuaGame::doScoreAnnounce(const ScoreTable& t) {
@@ -881,400 +424,6 @@ const TotemProgramEntry* LightAir_LuaGame::patchedProgram(uint8_t roleId) {
  *   LOADER — table walking + validation
  *   (runs inside a pcall; validation failures use luaL_error)
  * ========================================================= */
-
-// Wire constants shared with the reference encoder and the TotemVM
-// (docs/totem-behavior-handshake.md).
-namespace enc {
-    constexpr uint8_t T_ENTER = 0, T_EVERY = 1, T_MSG = 2, T_REPLY = 3;
-    constexpr uint8_t V_IMM8 = 0, V_IMM16 = 1, V_REG = 2, V_PAYLOAD = 3,
-                      V_ACCLOW = 4, V_SENDER = 5, V_SENDERTEAM = 6;
-    constexpr uint8_t G_PAYLOAD = 1, G_LEN = 2, G_REG = 3, G_ACCCLASS = 4,
-                      G_LOW = 5, G_ELAPSED = 6, G_RSSI = 7;
-    constexpr uint8_t A_GOTO = 1, A_SET = 2, A_ACCBIT = 3, A_ACCCLR = 4,
-                      A_START = 5, A_BCAST = 6, A_REPLY = 7, A_ANIM = 8;
-    constexpr uint8_t C_NONE = 0, C_RGB = 1, C_TEAM = 2, C_SENDER_PLAYER = 3,
-                      C_SENDER_TEAM = 4, C_ARGS = 5;
-}
-
-static int cmpCode(lua_State* L, const char* op) {
-    static const NamedU8 kCmp[] = {
-        { "==", 0 }, { "~=", 1 }, { "<", 2 }, { ">=", 3 }, { "<=", 4 }, { ">", 5 },
-    };
-    int c = LOOKUP(kCmp, op);
-    if (c < 0) luaL_error(L, "totem: bad comparator '%s'", op);
-    return c;
-}
-
-// Small byte writer over a program buffer with luaL_error overflow.
-// Holds raw pieces of LightAir_LuaGame::Prog (which is private) so the
-// file-scope encoder helpers don't need access to the nested type.
-// Plain constructor: the target builds with gnu++11, where a default
-// member initializer would make this a non-aggregate.
-struct ProgWriter {
-    lua_State* L;
-    uint8_t*   bytes;         // Prog::bytes
-    uint8_t*   patchOff;      // Prog::patchOff
-    uint8_t*   patchCount;    // &Prog::patchCount
-    uint8_t    patchMax;
-    uint8_t    cfgDefault;    // seconds
-    uint16_t   len;
-    ProgWriter(lua_State* l, uint8_t* b, uint8_t* po, uint8_t* pc,
-               uint8_t pm, uint8_t cd)
-        : L(l), bytes(b), patchOff(po), patchCount(pc),
-          patchMax(pm), cfgDefault(cd), len(0) {}
-    void put(uint8_t b) {
-        if (len >= TotemVMDefs::MAX_PROG)
-            luaL_error(L, "totem program exceeds %d bytes", TotemVMDefs::MAX_PROG);
-        bytes[len++] = b;
-    }
-    void put16(uint16_t v) { put((uint8_t)(v & 0xFF)); put((uint8_t)(v >> 8)); }
-};
-
-// Encode one value spec at stack index idx.
-// dsScale: encode a {"cfg"} placeholder as seconds→deciseconds patch site.
-static void encValue(ProgWriter& w, int idx) {
-    lua_State* L = w.L;
-    idx = lua_absindex(L, idx);
-    if (lua_isinteger(L, idx)) {
-        lua_Integer v = lua_tointeger(L, idx);
-        if (v < 0 || v > 0xFFFF) luaL_error(L, "totem: value %d out of range", (int)v);
-        if (v <= 0xFF) { w.put(enc::V_IMM8);  w.put((uint8_t)v); }
-        else           { w.put(enc::V_IMM16); w.put16((uint16_t)v); }
-        return;
-    }
-    luaL_checktype(L, idx, LUA_TTABLE);
-    lua_rawgeti(L, idx, 1);
-    const char* tag = luaL_checkstring(L, -1);
-    if (strcmp(tag, "r") == 0) {
-        lua_rawgeti(L, idx, 2);
-        lua_Integer r = luaL_checkinteger(L, -1);
-        if (r < 0 || r >= TotemVMDefs::MAX_REGS) luaL_error(L, "totem: bad register %d", (int)r);
-        w.put(enc::V_REG); w.put((uint8_t)r);
-        lua_pop(L, 2);
-    } else if (strcmp(tag, "p") == 0) {
-        lua_rawgeti(L, idx, 2);
-        lua_Integer i = luaL_checkinteger(L, -1);
-        if (i < 1 || i > 200) luaL_error(L, "totem: bad payload index %d", (int)i);
-        w.put(enc::V_PAYLOAD); w.put((uint8_t)i);
-        lua_pop(L, 2);
-    } else if (strcmp(tag, "low") == 0) {
-        w.put(enc::V_ACCLOW); lua_pop(L, 1);
-    } else if (strcmp(tag, "sender") == 0) {
-        w.put(enc::V_SENDER); lua_pop(L, 1);
-    } else if (strcmp(tag, "team") == 0) {
-        w.put(enc::V_SENDERTEAM); lua_pop(L, 1);
-    } else if (strcmp(tag, "cfg") == 0) {
-        // Resolved at reply time: emit an imm16 (deciseconds) patch site.
-        w.put(enc::V_IMM16);
-        if (*w.patchCount >= w.patchMax)
-            luaL_error(L, "totem: too many {\"cfg\"} sites");
-        w.patchOff[(*w.patchCount)++] = (uint8_t)w.len;
-        w.put16((uint16_t)(w.cfgDefault * 10));
-        lua_pop(L, 1);
-    } else {
-        luaL_error(L, "totem: unknown value spec '%s'", tag);
-    }
-}
-
-static void encGuard(ProgWriter& w, int idx) {
-    lua_State* L = w.L;
-    idx = lua_absindex(L, idx);
-    luaL_checktype(L, idx, LUA_TTABLE);
-    lua_rawgeti(L, idx, 1);
-    const char* k = luaL_checkstring(L, -1);
-    lua_pop(L, 1);
-
-    if (strcmp(k, "p") == 0) {                 // {"p", i, op, val}
-        w.put(enc::G_PAYLOAD);
-        lua_rawgeti(L, idx, 3); w.put((uint8_t)cmpCode(L, luaL_checkstring(L, -1))); lua_pop(L, 1);
-        lua_rawgeti(L, idx, 2); w.put((uint8_t)luaL_checkinteger(L, -1)); lua_pop(L, 1);
-        lua_rawgeti(L, idx, 4); encValue(w, -1); lua_pop(L, 1);
-    } else if (strcmp(k, "len") == 0) {        // {"len", op, n}
-        w.put(enc::G_LEN);
-        lua_rawgeti(L, idx, 2); w.put((uint8_t)cmpCode(L, luaL_checkstring(L, -1))); lua_pop(L, 1);
-        lua_rawgeti(L, idx, 3); w.put((uint8_t)luaL_checkinteger(L, -1)); lua_pop(L, 1);
-    } else if (strcmp(k, "r") == 0) {          // {"r", n, op, val}
-        w.put(enc::G_REG);
-        lua_rawgeti(L, idx, 3); w.put((uint8_t)cmpCode(L, luaL_checkstring(L, -1))); lua_pop(L, 1);
-        lua_rawgeti(L, idx, 2); w.put((uint8_t)luaL_checkinteger(L, -1)); lua_pop(L, 1);
-        lua_rawgeti(L, idx, 4); encValue(w, -1); lua_pop(L, 1);
-    } else if (strcmp(k, "acc") == 0) {        // {"acc", "empty"|"single"|"many"}
-        static const NamedU8 kCls[] = { {"empty",0}, {"single",1}, {"many",2} };
-        w.put(enc::G_ACCCLASS);
-        lua_rawgeti(L, idx, 2);
-        int c = LOOKUP(kCls, luaL_checkstring(L, -1));
-        if (c < 0) luaL_error(L, "totem: bad acc class");
-        w.put((uint8_t)c);
-        lua_pop(L, 1);
-    } else if (strcmp(k, "low") == 0) {        // {"low", op, val}
-        w.put(enc::G_LOW);
-        lua_rawgeti(L, idx, 2); w.put((uint8_t)cmpCode(L, luaL_checkstring(L, -1))); lua_pop(L, 1);
-        lua_rawgeti(L, idx, 3); encValue(w, -1); lua_pop(L, 1);
-    } else if (strcmp(k, "elapsed") == 0) {    // {"elapsed", t, op, ms|{"cfg"}}
-        w.put(enc::G_ELAPSED);
-        lua_rawgeti(L, idx, 3); w.put((uint8_t)cmpCode(L, luaL_checkstring(L, -1))); lua_pop(L, 1);
-        lua_rawgeti(L, idx, 2);
-        lua_Integer t = luaL_checkinteger(L, -1);
-        if (t < 0 || t >= TotemVMDefs::MAX_TIMERS) luaL_error(L, "totem: bad timer");
-        w.put((uint8_t)t);
-        lua_pop(L, 1);
-        lua_rawgeti(L, idx, 4);
-        if (lua_isinteger(L, -1)) {            // literal ms -> imm16 ds
-            lua_Integer ms = lua_tointeger(L, -1);
-            w.put(enc::V_IMM16);
-            w.put16((uint16_t)(ms / 100));
-        } else {
-            encValue(w, -1);                   // {"cfg"} (already in ds)
-        }
-        lua_pop(L, 1);
-    } else if (strcmp(k, "rssi") == 0) {       // {"rssi", op, dbm}
-        w.put(enc::G_RSSI);
-        lua_rawgeti(L, idx, 2); w.put((uint8_t)cmpCode(L, luaL_checkstring(L, -1))); lua_pop(L, 1);
-        lua_rawgeti(L, idx, 3); w.put((uint8_t)(int8_t)luaL_checkinteger(L, -1)); lua_pop(L, 1);
-    } else {
-        luaL_error(L, "totem: unknown guard '%s'", k);
-    }
-}
-
-static void encAction(ProgWriter& w, int idx, int nStates) {
-    lua_State* L = w.L;
-    idx = lua_absindex(L, idx);
-    luaL_checktype(L, idx, LUA_TTABLE);
-    lua_rawgeti(L, idx, 1);
-    const char* k = luaL_checkstring(L, -1);
-    lua_pop(L, 1);
-
-    if (strcmp(k, "goto") == 0) {
-        w.put(enc::A_GOTO);
-        lua_rawgeti(L, idx, 2);
-        lua_Integer s = luaL_checkinteger(L, -1);
-        if (s < 1 || s > nStates) luaL_error(L, "totem: goto out of range");
-        w.put((uint8_t)s);
-        lua_pop(L, 1);
-    } else if (strcmp(k, "set") == 0) {
-        w.put(enc::A_SET);
-        lua_rawgeti(L, idx, 2);
-        lua_Integer r = luaL_checkinteger(L, -1);
-        if (r < 0 || r >= TotemVMDefs::MAX_REGS) luaL_error(L, "totem: bad register");
-        w.put((uint8_t)r);
-        lua_pop(L, 1);
-        lua_rawgeti(L, idx, 3); encValue(w, -1); lua_pop(L, 1);
-    } else if (strcmp(k, "accbit") == 0) {
-        w.put(enc::A_ACCBIT);
-        lua_rawgeti(L, idx, 2); encValue(w, -1); lua_pop(L, 1);
-    } else if (strcmp(k, "accclr") == 0) {
-        w.put(enc::A_ACCCLR);
-    } else if (strcmp(k, "start") == 0) {
-        w.put(enc::A_START);
-        lua_rawgeti(L, idx, 2);
-        lua_Integer t = luaL_checkinteger(L, -1);
-        if (t < 0 || t >= TotemVMDefs::MAX_TIMERS) luaL_error(L, "totem: bad timer");
-        w.put((uint8_t)t);
-        lua_pop(L, 1);
-    } else if (strcmp(k, "bcast") == 0) {
-        w.put(enc::A_BCAST);
-        lua_rawgeti(L, idx, 2);
-        w.put((uint8_t)luaL_checkinteger(L, -1));
-        lua_pop(L, 1);
-        int n = (int)lua_rawlen(L, idx) - 2;
-        if (n < 0 || n > TotemVMDefs::MAX_BCAST_TPL)
-            luaL_error(L, "totem: bcast payload too long");
-        w.put((uint8_t)n);
-        for (int i = 0; i < n; i++) {
-            lua_rawgeti(L, idx, 3 + i);
-            encValue(w, -1);
-            lua_pop(L, 1);
-        }
-    } else if (strcmp(k, "reply") == 0) {
-        w.put(enc::A_REPLY);
-        lua_rawgeti(L, idx, 2);
-        w.put((uint8_t)luaL_checkinteger(L, -1));
-        lua_pop(L, 1);
-    } else if (strcmp(k, "anim") == 0) {
-        w.put(enc::A_ANIM);
-        lua_rawgeti(L, idx, 2);
-        const char* name = luaL_checkstring(L, -1);
-        int ev = -1;
-        for (uint8_t i = 0; i < kAnimCount; i++)
-            if (strcmp(kAnimNames[i], name) == 0) { ev = i; break; }
-        if (ev < 0) luaL_error(L, "totem: unknown anim '%s'", name);
-        w.put((uint8_t)ev);
-        lua_pop(L, 1);
-
-        // optional colour spec (3rd) and rhythm spec (3rd or 4th)
-        int rhythmTeam = 0xFF;
-        lua_rawgeti(L, idx, 3);                            // colour or rhythm or nil
-        bool haveColor = false;
-        if (lua_istable(L, -1)) {
-            lua_rawgeti(L, -1, 1);
-            const char* tag = luaL_checkstring(L, -1);
-            lua_pop(L, 1);
-            if (strcmp(tag, "rhythm") == 0) {
-                lua_rawgeti(L, -1, 2);
-                rhythmTeam = (int)luaL_checkinteger(L, -1);
-                lua_pop(L, 1);
-            } else {
-                haveColor = true;
-                if (strcmp(tag, "rgb") == 0) {
-                    w.put(enc::C_RGB);
-                    for (int c = 2; c <= 4; c++) {
-                        lua_rawgeti(L, -1, c);
-                        w.put((uint8_t)luaL_checkinteger(L, -1));
-                        lua_pop(L, 1);
-                    }
-                } else if (strcmp(tag, "team") == 0) {
-                    w.put(enc::C_TEAM);
-                    lua_rawgeti(L, -1, 2);
-                    encValue(w, -1);
-                    lua_pop(L, 1);
-                } else if (strcmp(tag, "sender_player") == 0) {
-                    w.put(enc::C_SENDER_PLAYER);
-                } else if (strcmp(tag, "sender_team") == 0) {
-                    w.put(enc::C_SENDER_TEAM);
-                } else if (strcmp(tag, "args") == 0) {
-                    w.put(enc::C_ARGS);
-                    int n = (int)lua_rawlen(L, -1) - 1;
-                    if (n < 0 || n > 3) luaL_error(L, "totem: anim args too long");
-                    w.put((uint8_t)n);
-                    for (int i = 0; i < n; i++) {
-                        lua_rawgeti(L, -1, 2 + i);
-                        encValue(w, -1);
-                        lua_pop(L, 1);
-                    }
-                } else {
-                    luaL_error(L, "totem: unknown colour spec '%s'", tag);
-                }
-            }
-        }
-        if (!haveColor) w.put(enc::C_NONE);
-        lua_pop(L, 1);                                     // colour/rhythm/nil
-
-        if (rhythmTeam == 0xFF) {                          // maybe a 4th element
-            lua_rawgeti(L, idx, 4);
-            if (lua_istable(L, -1)) {
-                lua_rawgeti(L, -1, 1);
-                const char* tag = luaL_checkstring(L, -1);
-                lua_pop(L, 1);
-                if (strcmp(tag, "rhythm") == 0) {
-                    lua_rawgeti(L, -1, 2);
-                    rhythmTeam = (int)luaL_checkinteger(L, -1);
-                    lua_pop(L, 1);
-                }
-            }
-            lua_pop(L, 1);
-        }
-        w.put((uint8_t)rhythmTeam);
-    } else {
-        luaL_error(L, "totem: unknown action '%s'", k);
-    }
-}
-
-uint8_t LightAir_LuaGame::encodeProgram(lua_State* L, int tbl, Prog& p) {
-    tbl = lua_absindex(L, tbl);
-    p.patchCount = 0;
-
-    lua_getfield(L, tbl, "vm");
-    if (luaL_checkinteger(L, -1) != TotemVMDefs::VERSION)
-        luaL_error(L, "totem: unsupported vm version");
-    lua_pop(L, 1);
-
-    lua_getfield(L, tbl, "cfg_default");
-    p.cfgDefault = (uint8_t)luaL_optinteger(L, -1, 30);
-    lua_pop(L, 1);
-
-    lua_getfield(L, tbl, "states");
-    luaL_checktype(L, -1, LUA_TTABLE);
-    int states = lua_absindex(L, -1);
-    int nStates = (int)lua_rawlen(L, states);
-    if (nStates < 1 || nStates > TotemVMDefs::MAX_STATES)
-        luaL_error(L, "totem: bad state count");
-
-    ProgWriter w(L, p.bytes, p.patchOff, &p.patchCount,
-                 (uint8_t)sizeof(p.patchOff), p.cfgDefault);
-    w.put(TotemVMDefs::VERSION);
-    w.put((uint8_t)nStates);
-
-    for (int s = 1; s <= nStates; s++) {
-        lua_rawgeti(L, states, s);
-        int st = lua_absindex(L, -1);
-        luaL_checktype(L, st, LUA_TTABLE);
-        int nRules = (int)lua_rawlen(L, st);
-        w.put((uint8_t)nRules);
-
-        for (int r = 1; r <= nRules; r++) {
-            lua_rawgeti(L, st, r);
-            int rule = lua_absindex(L, -1);
-            luaL_checktype(L, rule, LUA_TTABLE);
-
-            // trigger — exactly one of enter/every/msg/reply
-            lua_getfield(L, rule, "enter");
-            bool hasEnter = lua_toboolean(L, -1);
-            lua_pop(L, 1);
-            lua_getfield(L, rule, "every");
-            bool hasEvery = lua_isinteger(L, -1);
-            lua_Integer everyMs = hasEvery ? lua_tointeger(L, -1) : 0;
-            lua_pop(L, 1);
-            lua_getfield(L, rule, "msg");
-            bool hasMsg = lua_isinteger(L, -1);
-            lua_Integer msgT = hasMsg ? lua_tointeger(L, -1) : 0;
-            lua_pop(L, 1);
-            lua_getfield(L, rule, "reply");
-            bool hasReply = lua_isinteger(L, -1);
-            lua_Integer repT = hasReply ? lua_tointeger(L, -1) : 0;
-            lua_pop(L, 1);
-            int trigCount = (hasEnter ? 1 : 0) + (hasEvery ? 1 : 0) +
-                            (hasMsg ? 1 : 0) + (hasReply ? 1 : 0);
-            if (trigCount != 1)
-                luaL_error(L, "totem: rule needs exactly one trigger");
-
-            if (hasEnter)      w.put(enc::T_ENTER);
-            else if (hasEvery) { w.put(enc::T_EVERY); w.put16((uint16_t)(everyMs / 100)); }
-            else if (hasMsg)   { w.put(enc::T_MSG);   w.put((uint8_t)msgT); }
-            else               { w.put(enc::T_REPLY); w.put((uint8_t)repT); }
-
-            lua_getfield(L, rule, "cont");
-            w.put(lua_toboolean(L, -1) ? 1 : 0);
-            lua_pop(L, 1);
-
-            lua_getfield(L, rule, "when");
-            if (lua_istable(L, -1)) {
-                int when = lua_absindex(L, -1);
-                int nWhen = (int)lua_rawlen(L, when);
-                w.put((uint8_t)nWhen);
-                for (int g = 1; g <= nWhen; g++) {
-                    lua_rawgeti(L, when, g);
-                    encGuard(w, -1);
-                    lua_pop(L, 1);
-                }
-            } else {
-                w.put(0);
-            }
-            lua_pop(L, 1);                                 // when (or nil)
-
-            lua_getfield(L, rule, "run");
-            luaL_checktype(L, -1, LUA_TTABLE);
-            int run = lua_absindex(L, -1);
-            int nRun = (int)lua_rawlen(L, run);
-            if (nRun < 1) luaL_error(L, "totem: rule needs actions");
-            w.put((uint8_t)nRun);
-            for (int a = 1; a <= nRun; a++) {
-                lua_rawgeti(L, run, a);
-                encAction(w, -1, nStates);
-                lua_pop(L, 1);
-            }
-            lua_pop(L, 1);                                 // run
-
-            lua_pop(L, 1);                                 // rule
-        }
-        lua_pop(L, 1);                                     // state
-    }
-    lua_pop(L, 1);                                         // states table
-    return (uint8_t)w.len;
-}
-
-/* ---------------------------------------------------------
- *   Table-walking helpers
- * --------------------------------------------------------- */
 
 static lua_Integer fieldInt(lua_State* L, int tbl, const char* k,
                             lua_Integer def, bool required) {
@@ -1524,7 +673,7 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
             int e = lua_absindex(L, -1);
             char roleName[12];
             fieldStr(L, e, "role", roleName, sizeof(roleName), true);
-            int roleId = LOOKUP(kRoles, roleName);
+            int roleId = lookupTotemRole(roleName);
             if (roleId < 0) luaL_error(L, "unknown totem role '%s'", roleName);
             _totReqs[totReqCount].roleId   = (uint8_t)roleId;
             _totReqs[totReqCount].minCount = (uint8_t)fieldInt(L, e, "min", 0, false);
@@ -1656,7 +805,7 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
         lua_pushnil(L);
         while (lua_next(L, tt) != 0) {
             const char* roleName = luaL_checkstring(L, -2);
-            int roleId = LOOKUP(kRoles, roleName);
+            int roleId = lookupTotemRole(roleName);
             if (roleId < 0) luaL_error(L, "unknown totem role '%s'", roleName);
             if (_progCount >= TotemDefs::MAX_TOTEM_ROLES)
                 luaL_error(L, "too many totem programs");
@@ -1828,7 +977,7 @@ void LightAir_LuaGame::unload() {
     // The pool slot (if claimed) survives an unload so the instance can
     // reload a different file; closing the engine frees all Lua memory
     // and invalidates every registry ref with it.
-    if (s_active == this) s_active = nullptr;
+    if (g_luaCtx.active == this) g_luaCtx.active = nullptr;
     _loaded = false;
     _engine.end();
     _slotCount = 0;
