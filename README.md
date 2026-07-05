@@ -10,7 +10,11 @@ It tries to make new game definitions as easy as possible, with the scope to pro
 It has to be compiled for ESP32-S3 and is written to be flashed using Arduino IDE, which is more simple than ESP-IDF.
 
 ## Build instruction
-In order to compile you need `make` and `arduino-cli` installed.
+In order to compile you need `make`, `arduino-cli` and `python3` installed
+(python only regenerates `src/lua/LightAir_GamesBundle.h` when a file under
+`games/` changes).  The sketch is `LightAir.ino` at the repository root — one
+image serves both player and totem devices; the role is chosen at boot from
+NVS (see `sketches/LightAir_TotemProvisioning` to provision a totem).
 
 ```sh
 make build/debug/LightAir.ino.bin
@@ -21,6 +25,18 @@ You can then upload the `LightAir.ino.bin` to the board using the Arduino IDE or
 ```sh
 arduino-cli upload --input-file ./build/debug/LightAir.ino.bin -p /dev/ttyACM0 -b esp32:esp32:esp32s3
 ```
+
+### Host test suite (no hardware needed)
+The Lua game engine, the game files and the TotemVM are covered by a PC-side
+test suite that needs only `g++` and `lua5.4` — no ESP32 toolchain:
+
+```sh
+make -C test/host
+```
+
+See `test/host/README.md` for what each suite proves and how to read a
+failure.  Run it before committing changes to `src/lua/`, `src/totem/`,
+`src/game/LightAir_GameRunner.cpp` or `games/`.
 
 ### Unit testing
 In the folder `src/test` there are several `.h` files, each one containing one or more unit test that can be run on the board. To add a test, define a new one using [AUnit](https://github.com/bxparks/AUnit) API, then include the corresponding file in the `src/test/LightAir_test.h` header.
@@ -38,6 +54,18 @@ You can produce a binary targeting [WOWKI](https://wokwi.com/projects/new/esp32-
 PROFILE=ESP32-S3-WROOM-1-WOKWI make build/debug/LightAir.ino.bin
 ```
 Then you can upload the binary by opening a new project on WOWKI and pressing F1 -> "Upload Firmware and Start Simulator" and selecting the desired binary.
+
+## Documentation map
+Game rulesets are **not C++**: every game is one `.lua` file under `games/`,
+stored on the device's flash and exchangeable between devices over WiFi
+(Settings → Share games).  Start here depending on what you want to do:
+
+| I want to… | Read |
+|---|---|
+| write or modify a game ruleset | `docs/lua-games-design.md` (file format + the `la` API), then copy `games/freeforall.lua` — the fully-commented reference game |
+| understand or extend the C++/Lua boundary | `docs/lua-embedding-guide.md` (stack discipline, GC, sandbox; §8 is the add-a-verb recipe) |
+| understand or debug totem behaviour | `docs/totem-behavior-handshake.md` (TotemVM model + wire format; `test/host/totemvm.lua` is the executable reference encoder) |
+| see what the tests prove | `test/host/README.md` |
 
 ## Design guidelines
 ### Nonviolent semantics
