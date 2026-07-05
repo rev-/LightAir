@@ -390,7 +390,7 @@ Modified:
 | `LightAir_GameRunner` (beacon intercept only) | 0xF1 reply gains `[vmVersion][progLen][program]` for Lua-defined roles; program bytes come from the Lua binding's serializer |
 | `LightAir_TotemDriver` / `LightAir_TotemUICtrl` | 0xF1 activation is VM-form only (the role manager and native runners are gone); `Control` effect gains the slot-based arg form |
 | 0xF0 beacon / `LightAir_GameSetupMenu` S4c | beacon advertises `[fw api, vmVersion]`; totem-assignment screen checks compatibility at setup time |
-| `sketches/LightAir/LightAir.ino` | mount FS, construct store/engine, hand them to menu (player path) and driver (totem path) |
+| `LightAir.ino` (repo root — the sketch the Makefile and CI build) | mount FS, construct store/engine, hand them to menu (player path) and driver (totem path) |
 | `src/config.h` | `namespace LuaDefaults { MAX_VARS, MAX_RULES, MAX_MSG_RULES, GAMES_DIR, INSTR_BUDGET, ... }` |
 | `Makefile` | extend `SRCS` wildcard so `src/libs/**` participates in dependency tracking (arduino-cli compiles `src/**` regardless) |
 
