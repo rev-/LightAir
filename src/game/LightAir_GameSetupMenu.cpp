@@ -1,3 +1,22 @@
+// ----------------------------------------------------------------
+// LightAir_GameSetupMenu.cpp — the blocking pre-game menu.
+//
+// Map (the screen flow S1..S5 is drawn in the header):
+//   config blob serialize/apply  → free functions, top of file
+//   home / settings / share / ID → runSettingsMenu and friends
+//   non-DM path                  → runWaiter (join + wait for config)
+//   S1/S2 game choice            → runRestartPrompt / runGameList
+//   S4(+a,b,c) setup submenus    → runSetupMenu / runConfig-/Teams-/
+//                                  TotemsSubmenu
+//   S5 pre-start + countdown     → runPreStart / commitToRunner
+//   shared input plumbing        → pollKeyEvent / waitForKey (edge
+//                                  detection + HELD auto-repeat over
+//                                  raw InputReports), bottom of file
+//
+// Everything here runs BEFORE GameRunner::begin(): loops block on
+// waitForKey()/delay() and may talk to the radio directly — the
+// 10 ms READ→LOGIC→OUTPUT discipline only starts with the runner.
+// ----------------------------------------------------------------
 #include "LightAir_GameSetupMenu.h"
 #include "../tools/EnlightCalibRoutine.h"
 #include "../tools/EnlightTestMode.h"
