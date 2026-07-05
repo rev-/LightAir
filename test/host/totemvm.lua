@@ -8,7 +8,8 @@ local ACLS = { empty=0, single=1, many=2 }
 local ANIM = { Respawn=0, FlagTaken=1, FlagReturn=2, Bonus=3, Malus=4,
                Roster=5, Idle=6, BaseIdle=7, CPIdle=8, FlagIdle=9,
                BonusIdle=10, MalusIdle=11, FlagMissing=12, Control=13,
-               ControlContest=14 }
+               ControlContest=14,
+               Custom1=15, Custom2=16, Custom3=17, Custom4=18 }
 local LIMITS = { states=8, regs=8, timers=4, prog=225 }
 
 local function u16(b, v) b[#b+1]=v%256; b[#b+1]=v//256 end

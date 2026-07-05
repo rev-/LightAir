@@ -349,10 +349,13 @@ Full model, semantics, wire encoding, versioning and failure modes:
   changed, and a reboot restores the radio and rescans `/games` in one
   stroke.  Keeping file management strictly pre-game avoids ESP-NOW/AP
   channel coexistence issues.
-- **Consistency guard**: the config blob gains the game file's CRC16 after the
-  session token byte. A joiner whose file differs (edited copy, older
-  version) shows "Game file mismatch" instead of silently diverging
-  mid-match. Native games write 0x0000.
+- **Consistency guard (designed, NOT yet implemented)**: the config blob
+  would gain the game file's CRC16 after the session token byte, so a
+  joiner whose file differs (edited copy, older version) shows "Game file
+  mismatch" instead of silently diverging mid-match.  As of today
+  `game_serialize_config` / `game_apply_config`
+  (`LightAir_GameSetupMenu.{h,cpp}`) carry no CRC — matching typeId is
+  the only check — so keep game files in sync via the share server.
 
 ---
 
@@ -363,7 +366,8 @@ engine, binding, TotemVM and store below exist and are host-tested — every
 game file loads through the real binding, and a scripted FFA session runs
 begin/messages/replies/rules/updates on host).  `GameFileServer` (HTTP
 exchange) and lazy manifest loading are implemented too.  Still open: the
-S4c vmVersion check, and on-target validation, which needs real hardware.
+S4c vmVersion check, the config-blob CRC16 consistency guard (§6), and
+on-target validation, which needs real hardware.
 
 New (≈ the entire diff; the runner core is untouched):
 
@@ -388,7 +392,7 @@ Modified:
 | File | Change |
 |---|---|
 | `LightAir_GameManager` | registry entries become `{name, typeId, native* or path}`; add lazy `load(idx)` — Lua descriptors are synthesized on selection, not at boot |
-| `LightAir_GameSetupMenu` | game list from manager entries (manifest names); call `load()` on selection before S4; append CRC16 to the config blob and verify on apply; new Settings entry launching `GameFileServer` |
+| `LightAir_GameSetupMenu` | game list from manager entries (manifest names); call `load()` on selection before S4; new Settings entry launching `GameFileServer` (the CRC16 blob guard is designed but not implemented — see §6) |
 | `LightAir_GameRunner` (beacon intercept only) | 0xF1 reply gains `[vmVersion][progLen][program]` for Lua-defined roles; program bytes come from the Lua binding's serializer |
 | `LightAir_TotemDriver` / `LightAir_TotemUICtrl` | 0xF1 activation is VM-form only (the role manager and native runners are gone); `Control` effect gains the slot-based arg form |
 | 0xF0 beacon / `LightAir_GameSetupMenu` S4c | beacon advertises `[fw api, vmVersion]`; totem-assignment screen checks compatibility at setup time |

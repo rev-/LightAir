@@ -1,8 +1,9 @@
 -- ================================================================
 -- LightAir game: Free For All
 --
--- Reference port of src/rulesets/GameFreeForAll.cpp to the Lua
--- game format described in docs/lua-games-design.md.
+-- The reference game file: every idiom of the Lua game format
+-- (docs/lua-games-design.md) spelled out in full, with no library
+-- calls.  Copy this file to start a new game.
 --
 -- Every player shines every other player.  Shone players respawn
 -- automatically after respawn_secs.  Most points wins; tie-break

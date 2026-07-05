@@ -1,7 +1,8 @@
 -- ================================================================
 -- LightAir game: Outflow — energy-only FFA; no lives.
 --
--- Port of src/rulesets/GameOutflow.cpp.
+-- Port of the retired native C++ ruleset (deleted in the Lua
+-- migration; the original is in git history).
 --
 -- Energy is simultaneously ammo and life total: shining costs 1,
 -- being lit costs lit_cost, and a passive drain eats 1 energy every

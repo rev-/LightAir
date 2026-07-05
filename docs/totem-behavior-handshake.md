@@ -241,7 +241,7 @@ In order of preference:
 |---|---|
 | `src/totem/LightAir_TotemVM.{h,cpp}` | decoder + interpreter; implements `LightAir_TotemRunner`; validated on host against reference-encoder programs for all five roles plus malformed-program rejection |
 | `src/lua/LightAir_TotemEncoder.cpp` (serializer) | walks a role's data table → program bytes; validates limits at load; `{"cfg"}` sites recorded and patched with the live config value when the program is fetched at reply time |
-| `LightAir_GameRunner::replyToTotemBeacon` | appends `[vmVersion][progLen][program]` to the 0xF1 reply when `game->totemProgram` provides one; legacy short form otherwise |
+| `LightAir_GameRunner::replyToTotemBeacon` | sends the 0xF1 reply `[role][session][timeLeft][vmVersion][progLen][program]` when `game->totemProgram` provides a program for the role; sends **no reply** otherwise (there is no short form — a role without a program leaves the totem IDLE) |
 | `LightAir_TotemDriver` | accepts VM-form 0xF1 only (native runners and the role manager are deleted); routes packets to the VM RSSI-aware (`onPacket`) |
 | `LightAir_TotemUICtrl` | `Control` effect: slot-based arg form (`0xFE, slot`) |
 | 0xF0 beacon | carries `[fw api, vmVersion]`; the S4c menu compatibility check is still TODO |

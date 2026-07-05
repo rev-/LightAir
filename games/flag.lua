@@ -1,7 +1,8 @@
 -- ================================================================
 -- LightAir game: Flag — capture the flag, team O vs team X.
 --
--- Port of src/rulesets/GameFlag.cpp.
+-- Port of the retired native C++ ruleset (deleted in the Lua
+-- migration; the original is in git history).
 --
 -- Pick up the enemy flag by approaching its FLAG totem (RSSI gate),
 -- carry it to an own-team BASE while your own flag is home to score.

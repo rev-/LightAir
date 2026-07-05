@@ -1,7 +1,8 @@
 -- ================================================================
 -- LightAir game: Upkeep — two-team control-point game.
 --
--- Port of src/rulesets/GameUpkeep.cpp.
+-- Port of the retired native C++ ruleset (deleted in the Lua
+-- migration; the original is in git history).
 --
 -- CP totems attach to whichever team is alone nearby during a 2 s
 -- beacon window and broadcast a point for the owning team every

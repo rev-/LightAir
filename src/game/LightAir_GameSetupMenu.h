@@ -121,7 +121,8 @@ private:
     const LightAir_Game* _game   = nullptr;
     uint8_t              _gameIdx = 0;
 
-    // Team assignments: _teams[id] = 0 (O) or 1 (X)
+    // Team assignments: _teams[id] = team index 0..teamCount-1
+    // (0 = O, 1 = X in two-team games); 0xFF = unassigned/teamless.
     uint8_t _teams[PlayerDefs::MAX_PLAYER_ID] = {};
 
     // Totem slot assignments: _totemAssignment[slot] = TotemRoleId constant.

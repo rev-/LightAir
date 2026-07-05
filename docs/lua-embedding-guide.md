@@ -16,10 +16,12 @@ with `-DLUA_32BITS`.
 
 **`lua_State`** is the whole interpreter: globals, loaded code, the garbage
 collector, and *the stack*.  It is an opaque pointer; every API call takes it
-as the first argument.  We create exactly one per device:
+as the first argument.  We create one per loaded game
+(`LightAir_LuaEngine::begin()`):
 
 ```cpp
-lua_State* L = lua_newstate(la_alloc, nullptr);   // custom allocator (§7)
+// Lua 5.5 takes a third argument: the string-hash seed.
+lua_State* L = lua_newstate(la_alloc, ud, seed);   // custom allocator (§7)
 ```
 
 **A chunk** is a compiled piece of Lua source.  `luaL_loadfile()` compiles
@@ -78,8 +80,10 @@ lua_settop(L, base);              // restore no matter which branch ran
 
 The default stack has room for `LUA_MINSTACK` (20) slots per C-function
 invocation; anything that pushes in a loop must call
-`lua_checkstack(L, n)` first.  Our binding never pushes unbounded sequences,
-so a single `lua_checkstack(L, 40)` at `begin()` is a formality.
+`lua_checkstack(L, n)` first.  Our binding never pushes unbounded
+sequences (the deepest fixed shape is a handful of slots), so it contains
+no `lua_checkstack` call at all — if you add a verb that pushes in a
+loop, add one.
 
 ---
 
@@ -89,6 +93,11 @@ The examples below are the actual shapes of `LightAir_LuaGame`.  Stack
 snapshots are drawn top-down: the top of the stack (`-1`) is the first line.
 
 ### 3a. Registering the `la` kernel
+
+(The real `registerKernel()` in `LightAir_LuaKernel.cpp` registers each
+verb as a *closure* carrying the binding instance as an upvalue — §3d
+explains why — but the stack choreography is identical to this
+simplified `luaL_newlib` shape.)
 
 ```cpp
 static const luaL_Reg kVerbs[] = {
@@ -384,10 +393,11 @@ luaL_requiref(L, "math",   luaopen_math,   1);
 lua_settop(L, 0);
 ```
 
-then remove `dofile`, `loadfile` and `load` from the base library (file
-access goes through `la.lib`, which only reaches `/games/lib/`).  A game
-file can compute anything, but it can only *act* through the `la` kernel —
-which is the whole security model, and why the kernel must stay small.
+then remove `dofile`, `loadfile`, `load` and `collectgarbage` from the
+base library (file access goes through `la.lib`, which only reaches
+`/games/lib/`; GC pacing is the firmware's job, §4).  A game file can
+compute anything, but it can only *act* through the `la` kernel — which
+is the whole security model, and why the kernel must stay small.
 
 ---
 
@@ -414,7 +424,49 @@ internal RAM first instead.
 
 ---
 
-## 8. Pitfalls checklist (read before touching the binding)
+## 8. Adding a `la.*` verb, end to end
+
+Check the admission rule first (`docs/lua-games-design.md`, §"API
+layering"): a verb must be a *capability* (hardware, firmware-private
+state, or a protocol invariant), never a game policy — policies belong
+in `games/lib/std.lua`.  Then, all in `src/lua/LightAir_LuaKernel.cpp`:
+
+1. **Write the C function** next to its family (inputs / radio out /
+   UI out):
+
+   ```cpp
+   // la.battery() -> millivolts of the supply rail.
+   static int l_battery(lua_State* L) {
+       lua_pushinteger(L, readBatteryMv());   // your capability here
+       return 1;                              // one result on the stack
+   }
+   ```
+
+   Arguments arrive on the stack (`luaL_checkinteger(L, 1)`, …); return
+   how many results you pushed.  Read hardware/runner state through
+   `g_luaCtx` (see `LightAir_LuaGameInternal.h`) and guard against its
+   pointers being null — conditions and score callbacks run with a
+   partial context.  Queue outputs through `g_luaCtx.out` with the
+   direct-`radio`/`ui` fallback, exactly like `l_send` / `l_ui`.
+
+2. **Register it**: add one line to the `kVerbs` table in
+   `registerKernel()`.
+
+3. **Document it**: add the verb to the `la` kernel list in
+   `docs/lua-games-design.md` §"The `la` verb kernel".
+
+4. **Test it**: extend `test/host/test_luagame.cpp` (host-visible
+   verbs) and, if games should be loadable without real hardware
+   behind the verb, stub it in `test/host/test_games.lua`'s fake `la`
+   table.  Run `make -C test/host`.
+
+Game files can feature-test a new verb with `if la.battery then … end`,
+so adding one is backward-compatible; bump `LuaDefaults::API_VERSION`
+only when you *change* an existing contract.
+
+---
+
+## 9. Pitfalls checklist (read before touching the binding)
 
 1. **Balance the stack** — wrap every entry point in
    `int base = lua_gettop(L); ... lua_settop(L, base);`.

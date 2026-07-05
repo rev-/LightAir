@@ -1,7 +1,8 @@
 -- ================================================================
 -- LightAir game: King of Hill — FFA interactions plus CP totems.
 --
--- Port of src/rulesets/GameKingOfHill.cpp.
+-- Port of the retired native C++ ruleset (deleted in the Lua
+-- migration; the original is in git history).
 --
 -- No host-assigned teams: every player is their own "slot"
 -- (player id - 1), which maps one-to-one to the CP presence

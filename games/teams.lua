@@ -1,7 +1,8 @@
 -- ================================================================
 -- LightAir game: Teams — two-team match, O vs X.
 --
--- Port of src/rulesets/GameTeams.cpp.  Uses the standard library
+-- Port of the retired native C++ ruleset (deleted in the Lua
+-- migration; the original is in git history).  Uses the standard library
 -- (games/lib/std.lua) for the recurring idioms; compare with
 -- games/freeforall.lua, which spells everything out.
 --

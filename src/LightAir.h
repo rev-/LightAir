@@ -4,7 +4,7 @@
 #include "config.h"
 #include "nvs_config.h"
 
-// Optical hit detection
+// Optical shine emission + lit-target detection
 #include "enlight/Enlight.h"
 
 // Radio

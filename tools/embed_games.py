@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Generate src/lua/LightAir_GamesBundle.h from games/**.lua.
 
-The bundle seeds LittleFS on first boot (and whenever a shipped file
-changes size) so a freshly flashed device has the stock games without
-needing the HTTP upload path.  Run from the repository root:
+The bundle seeds LittleFS on first boot (and whenever the on-flash
+copy differs byte-for-byte from the embedded one — see
+LightAir_GameStore::seedDefaults) so a freshly flashed device has the
+stock games without needing the HTTP upload path.  Run from the
+repository root:
 
     python3 tools/embed_games.py
 

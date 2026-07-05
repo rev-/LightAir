@@ -31,9 +31,9 @@
 namespace RadioMsg {
 
 // ── 0x10 block: player game messages ───────────────────────────
-// Used by every game that has direct player-to-player hits.
+// Used by every game where players shine each other directly.
 
-// Unicast hit notification sent by shooter to target.
+// Unicast lit notification, sent by the shining player to the lit target.
 // Reply (0x11) payload[0] = ReplySubType (TAKEN / SHONE / DOWN / FRIEND).
 constexpr uint8_t MSG_LIT           = 0x10;
 
@@ -43,7 +43,10 @@ constexpr uint8_t MSG_SCORE_COLLECT = 0x12;
 // Periodic team-score update so teammates track aggregate points (Teams).
 constexpr uint8_t MSG_POINT_REPORT  = 0x14;
 
-// Next available in 0x10 block: 0x16
+// 0x16 is used by games/virus.lua (Lua-declared infection broadcast;
+// game files may claim even msgTypes outside the 0xA0/0xF0 blocks —
+// typeId + sessionToken isolate games on the wire).
+// Next available in 0x10 block: 0x18
 
 // ── 0x50 block: totem-mediated game messages ────────────────────
 // Messages that travel between a player and a totem (not player→player).
@@ -138,7 +141,7 @@ constexpr uint8_t MSG_TOTEM_ROSTER  = 0xF2;
 // ---------------------------------------------------------------
 namespace FlagEvent {
     constexpr uint8_t TAKEN   = 1;  // a player picked up the flag
-    constexpr uint8_t DROPPED = 2;  // carrier was shot; flag returns home
+    constexpr uint8_t DROPPED = 2;  // carrier was shone; flag returns home
     constexpr uint8_t SCORED  = 3;  // flag captured at a base; flag returns home
 }
 

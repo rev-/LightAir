@@ -190,8 +190,8 @@ struct LightAir_Game {
     // game defines none for it.  When non-null for a beaconing totem's
     // assigned role, GameRunner appends [vmVersion][progLen][program] to the
     // 0xF1 activation reply so the totem needs no game files at all.
-    // nullptr (the default for native C++ games, whose descriptors simply
-    // omit this trailing field) = legacy short reply; the totem falls back
-    // to its built-in role runners.
+    // A role without a program gets no 0xF1 reply and the totem stays
+    // IDLE — the VM form is the only activation form (the pre-VM short
+    // reply and the native totem role runners are retired).
     const TotemProgramEntry* (*totemProgram)(uint8_t roleId);
 };

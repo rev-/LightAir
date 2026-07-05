@@ -314,7 +314,6 @@ void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& o
         if (_totems[t].id != id) continue;
         uint8_t roleId = _totems[t].roleId;
         uint8_t buf[7 + TotemVMDefs::MAX_PROG] = { roleId, _radio->sessionToken(), 0xFF, 0xFF };
-        uint8_t bufLen = 4;
 
         if (_game->gameTimeLeft) {
             uint16_t secs = (uint16_t)*_game->gameTimeLeft;   // exact, no rounding
@@ -325,13 +324,12 @@ void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& o
         const TotemProgramEntry* prog =
             _game->totemProgram ? _game->totemProgram(roleId) : nullptr;
         if (!prog || !prog->bytes || prog->len > TotemVMDefs::MAX_PROG)
-            break;                       // no behaviour to send for this role
+            break;   // no program for this role: no reply, totem stays IDLE
         buf[4] = TotemVMDefs::VERSION;
         buf[5] = (uint8_t)(prog->len & 0xFF);
         buf[6] = (uint8_t)(prog->len >> 8);
         memcpy(buf + 7, prog->bytes, prog->len);
-        bufLen = (uint8_t)(7 + prog->len);
-        output.radio.replyWithPayload(ev.packet, buf, bufLen);
+        output.radio.replyWithPayload(ev.packet, buf, (uint8_t)(7 + prog->len));
         break;
     }
 }
