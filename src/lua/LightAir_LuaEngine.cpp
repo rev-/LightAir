@@ -56,7 +56,8 @@ bool LightAir_LuaEngine::begin() {
     luaL_requiref(_L, LUA_MATHLIBNAME, luaopen_math,   1);
     lua_settop(_L, 0);
 
-    // Remove filesystem/code-loading escapes from the base library.
+    // Remove filesystem/code-loading escapes from the base library,
+    // plus collectgarbage — GC pacing belongs to the firmware (gcStep).
     static const char* kRemoved[] = { "dofile", "loadfile", "load", "collectgarbage" };
     for (const char* name : kRemoved) {
         lua_pushnil(_L);

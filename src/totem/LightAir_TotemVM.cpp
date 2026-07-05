@@ -415,6 +415,10 @@ void LightAir_TotemVM::dispatchPacket(uint8_t kind, LightAir_TotemOutput& out) {
     for (uint8_t i = _stateStart[_state]; i < _stateStart[_state + 1] && !consumed; i++) {
         Rule& r = _rules[i];
         if (r.trig != kind) continue;
+        // Wire convention: even msgType = request, odd = its reply
+        // (request+1).  A `reply` rule is authored with the *request*
+        // type it broadcast, so match the incoming odd type against
+        // operand+1.
         uint8_t match = (kind == T_REPLY) ? (uint8_t)(r.operand + 1) : (uint8_t)r.operand;
         if (!_pkt || _pkt->msgType != match) continue;
         if (!evalGuards(r)) continue;

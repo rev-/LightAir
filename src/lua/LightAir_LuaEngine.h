@@ -15,8 +15,8 @@ extern "C" {
 //   internal-RAM fallback, so Lua never competes with radio/display
 //   buffers for internal memory.
 // - Sandbox: opens base / table / string / math only, then removes
-//   dofile/loadfile/load.  Game code can only act through the `la`
-//   kernel registered by LightAir_LuaGame.
+//   dofile/loadfile/load/collectgarbage.  Game code can only act
+//   through the `la` kernel registered by LightAir_LuaGame.
 // - Protected calls: pcall() wraps lua_pcall with a traceback
 //   message handler and an instruction-budget hook so a buggy or
 //   runaway game file produces a logged Lua error instead of a
