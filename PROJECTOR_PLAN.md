@@ -9,8 +9,8 @@ Introduce a **Projector**: the profile of the light-beam device a player carries
 It bundles the parameters that today are either hardcoded in `Enlight` member
 initialisers or set imperatively by individual rulesets, and turns them into a
 named, selectable, extensible object — so that a game can offer several
-projectors, hand them out as totem rewards or quest unlocks, and let the player
-switch between them.
+projectors, hand them out as totem rewards or quest unlocks, and let players
+carry different ones at different moments of the same game.
 
 Standard projectors (`BASE`, `FAST`, `LONG`, `STRONG`) are globally defined and
 usable by any ruleset with no declaration, exactly as `LightAir_UICtrl`'s
@@ -27,25 +27,30 @@ Projector from becoming a god-object wired into everything:
 
 | Group | Fields | Consumer | Lives in |
 |---|---|---|---|
-| **Optical** | `cycles`, `cooldownMs`, `minSignalPct` | `Enlight` | pushed via existing setters |
+| **Optical** | `cycles`, `cooldownMs`, `rangeM` | `Enlight` | pushed via setters |
 | **Game** | `strength` (damage), `roleTag`, `energyCost` | ruleset logic + the radio packet | read by rules |
 | **Identity** | `id`, `name` | menu, display, UI event | read by UI |
 
-Three consequences follow, and they define the whole architecture:
+Four consequences follow, and they define the whole architecture:
 
 1. **`Enlight` never learns what a Projector is.** It gains one new setter
-   (`setMinSignalPct`) and keeps `setRepetitions` / `setCooldown`. Something
-   above it decomposes the profile into those three calls. `Enlight.h` does not
-   include the projector header, and the optical layer stays independently
-   testable — which matters because `EnlightCalibRoutine` and `EnlightTestMode`
-   must be able to drive it with fixed, projector-free settings.
+   (`setRangeM`) and keeps `setRepetitions` / `setCooldown`. Something above it
+   decomposes the profile into those three calls. `Enlight.h` does not include
+   the projector header, and the optical layer stays independently testable —
+   which matters because `EnlightCalibRoutine` and `EnlightTestMode` must be
+   able to drive it with fixed, projector-free settings.
 
-2. **Damage never travels as a table lookup.** It travels as a byte in the
+2. **The optics stay on the optical side of that line.** The projector says
+   "15 metres"; `Enlight` owns the conversion from metres to a correlator
+   threshold, because that conversion needs the calibration constants and the
+   falloff exponent, which are physics, not game design (§2.2).
+
+3. **Damage never travels as a table lookup.** It travels as a byte in the
    `MSG_LIT` payload (§7). No projector definition ever has to be distributed
-   over the radio, which is what makes ruleset-local custom projectors work at
-   all without touching the config-blob format.
+   over the radio — which is what makes both ruleset-local custom projectors and
+   per-player asymmetric loadouts work with no wire-format negotiation at all.
 
-3. **Selection is a queued output, not a direct call.** Rulesets ask for a
+4. **Selection is a queued output, not a direct call.** Rulesets ask for a
    switch through `GameOutput`, symmetric with `out.radio` and `out.ui`, and
    `LightAir_GameRunner` applies it in the OUTPUT phase (§6). Besides matching
    the existing three-phase-loop discipline, this fixes a real hazard: changing
@@ -65,14 +70,14 @@ struct Projector {
     // ---- optical: pushed into Enlight ----
     uint16_t    cycles;         // = Enlight::setRepetitions(); burst = cycles * MS_PER_REP
     uint16_t    cooldownMs;     // = Enlight::setCooldown(); dead time after each measurement
-    uint16_t    minSignalPct;   // range gate, % of this device's calibrated far threshold
+    uint8_t     rangeM;         // approximate reach in metres; 0 = whatever the device can see
 
     // ---- game: read by rules, sent on the wire ----
     uint8_t     strength;       // lives/energy taken from the target on a confirmed hit
-    uint8_t     roleTag;        // 0 = generic; index into a per-game damage table (§7.3)
+    uint8_t     roleTag;        // 0 = generic; the player's "role" for a per-game table (§7.3)
     uint8_t     energyCost;     // energy consumed per shot; 0 = free, 1 = today's behaviour
 
-    uint8_t     reserved[2];    // future fields; keeps the struct at 16 bytes
+    uint8_t     reserved[3];    // future fields; keeps the struct at 16 bytes
 };
 ```
 
@@ -97,61 +102,133 @@ add `hitCooldownMs` later and have `poll()` pick between the two based on the
 result status — a three-line change. **Recommendation: ship one cooldown, add
 the second only when a ruleset actually asks for it.**
 
-### 2.2 The range gate must be a ratio, not an absolute
+### 2.2 Range in metres, via the inverse-cube law
 
-"Distance" is implemented, as the request says, as a minimum signal level — but
-the number must not be absolute. `classify()` already compares the accumulated
-far correlator sums against `_cal.thresh_far_{r,g,b}`, which are *per-device*
-calibration values (the peak return from a white diffusing wall). Two guns
-calibrated on different days have different absolute numbers for the same
-physical range. A projector table is shared source code compiled into every
-device, so an absolute threshold would mean a different range on every unit.
+The projector's reach is expressed as **`rangeM`, a linear distance in metres**.
+`Enlight` converts it to a correlator threshold using the measured falloff.
 
-Expressing the gate as a **percentage of the device's own calibrated far
-threshold** makes the table portable and calibration-independent:
+**The model.** With signal falling as `1/x^EXP`, a reference measurement
+`refFar` taken at a known distance `refDist` fixes the whole curve:
+
+```
+S(x)   = refFar * (refDist / x)^EXP
+T(R)   = refFar * (refDist / R)^EXP        threshold for a projector of range R
+```
+
+`EXP` belongs in `EnlightDefaults` as a named float, **not hardcoded as 3**:
 
 ```cpp
-// in classify(), replacing the bare _cal.thresh_far_* comparison
-const float gate = baseScale * (_minSignalPct / 100.0f);
-if (_rout < (long long)(_cal.thresh_far_r * gate) &&
-    _gout < (long long)(_cal.thresh_far_g * gate) &&
-    _bout < (long long)(_cal.thresh_far_b * gate))
+constexpr float RANGE_FALLOFF_EXP = 3.0f;   // measured retroreflector falloff
+```
+
+The whole conversion collapses into one `powf` executed **once per projector
+switch**, in the setter — so a non-integer exponent (2.8, 3.2) costs nothing at
+runtime, and re-fitting the law against new field measurements is a one-constant
+edit rather than a rewrite:
+
+```cpp
+void Enlight::setRangeM(uint8_t m) {          // 0 = no projector gate
+    _rangeMul = m ? powf((float)_cal.refDistM / (float)m,
+                         EnlightDefaults::RANGE_FALLOFF_EXP)
+                  : 0.0f;
+}
+```
+
+and `classify()` keeps exactly its current shape, with the threshold sourced from
+the range instead of directly from calibration:
+
+```cpp
+const float tr = fmaxf(_cal.refFarR * _rangeMul, (float)_cal.thresh_far_r);
+const float tg = fmaxf(_cal.refFarG * _rangeMul, (float)_cal.thresh_far_g);
+const float tb = fmaxf(_cal.refFarB * _rangeMul, (float)_cal.thresh_far_b);
+if (_rout < (long long)(tr * baseScale) &&
+    _gout < (long long)(tg * baseScale) &&
+    _bout < (long long)(tb * baseScale))
     return {EnlightStatus::LOW_POW, 0};
 ```
 
-`100` means "no gating beyond calibration" and is the floor: a projector can
-raise the threshold (shorter reach) but never lower it below the calibrated
-noise floor, so no projector can be defined that claims to see through noise.
-Note the inversion when reading the table — **higher `minSignalPct` = shorter
-reach**.
+Three properties fall out of that `fmaxf`, and they are the reason the metric
+form is safe rather than aspirational:
 
-Three notes on the physics, which the field name should not overclaim:
+- **`rangeM = 0` is exactly today's behaviour.** `_rangeMul = 0` makes the first
+  term vanish and the threshold reduces to the current bare `thresh_far_*`
+  comparison. `BASE` uses it, so `BASE` remains a provable no-op on the optical
+  side (§4).
+- **The floor can only be raised, never lowered.** A projector asking for 200 m
+  gets whatever the device's calibrated noise floor actually permits. No
+  projector definition can claim to see through noise.
+- **The real ceiling is a device property, and it is computable:**
+  ```
+  Rmax = refDist * (refFar / thresh_far)^(1/EXP)
+  ```
+  Which leads to the single most useful addition in this section — see §2.4.
 
-- Return power also depends on target colour, albedo and incidence angle, so the
-  gate is an approximate range limit, not a metric one. Call the field
-  `minSignalPct`, and document "approximate max range" in the comment — don't
-  call it `rangeMeters`.
-- The emitted power is fixed by the PDM amplitude, so **no projector can reach
-  further than `BASE` by raising power.** Extra reach comes only from coherent
-  integration: more cycles accumulate signal ∝ N against noise ∝ √N, so `LONG`
-  genuinely detects reliably at ranges where `FAST` is intermittent, even though
-  both compare against the same normalised per-cycle threshold.
-- The adaptive low-power PDM path already renormalises the accumulators to
-  full-power equivalents (`_cycleNormScale`), so the percentage gate is
-  consistent with it. It engages on saturation, i.e. very close targets — the
-  opposite end from where the gate acts. No interaction.
+### 2.3 What this costs: the reference measurement
 
-A gated-out shot returns `LOW_POW`, which rulesets can already distinguish from
-`NO_HIT`. "Out of range" feedback comes for free; no new `EnlightStatus` needed.
+Metric range needs a signal measured at a **known distance**. Today no such
+number exists — `thresh_far_*` is a *maximum over a sweep* against a *diffusing*
+white wall, so it pins no distance and describes the wrong optical target.
 
-### 2.3 A naming note
+The good news is that the calibration routine already takes the measurement; it
+just doesn't record the distance. **Step 1 already fires 50 shots at a clear
+retroreflective target** and keeps the per-channel far power in
+`_step1_r/g/b[]`, and **step 2 already baseline-subtracts exactly those arrays**
+to compute the white-balance factors:
+
+```cpp
+// EnlightCalibRoutine.cpp, step2(), already present:
+long long r = _step1_r[i] - (long long)REPS * (long long)cal.rcal;
+```
+
+So the entire new-calibration cost is:
+
+1. Step 1's prompt gains a distance: `"Clear target at 5 m"`.
+2. Step 2 saves the median of those already-computed values, divided by `REPS`,
+   into three new NVS keys `ref_far_r/g/b` (matching how step 3 already
+   normalises `thresh_far_*` by `REPS`).
+
+No new calibration step, no new user interaction, ~15 lines. `refDist` itself is
+best a compile-time constant in `config.h` (`ProjectorLimits::CAL_REF_DIST_M`)
+printed in the prompt, since making it per-device would require entering a number
+on a 6-key keypad for no real benefit.
+
+Two honest caveats on what "metres" means here, worth putting in the header
+comment rather than engineering away:
+
+- **The gate runs before classification**, so it necessarily uses a reference
+  target's reflectivity. A darker player colour returns less light and will be
+  gated at a shorter true distance than a clear one. Per-colour accuracy would
+  need a per-colour reference table and a post-classification gate — a sensible
+  v2, overkill now.
+- `1/x³` is a far-field empirical fit. At very short range the retroreflector is
+  larger than the beam spot and the exponent flattens toward 2. Irrelevant here:
+  the gate only ever operates at the far end of the curve.
+
+### 2.4 Make the calibration self-validating
+
+`Rmax` above is a number the operator can *check by walking*. Displaying it turns
+the whole model from an assumption into a field-verifiable claim:
+
+> **Add the computed `Rmax` to the calibration summary screen** (`step4()`, which
+> already pages through NVS values). The operator calibrates, reads `Rmax: 38 m`,
+> walks 38 m, and confirms the target stops registering. If it doesn't, the
+> falloff exponent or the reference distance is wrong, and they find out at
+> calibration time instead of mid-game.
+
+This also surfaces a pre-existing tension worth measuring early: the README
+claims ~40 m range, while `thresh_far_*` is the max return from a white wall as
+close as contact. If `refFar / thresh_far` turns out not to support 40 m, the
+existing classifier is already gating shorter than the hardware can see — a
+useful thing to learn regardless of this feature.
+
+### 2.5 A naming note
 
 The repo's nonviolent-semantics guideline argues against a field literally named
 `damage`. `strength` is used above: it reads correctly next to the `STRONG`
 standard, and unlike `power` or `intensity` it doesn't collide with the optical
 vocabulary (`LOW_POW`, correlator power). `drain` is another candidate and
-matches Outflow's energy language. Trivial to rename — flagged because the
-choice propagates into the wire format comment and the ruleset API.
+matches Outflow's energy language. Trivial to rename — flagged because the choice
+propagates into the wire-format comment and the ruleset API.
 
 ---
 
@@ -166,40 +243,41 @@ projector live elsewhere:
 | Value | Today | Becomes |
 |---|---|---|
 | `_repetitions = 10` | `Enlight.h:164` member initialiser | `BASE.cycles` |
-| `_cooldown = 0` | `Enlight.h:160` member initialiser | `BASE.cooldownMs` |
+| `_cooldown = 0` | `Enlight.h:160` member initialiser | `BASE.cooldownMs` (now 10 ms — §4) |
 | `setCooldown(20); setRepetitions(20)` | `GameOutflow.cpp:208-209` | an Outflow custom projector, or a standard |
 | implicit `lives--` | every ruleset's `onLit*` | `BASE.strength = 1` |
 
 Everything projector-shaped in `EnlightDefaults` — `MS_PER_REP`,
 `AFE_STARTUP_MICROS`, `SAT_*`, `LED_FREQ_HZ` — is a *hardware* constant, not a
-profile parameter, and stays exactly where it is. `MS_PER_REP` in particular
-remains the multiplier that turns `cycles` into milliseconds.
+profile parameter, and stays where it is. `MS_PER_REP` remains the multiplier
+that turns `cycles` into milliseconds; `RANGE_FALLOFF_EXP` joins it as a new
+member of the same family.
 
 Also worth retiring while in the area: `EnlightCalib::limpow` ("min rawsum for
 classification") is still loaded and saved by `nvs_config.cpp` but **no longer
 read by `classify()`** — it is dead. It was the ancestor of exactly this range
-gate, so either repurpose the NVS key or drop it rather than leaving two
-half-implemented notions of a signal floor.
+gate, so retire the key rather than leaving two half-implemented notions of a
+signal floor in the tree.
 
 ### 3.2 New limits in `config.h`
 
 ```cpp
 namespace ProjectorLimits {
-    constexpr uint16_t MIN_CYCLES     = 1,   MAX_CYCLES     = 60;
-    constexpr uint16_t MIN_COOLDOWN   = 0,   MAX_COOLDOWN   = 10000;   // ms
-    constexpr uint16_t MIN_SIGNAL_PCT = 100, MAX_SIGNAL_PCT = 5000;    // 100 = calibration floor
-    constexpr uint8_t  MIN_STRENGTH   = 0,   MAX_STRENGTH   = 10;
+    constexpr uint16_t MIN_CYCLES   = 1,  MAX_CYCLES   = 40;      // see §3.4
+    constexpr uint16_t MIN_COOLDOWN = 0,  MAX_COOLDOWN = 10000;   // ms
+    constexpr uint8_t  MIN_RANGE_M  = 1,  MAX_RANGE_M  = 100;     // 0 = device max, unclamped
+    constexpr uint8_t  MIN_STRENGTH = 0,  MAX_STRENGTH = 10;
     constexpr uint8_t  MAX_ENERGY_COST = 10;
-    constexpr uint8_t  MAX_CUSTOM     = 4;   // custom slots per ruleset
-    constexpr uint8_t  NAME_LEN       = 8;   // fits the OLED cell width
+    constexpr uint8_t  MAX_CUSTOM      = 4;   // custom slots per ruleset
+    constexpr uint8_t  NAME_LEN        = 8;   // fits the OLED cell width
+    constexpr uint8_t  CAL_REF_DIST_M  = 5;   // distance for calibration step 1 (§2.3)
 }
 ```
 
-`MAX_CYCLES` is the one that needs a hardware answer rather than a guess: the
-AFE is powered for the entire run (`AFE_ON` is raised in `run()` and dropped
-when `_repsRemaining` hits 0), so `cycles` is directly LED-on time and therefore
-battery drain and AFE heating. 60 cycles ≈ 480 ms of continuous emission — pick
-the real ceiling from the thermal/current budget, not from playability.
+Note that `rangeM` gets **two** clamps and they do different jobs: the static one
+above catches a typo in a ruleset table, and the dynamic `fmaxf` in `classify()`
+(§2.2) catches a projector asking for more range than this particular device's
+calibration can deliver. Neither subsumes the other.
 
 ### 3.3 One clamp function, both paths
 
@@ -211,9 +289,33 @@ Making it `constexpr` lets the **same** function clamp the standard table at
 compile time and custom ruleset tables at registration time. One definition of
 the bounds logic, no possibility of the two drifting. At registration, emit an
 `ESP_LOGW` when a clamp actually bites, so a ruleset author who wrote
-`cycles = 200` finds out rather than silently getting 60.
+`cycles = 200` finds out rather than silently getting 40.
 
-### 3.4 Optional: a balance check
+### 3.4 `MAX_CYCLES` is not a hardware limit — here is the evidence
+
+Traced through `Enlight`, with the numbers this hardware actually produces
+(`LED_CLOCK_HZ` 16 MHz, `LED_FREQ_HZ` 1667 → `_periodClocks` 9600,
+`_waveformBytes` 2400, `_goertzPeriod` 200, `_periodsPerCycle` 13,
+`cycleMs` 7.8 — which is where `MS_PER_REP = 8` comes from):
+
+| Candidate limit | Verdict |
+|---|---|
+| **DMA / memory** | **Not a limit.** All four buffers (2 × 31200 B LED + 2 × 15602 B ADC ≈ 94 KB) are allocated **once in `begin()`**, sized by `_periodsPerCycle`, which is itself capped by `ENLIGHT_SPI_MAX_DMA_LEN = 32767`. A repetition re-issues the *same* transaction. Memory does not scale with `cycles` at all. |
+| **Accumulator overflow** | **Not a limit.** `_rout`/`_gout`/`_bout` are `long long`; worst case ≈ 2.2 × 10¹⁰ per channel per cycle, so 64 bits holds ~4 × 10⁸ cycles. `_arrayiter` is `uint32_t` at +2600/cycle → 1.6 × 10⁶ cycles. |
+| **`triggerEnlight()` / `UIAction::durations[]`** | **The only hard cap in the firmware: 8191 cycles.** Both are `uint16_t` milliseconds, fed by `cycleTime() = cycles × MS_PER_REP`. Above 8191 the UI burst duration silently wraps. Far beyond anything playable, but it is the one real number. |
+| **Task churn** | One `xTaskCreatePinnedToCore` at `configMAX_PRIORITIES-1` on core 0 **per cycle**. Already the case at `cycles = 20` in Outflow; scales linearly but doesn't break. |
+| **Power / thermal** | **Real, and yours to quantify.** `AFE_ON` is raised in `run()` and dropped only when `_repsRemaining` hits 0, and the LED PDM buffer is transmitted every cycle — so `cycles × 7.8 ms` is *continuous* emitter-on time. |
+| **Feedback latency** | **Real.** No hit result exists until the whole run completes. 40 cycles = 312 ms between trigger and response; 20 (Outflow today) = 156 ms. |
+| **Aiming stability** | **Real, and probably the binding one.** Coherent integration only helps while the target stays in the beam. Past roughly 200–300 ms, hand tremor decorrelates the return, so extra cycles stop buying SNR and start costing hit rate. |
+
+**Conclusion: nothing in the firmware constrains `cycles` below ~8000.** The
+ceiling is a playability and battery budget, so pick it from measurement, not
+from code. `MAX_CYCLES = 40` (312 ms) is proposed above as a defensible
+playability ceiling — it leaves `LONG` at 30 with headroom while staying inside
+the tremor window. If a battery-current measurement says the AFE duty cycle
+should be tighter, lower it; nothing else in the tree cares.
+
+### 3.5 Optional: a balance check
 
 A cheap guard against an accidental god-projector, since custom projectors are
 open to contributors:
@@ -247,40 +349,50 @@ namespace ProjectorId {
 }
 ```
 
-| | cycles | burst | cooldown | period | minSignalPct | strength | character |
+| | cycles | burst | cooldown | period | rangeM | strength | character |
 |---|---|---|---|---|---|---|---|
-| `BASE`   | 10 | 80 ms  | 0 ms   | 80 ms  | 100 | 1 | today's behaviour, exactly |
-| `FAST`   | 4  | 32 ms  | 60 ms  | 92 ms  | 400 | 1 | quick, short reach |
-| `LONG`   | 30 | 240 ms | 400 ms | 640 ms | 100 | 1 | slow, maximum reach |
-| `STRONG` | 15 | 120 ms | 900 ms | 1020 ms| 150 | 3 | slow, heavy |
+| `BASE`   | 10 | 80 ms  | **10 ms** | 90 ms   | 0 (device max) | 1 | the default profile |
+| `FAST`   | 4  | 32 ms  | 60 ms     | 92 ms   | 8              | 1 | quick, short reach |
+| `LONG`   | 30 | 240 ms | 400 ms    | 640 ms  | 0 (device max) | 1 | slow, maximum reach |
+| `STRONG` | 15 | 120 ms | 900 ms    | 1020 ms | 15             | 3 | slow, heavy, mid reach |
 
-These numbers are a starting point for playtesting, with one exception that is
-an architectural commitment rather than a tuning value:
+These are starting points for playtesting, with one exception that is an
+architectural commitment rather than a tuning value:
 
-> **`BASE` is defined as exactly today's behaviour.** `cycles = 10` and
-> `cooldownMs = 0` are the current `Enlight` member initialisers; `strength = 1`
-> is the implicit `lives--`; `minSignalPct = 100` is the unmodified calibration
-> comparison. Selecting `BASE` is therefore a provable no-op, every existing
-> ruleset keeps its current feel with no edit, and the whole feature can land
-> without a behavioural regression anywhere.
+> **`BASE` is today's behaviour apart from one deliberate change.**
+> `cycles = 10` is the current `Enlight` member initialiser, `strength = 1` is
+> the implicit `lives--`, and `rangeM = 0` reduces the classifier comparison to
+> exactly what it does now (§2.2). **`cooldownMs = 10` is the one accepted
+> behavioural change**, applying to all six existing rulesets.
+
+That 10 ms is safe to introduce without touching ruleset code — verified against
+each one's shot loop:
+
+- `run()` already returns `false` while `_active`, and every ruleset already
+  guards its energy accounting on that return value
+  (`if ((energy > 0) && (enlightPtr->run()))`), so no ruleset can spend energy on
+  a refused shot.
+- `poll()` gains a `COOLDOWN` result for one window, then a single `IDLE`. Every
+  ruleset switches only on `PLAYER_HIT`, so both fall through harmlessly.
+- `GameDefaults::LOOP_MS` is 10, so a 10 ms cooldown costs at most one extra loop
+  tick: the shot period moves 80 ms → ~90 ms.
 
 `FAST`'s short reach is not an arbitrary nerf — with 4 cycles the integration
 gain is genuinely lower, so gating it explicitly makes the profile honest about
 what it can detect instead of letting it produce unreliable long-range hits.
+`LONG` at `rangeM = 0` is the only one that reaches as far as the device
+physically can, and its 30 cycles are what make that reach *reliable*: coherent
+integration accumulates signal ∝ N against noise ∝ √N.
 
 ---
 
 ## 5. Custom projectors in a ruleset
 
-The pre-game menu must be able to enumerate a game's projectors *before*
-`onBegin` runs, so a `defineCustomProjector()` call in `onBegin` (the direct
-analogue of `defineCustomAction`) is too late. It has to be declarative data on
-`LightAir_Game`, like `configVars` and `totemRequirements`.
-
-Adding four fields to `LightAir_Game` would mean four new lines in all six
-positional ruleset initialisers. **One pointer to a sub-struct instead**, with
-`nullptr` meaning "standards only, start on `BASE`" — which is the requested
-"if no projectors are defined in a ruleset, just use the default definition":
+`LightAir_Game` would need five new fields to carry all of this, meaning five new
+lines in all six positional ruleset initialisers. **One pointer to a sub-struct
+instead**, with `nullptr` meaning "standards only, everyone starts on `BASE`" —
+which is the requested "if no projectors are defined in a ruleset, just use the
+default definition":
 
 ```cpp
 struct ProjectorSet {
@@ -288,89 +400,163 @@ struct ProjectorSet {
     uint8_t          customCount;  // <= ProjectorLimits::MAX_CUSTOM
     uint16_t         catalogMask;  // bit i = ProjectorId i exists in this game
     uint8_t          startId;      // profile every player begins with
+    uint8_t          fallbackId;   // switched to when the active one becomes unavailable
+
+    // Per-cycle availability predicate — see §6.4.  nullptr = always available.
+    bool (*isAvailable)(uint8_t projectorId);
 };
 
 // in LightAir_Game, one new field:
-const ProjectorSet* projectors;    // nullptr = { nullptr, 0, 1u<<BASE, BASE }
+const ProjectorSet* projectors;    // nullptr = standards-only default
 ```
 
 Usage in a ruleset stays at the density the codebase is written for:
 
 ```cpp
 static const Projector customProjectors[] = {
-    //  id                 name      cycles cooldown  minSig  str role energy
-    { ProjectorId::CUSTOM1, "SNIPER",   40,     900,     100,   2,  0,   3 },
-    { ProjectorId::CUSTOM2, "SPRAY",     3,      40,     900,   1,  0,   1 },
+    //  id                 name      cycles cooldown range str role energy
+    { ProjectorId::CUSTOM1, "SNIPER",   40,     900,    0,   2,  0,   3 },
+    { ProjectorId::CUSTOM2, "SPRAY",     3,      40,    4,   1,  0,   1 },
 };
 
 static const ProjectorSet projectorSet = {
     customProjectors, 2,
     (1u<<ProjectorId::BASE) | (1u<<ProjectorId::FAST) |
-    (1u<<ProjectorId::CUSTOM1) | (1u<<ProjectorId::CUSTOM2),
-    ProjectorId::BASE,
+    (1u<<ProjectorId::STRONG) | (1u<<ProjectorId::CUSTOM1),
+    ProjectorId::BASE, ProjectorId::BASE,
+    projAvailable,
 };
 ```
 
-`catalogMask` does triple duty: it is the list the pre-game menu offers, the set
-a totem or quest may grant, and the validity check on any runtime `select()`.
-At runtime `ProjectorCtrl` keeps a live `unlockedMask`, initialised to
-`1 << startId`; unlocks set bits, and a `select()` of a locked or non-catalogued
-id is rejected and logged rather than silently applied.
+`catalogMask` does triple duty: it is the list any picker offers, the set a totem
+or quest may grant, and the validity check on any runtime `select()`. At runtime
+`ProjectorCtrl` keeps a live `unlockedMask`, initialised to `1 << startId`;
+unlocks set bits, and a `select()` of a locked or non-catalogued id is rejected
+and logged rather than silently applied.
 
 ---
 
-## 6. Selecting and switching
+## 6. Selecting and switching — per-player and per-moment
 
-### 6.1 The queue
+Asymmetric loadouts are a goal: players are expected to hold **different
+projectors at different times within the same game**, chosen at respawn, granted
+by totems, or earned by quest progress. That single requirement settles several
+open questions at once.
+
+### 6.1 The wire format already supports it, for free
+
+Because damage travels as a value in the packet rather than as a projector id
+resolved against a shared table (§7), two players holding different projectors
+need no negotiation, no config-blob field and no shared state. The design decision
+taken in §1 for a different reason turns out to be exactly what asymmetry
+requires. **Nothing in the radio layer changes.**
+
+### 6.2 The queue
 
 ```cpp
 struct ProjectorOutput {           // third member of GameOutput
-    void select(uint8_t id);       // switch now (if unlocked)
+    void select(uint8_t id);       // switch now (if unlocked and available)
     void unlock(uint8_t id);       // add to unlockedMask, don't switch
     void grant(uint8_t id);        // unlock + select
-    void next();                   // cycle through unlockedMask — for a keypad binding
+    void next();                   // cycle forward through unlocked+available ids
+    void prev();                   // cycle backward
 };
 ```
 
 `LightAir_GameRunner::flushOutput()` applies it after all logic has run:
 
-1. Validate against `catalogMask` / `unlockedMask`.
+1. Validate against `catalogMask`, `unlockedMask` and `isAvailable()`.
 2. If `enlight.isActive()`, hold the switch pending and retry next cycle —
    never reconfigure a measurement in flight.
-3. Push `cycles`, `cooldownMs`, `minSignalPct` into `Enlight`.
+3. Push `cycles`, `cooldownMs`, `rangeM` into `Enlight`.
 4. Copy `name` into the bound display buffer.
 5. Queue `UIEvent::ProjectorChange`.
 
-That list is the entire integration surface. Everything else — the menu, the
-totems, the quests — reduces to producing one of those four calls.
+That list is the entire integration surface. Everything below reduces to
+producing one of those calls.
 
-### 6.2 Pre-game menu, for free
+### 6.3 There is no new menu
 
-The cheapest possible answer, and the one worth taking: **the pre-game choice is
-an ordinary `ConfigVar`.** It already renders in S4a, is already serialised into
-the config blob, and is already broadcast to every player, so every device starts
-the game with the same projector and no new screen, no new blob field and no new
-message type is needed.
+The in-game picker the OUT_GAME respawn choice needs is **not** a menu screen. A
+blocking modal like `LightAir_GameSetupMenu` would be actively wrong here: it
+would stall the 10 ms loop and the radio RX while an out-of-game player still
+needs to receive replies, roster traffic and the end-game signal.
 
-The only thing missing is that S4a would show a bare integer. That is worth
-fixing generically rather than with a projector special case — one optional
-field on `ConfigVar`, useful to any game with an enumerated setting:
+Everything required is already in the loop. `StateBehavior` receives
+`InputReport.keyEvents`, and `MonitorVar::Str` can show the active name in the
+OUT_GAME binding set:
 
 ```cpp
-struct ConfigVar {
-    const char* name;
-    int*        value;
-    int         min, max, step;
-    const char* const* labels;   // NEW, optional: labels[value-min] instead of the number
-};
+static void doOutGame(const InputReport& inp, const RadioReport&,
+                      LightAir_DisplayCtrl&, GameOutput& out) {
+    tickGameTime();
+    for (uint8_t i = 0; i < inp.keyEventCount; i++) {
+        if (inp.keyEvents[i].state != KeyState::RELEASED) continue;
+        if (inp.keyEvents[i].key == '>') out.proj.next();
+        if (inp.keyEvents[i].key == '<') out.proj.prev();
+    }
+}
 ```
 
-Then a ruleset writes `{ "Projector", &startProj, 0, 3, 1, projectorLabels }` and
-gets a named picker with no menu code at all. A dedicated S4d screen should only
-be built if per-player different starting projectors turn out to be wanted —
-which is a bigger question (see §11).
+Six lines of ruleset code, zero framework code, and the player respawns with
+whatever is on screen. A richer picker (stats, icons, a dedicated overlay owned
+by the runner and enabled per state) is a clean upgrade later if it earns its
+keep — but it should not be built before something needs more than a name.
 
-### 6.3 From a totem
+### 6.4 Availability: how `STRONG` disappears at one life
+
+"`STRONG` is discarded when lives reach 1" is a *conditional availability* rule,
+and it generalises to role restrictions, energy thresholds and quest state. Three
+ways to express it, and the middle one is wrong in an instructive way:
+
+- A `minLives` field on `Projector` — but `lives` is a ruleset variable the
+  framework knows nothing about, and Outflow has energy instead. Rejected.
+- An open-coded check in each behavior — works, but every ruleset re-implements
+  "detect, switch away, notify the player", and will forget the notification.
+- **One function pointer on `ProjectorSet`.** The *policy* stays in the ruleset
+  where the variables live; the *enforcement* (re-check, auto-fallback, UI event,
+  tray message, skipping unavailable entries in `next()`/`prev()`) lives in one
+  place.
+
+```cpp
+// in the ruleset — the whole feature:
+static bool projAvailable(uint8_t id) {
+    return !(id == ProjectorId::STRONG && lives <= 1);
+}
+```
+
+`GameRunner` evaluates it once per cycle in the OUTPUT phase — one call — and if
+the active projector just became unavailable, switches to `fallbackId` and fires
+`UIEvent::ProjectorChange` plus a tray message. Cheap, and it makes the rule
+visible in exactly one line of the ruleset.
+
+### 6.5 Asymmetric starts
+
+`ProjectorSet::startId` is the common default. A ruleset wanting per-player or
+per-role starts needs to select during `onBegin`, which currently receives
+`(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*, const LightAir_GameRunner&)`
+— no `GameOutput`, and a `const` runner.
+
+Selection at begin-time is safe (Enlight is idle, no loop is running), so the
+queue is unnecessary there. **Recommendation: expose a direct
+`LightAir_GameRunner::projector()` accessor** and drop the `const` on that
+parameter, mirroring how the runner already exposes `totemIdForRole()` to
+`onBegin`. Six one-word signature edits, and it avoids inventing a second
+queueing path for a case that doesn't need one.
+
+### 6.6 What the pre-game `ConfigVar` is *not* for
+
+The config blob broadcasts one value to every player, so it cannot express
+asymmetric loadouts and should not be the projector selector. It remains
+available as an ordinary per-game knob for the future "tune some projector
+behaviour" case (a range multiplier, a strength scale) — one broadcast integer,
+applied identically everywhere, which is what it is good at.
+
+The one generic improvement still worth making, independent of projectors: an
+optional `labels` field on `ConfigVar` so S4a can render `"SNIPER"` instead of
+`3` for any enumerated setting.
+
+### 6.7 From a totem
 
 `TotemRoleId::BONUS` exists, beacons, and **no ruleset currently consumes it** —
 this is its first real use. The reply path is already wired end to end, so
@@ -387,10 +573,10 @@ If different bonus totems should grant different projectors, put the id in the
 beacon's `payload[1]` — `payload[0]` is already "0 when ready", so the extension
 is backward compatible with existing totem firmware.
 
-### 6.4 From game events (quests)
+### 6.8 From game events (quests)
 
-No framework support needed at all. A `StateRule` condition already sees
-whatever the ruleset tracks, and its `onTransition` gets a `GameOutput`:
+No framework support needed. A `StateRule` condition already sees whatever the
+ruleset tracks, and its `onTransition` gets a `GameOutput`:
 
 ```cpp
 static bool earnedStrong(const InputReport&, const RadioReport&) { return points >= 10; }
@@ -399,12 +585,6 @@ static void giveStrong(LightAir_DisplayCtrl& d, GameOutput& out) {
     d.showMessage("Quest complete", 2000);
 }
 ```
-
-### 6.5 In-game manual switching
-
-`StateBehavior` already receives `InputReport.keyEvents`, so a keypad binding is
-two lines in the behavior — `if (key == '>' && state == RELEASED) out.proj.next();`
-No new plumbing.
 
 ---
 
@@ -423,14 +603,13 @@ and `DirectRadioRule::condition` / `onReceive` both already receive the full
 
 ```
 MSG_LIT payload[0] = strength     (0 = "use the receiver's default", i.e. 1)
-MSG_LIT payload[1] = projectorId  (display/telemetry: "shone by a STRONG projector")
-MSG_LIT payload[2] = roleTag      (reserved for the per-game table, §7.3)
+MSG_LIT payload[1] = projectorId  (feedback: "shone by a STRONG projector")
+MSG_LIT payload[2] = roleTag      (the sender's role — §7.3)
 ```
 
-Sending the value rather than an id is what keeps ruleset-local custom
-projectors working without extending the config blob, and it is what the role
-table needs anyway. Sending the id *as well* costs one byte and buys
-receiver-side feedback and post-game telemetry.
+Sending the value rather than an id is what keeps ruleset-local custom projectors
+and per-player asymmetry working with no shared state. Sending the id *as well*
+costs one byte and buys receiver-side feedback and post-game telemetry.
 
 **Backward compatibility is the migration path:** a receiver must treat
 `payloadLen == 0` as `strength = 1`. Old and new firmware then interoperate, and
@@ -448,20 +627,28 @@ which must become `lives > dmg(pkt)` / `lives <= dmg(pkt)` with a shared helper
 Six rulesets, two lines each — mechanical, but it must be done everywhere or
 `STRONG` silently behaves like `BASE`.
 
-### 7.3 The role field, deliberately not implemented yet
+### 7.3 `roleTag` *is* the role
 
-The requested "role for which a damage table can be defined for each game" works
-because the sender cannot know the receiver's role, but the receiver knows it:
+For a rock–paper–scissors game, no separate role concept is needed: **switching
+projector at respawn is choosing your role**, and `roleTag` is what makes the
+matchup resolvable. The sender cannot know the receiver's role; the receiver
+knows both — its own, and the sender's from `payload[2]`:
 
 ```cpp
 // entirely inside a ruleset; no framework support
-static const uint8_t dmgTable[PROJ_ROLE_COUNT][PLAYER_ROLE_COUNT] = { ... };
-// on receive: dmg = dmgTable[pkt.payload[2]][myRole];  else pkt.payload[0]
+static const uint8_t rps[ROLE_COUNT][ROLE_COUNT] = { ... };   // [attacker][defender]
+// on receive:  dmg = rps[pkt.payload[2]][myRoleTag];
 ```
 
-**Recommendation: reserve `payload[2]` now, ship nothing else.** The byte costs
-nothing, and the table's shape should be decided by the first game that actually
-needs one rather than guessed at in the framework.
+The outcome then flows back to the shooter through the existing reply
+sub-types — `REPLY_TAKEN` / `REPLY_SHONE` / a new `REPLY_COUNTERED` — so the
+whole matchup mechanic needs **zero framework changes** beyond carrying the byte.
+Combined with §6.4's availability predicate (which can restrict which role a
+player may take), the projector becomes the complete carrier of the role concept.
+
+**Recommendation: reserve `payload[2]` and populate it from day one, but ship no
+table.** The byte costs nothing and the table's shape should be decided by the
+first game that needs one.
 
 ---
 
@@ -471,21 +658,20 @@ Deliberately the smallest possible surface, reusing what exists:
 
 - **Notification.** Add `ProjectorChange` to `LightAir_UICtrl::UIEvent` and a row
   to `_actionTable`. The enum is already sized by `UIEvent::Count`, so this is an
-  additive change. (`RoleChange` could be reused to save a slot; a distinct event
-  is clearer and the table has room.) Rulesets wanting a per-projector signature
-  sound still have `Custom1..4`.
-- **Name on the OLED.** `MonitorVar::Str("Proj", projectorName, 1u<<IN_GAME, ICON_ROLE, c, r)`
-  bound to a buffer that `ProjectorCtrl` rewrites on every switch. Zero new
-  display code. One wart: `MonitorVar` tables are `static const`, so the pointer
-  must be a compile-time constant — the buffer therefore has to be a global
-  (`extern char projectorName[ProjectorLimits::NAME_LEN];`) rather than a
-  `ProjectorCtrl` member. That matches how `enlightPtr` is already exposed, but
-  it is a global, and the alternative (having the runner register the binding
-  itself) trades it for asymmetry with every other monitor var. Suggest living
-  with the global.
+  additive change. Rulesets wanting a per-projector signature sound still have
+  `Custom1..4`.
+- **Name on the OLED.** `MonitorVar::Str("Proj", projectorName, ...)` bound to a
+  buffer that `ProjectorCtrl` rewrites on every switch. Zero new display code,
+  and it doubles as the picker readout in §6.3. One wart: `MonitorVar` tables are
+  `static const`, so the pointer must be a compile-time constant — the buffer has
+  to be a global (`extern char projectorName[ProjectorLimits::NAME_LEN];`) rather
+  than a `ProjectorCtrl` member. That matches how `enlightPtr` is already
+  exposed; the alternative (the runner registering the binding itself) trades the
+  global for asymmetry with every other monitor var. Suggest living with it.
 - **Cooldown bar.** `DisplayCtrl::bindCooldownVariable(..., cooldownTimeMs, ...)`
   already exists and is unused by the rulesets; the active projector's
-  `cooldownMs` is exactly its argument.
+  `cooldownMs` is exactly its argument, and it becomes visible feedback now that
+  `BASE` has a non-zero cooldown.
 - **Burst indication, already correct.** Rulesets call
   `out.ui.triggerEnlight(enlightPtr->cycleTime())`, and `cycleTime()` is
   `_repetitions * MS_PER_REP` — so the UI burst length tracks the projector's
@@ -493,25 +679,32 @@ Deliberately the smallest possible surface, reusing what exists:
 
 ---
 
-## 9. Changes to `Enlight`
+## 9. Changes to `Enlight` and calibration
 
-The complete list, kept small on purpose:
+`Enlight`, complete list:
 
-1. `void setMinSignalPct(uint16_t pct)` + `uint16_t _minSignalPct = 100;`
-2. In `classify()`, scale the existing `thresh_far_*` comparison by
-   `_minSignalPct / 100` (§2.2). One multiplication; the logic shape is unchanged.
-3. Defensive `if (_active) return;` at the top of the three setters, belt-and-braces
-   behind the runner's own "don't switch mid-run" rule.
+1. `void setRangeM(uint8_t m)` + `float _rangeMul = 0.0f;` — one `powf` per
+   switch (§2.2).
+2. In `classify()`, source the three thresholds from `refFar * _rangeMul` floored
+   at `thresh_far_*`. Same logic shape, three `fmaxf` calls.
+3. Defensive `if (_active) return;` in the three setters, behind the runner's own
+   "don't switch mid-run" rule.
+4. `EnlightDefaults::RANGE_FALLOFF_EXP`.
 
-Everything else — `setRepetitions`, `setCooldown`, `cycleTime()`,
-`EnlightStatus::COOLDOWN` — already exists and needs no change.
+Calibration (§2.3), complete list:
+
+5. `EnlightCalib` gains `refFarR/G/B`; `nvs_config` gains three keys; `limpow`
+   retires.
+6. `step1()`'s prompt states the reference distance.
+7. `step2()` saves the median of its already-computed baseline-subtracted values.
+8. `step4()` displays the derived `Rmax` (§2.4).
 
 **Ownership invariant to write down and keep:** Enlight's optical settings are
 owned by `ProjectorCtrl` while a game is running, and by the tool
 (`EnlightCalibRoutine`, `EnlightTestMode`) outside a game. Calibration must keep
-setting `REPS` explicitly and must never see a projector — its output is what the
-`minSignalPct` ratio is measured against, so a calibration run performed through
-a projector would be circular.
+setting `REPS` explicitly and must never run through a projector — its output is
+what the range model is measured against, so calibrating through a range gate
+would be circular.
 
 ---
 
@@ -521,18 +714,20 @@ a projector would be circular.
 |---|---|
 | `src/config.h` | add `ProjectorLimits` |
 | `src/game/LightAir_Projector.h` | **new** — `Projector`, `ProjectorId`, `ProjectorSet`, `projectorClamp()`, standard table |
-| `src/game/LightAir_ProjectorCtrl.h/.cpp` | **new** — registry, `unlockedMask`, active selection, Enlight push, name buffer |
+| `src/game/LightAir_ProjectorCtrl.h/.cpp` | **new** — registry, `unlockedMask`, availability re-check, Enlight push, name buffer |
 | `src/game/LightAir_GameOutput.h` | add `ProjectorOutput proj` |
-| `src/game/LightAir_Game.h` | add `const ProjectorSet* projectors` |
-| `src/game/LightAir_GameRunner.cpp` | register the set in `begin()`, apply the queue in `flushOutput()` |
-| `src/game/LightAir_GameVar.h` | optional `labels` on `ConfigVar` (§6.2) |
+| `src/game/LightAir_Game.h` | add `const ProjectorSet* projectors`; drop `const` on `onBegin`'s runner |
+| `src/game/LightAir_GameRunner.h/.cpp` | register the set in `begin()`, apply queue + availability in `flushOutput()`, `projector()` accessor |
+| `src/game/LightAir_GameVar.h` | optional `labels` on `ConfigVar` (§6.6) |
 | `src/game/LightAir_GameSetupMenu.cpp` | render `labels` when present |
-| `src/enlight/Enlight.h/.cpp` | `setMinSignalPct` + gated `classify()` |
+| `src/enlight/Enlight.h/.cpp` | `setRangeM`, range-derived thresholds in `classify()`, `RANGE_FALLOFF_EXP` |
+| `src/nvs_config.h/.cpp` | `refFarR/G/B` keys; retire `limpow` |
+| `src/tools/EnlightCalibRoutine.cpp` | step 1 prompt, step 2 saves the reference, step 4 shows `Rmax` |
 | `src/ui/player/LightAir_UICtrl.h/.cpp` | `UIEvent::ProjectorChange` + table row |
 | `src/LightAir.h` | include the two new headers |
-| `src/rulesets/*.cpp` (×6) | one `projectors` field; `dmg(pkt)` in the lit conditions |
+| `src/rulesets/*.cpp` (×6) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature |
 
-The standard table is put in `LightAir_Projector.h` rather than `config.h` —
+The standard table goes in `LightAir_Projector.h` rather than `config.h` —
 `config.h` is already 508 lines, and only the limits were asked to live there.
 `TeamLedRhythm` sets the precedent for either choice.
 
@@ -540,23 +735,23 @@ The standard table is put in `LightAir_Projector.h` rather than `config.h` —
 
 ## 11. Open questions
 
-1. **`MAX_CYCLES`** — must come from the AFE current/thermal budget, since
-   `cycles` is literally continuous LED-on time. A hardware answer, not a
-   software guess.
-2. **`BASE` cooldown.** Keeping it at `0` guarantees no behavioural change but
-   preserves today's slightly odd free-running feel, where the shot rate is
-   limited only by burst duration. If a nonzero `BASE` cooldown is wanted, it is
-   a deliberate gameplay change to all six existing games and should be a
-   separate, playtested commit.
-3. **Naming of `strength`** (§2.3).
-4. **Per-player starting projectors.** The `ConfigVar` route gives everyone the
-   same one. Asymmetric loadouts (per-player, or per-team, or per-role) would
-   need a real menu screen and a blob extension — worth deciding now whether
-   that is a goal, because it is the one requirement that the cheap path cannot
-   later absorb.
-5. **Persistence across games.** An unlocked-projector bitmask in NVS would make
+1. **The falloff exponent and reference distance.** `EXP = 3` and
+   `CAL_REF_DIST_M = 5` are the two numbers the whole metric model rests on.
+   Both are one-constant edits, and §2.4's `Rmax` readout is the cheapest way to
+   validate them in the field. Worth measuring signal at two or three marked
+   distances once, before committing.
+2. **Does the existing calibration actually support 40 m?** `Rmax` computed from
+   `refFar / thresh_far` will say. If it comes out well under the README's 40 m,
+   the current classifier is already gating shorter than the hardware can see —
+   independent of this feature, but this is what would reveal it.
+3. **`MAX_CYCLES`** — answered in §3.4: nothing in the firmware binds below
+   ~8000. The proposed 40 is a playability figure; a battery-current measurement
+   of the AFE duty cycle is what should set it.
+4. **Naming of `strength`** (§2.5).
+5. **Per-colour range accuracy.** The gate necessarily uses a reference target's
+   reflectivity, so darker players are gated closer (§2.3). A per-colour
+   reference table with a post-classification gate would fix it; probably v2.
+6. **Persistence across games.** An unlocked-projector bitmask in NVS would turn
    totem rewards into meta-progression. It changes the NVS layout and has real
-   fairness implications between players with different play histories —
-   suggest explicitly leaving it out of v1.
-6. **`EnlightCalib::limpow`** — dead field (§3.1). Retire or repurpose as part of
-   this work rather than leaving two notions of a signal floor in the tree.
+   fairness implications between players with different play histories — suggest
+   explicitly leaving it out of v1.
