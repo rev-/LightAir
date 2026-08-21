@@ -263,7 +263,7 @@ signal floor in the tree.
 
 ```cpp
 namespace ProjectorLimits {
-    constexpr uint16_t MIN_CYCLES   = 1,  MAX_CYCLES   = 40;      // see §3.4
+    constexpr uint16_t MIN_CYCLES   = 1,  MAX_CYCLES   = 100;     // see §3.4
     constexpr uint16_t MIN_COOLDOWN = 0,  MAX_COOLDOWN = 10000;   // ms
     constexpr uint8_t  MIN_RANGE_M  = 1,  MAX_RANGE_M  = 100;     // 0 = device max, unclamped
     constexpr uint8_t  MIN_STRENGTH = 0,  MAX_STRENGTH = 10;
@@ -293,6 +293,25 @@ the bounds logic, no possibility of the two drifting. At registration, emit an
 
 ### 3.4 `MAX_CYCLES` is not a hardware limit — here is the evidence
 
+**`MAX_CYCLES` is a name proposed by this document; it does not exist in the
+tree.** The quantity it would bound is `Enlight::_repetitions` (default 10 at
+`Enlight.h:164`), written only by `setRepetitions()` and read at `run()` into
+`_repsRemaining` and by `cycleTime()`. It has exactly three callers today:
+`GameOutflow.cpp:209` (20), `EnlightCalibRoutine.cpp:381` (fixed at `REPS = 5`),
+and `EnlightTestMode.cpp:138` (interactive).
+
+That last one already carries a bound — `EnlightTestMode.cpp:83`:
+
+```cpp
+const uint32_t MIN_REPS = 1, MAX_REPS = 100;
+```
+
+so a ceiling for this quantity has already been chosen once, locally, by the
+tool that exercises it hardest. Whatever `ProjectorLimits::MAX_CYCLES` ends up
+being, **it and `MAX_REPS` should be the same constant**, hoisted to `config.h` —
+two independently-drifting ceilings on one hardware quantity is exactly the kind
+of duplication this proposal exists to remove.
+
 Traced through `Enlight`, with the numbers this hardware actually produces
 (`LED_CLOCK_HZ` 16 MHz, `LED_FREQ_HZ` 1667 → `_periodClocks` 9600,
 `_waveformBytes` 2400, `_goertzPeriod` 200, `_periodsPerCycle` 13,
@@ -303,6 +322,7 @@ Traced through `Enlight`, with the numbers this hardware actually produces
 | **DMA / memory** | **Not a limit.** All four buffers (2 × 31200 B LED + 2 × 15602 B ADC ≈ 94 KB) are allocated **once in `begin()`**, sized by `_periodsPerCycle`, which is itself capped by `ENLIGHT_SPI_MAX_DMA_LEN = 32767`. A repetition re-issues the *same* transaction. Memory does not scale with `cycles` at all. |
 | **Accumulator overflow** | **Not a limit.** `_rout`/`_gout`/`_bout` are `long long`; worst case ≈ 2.2 × 10¹⁰ per channel per cycle, so 64 bits holds ~4 × 10⁸ cycles. `_arrayiter` is `uint32_t` at +2600/cycle → 1.6 × 10⁶ cycles. |
 | **`triggerEnlight()` / `UIAction::durations[]`** | **The only hard cap in the firmware: 8191 cycles.** Both are `uint16_t` milliseconds, fed by `cycleTime() = cycles × MS_PER_REP`. Above 8191 the UI burst duration silently wraps. Far beyond anything playable, but it is the one real number. |
+| **Already exercised at 100** | `EnlightTestMode` sweeps `reps` up to 100 (780 ms) interactively. If that has been run at its ceiling without trouble, it is direct hardware evidence — better than any of the reasoning below. |
 | **Task churn** | One `xTaskCreatePinnedToCore` at `configMAX_PRIORITIES-1` on core 0 **per cycle**. Already the case at `cycles = 20` in Outflow; scales linearly but doesn't break. |
 | **Power / thermal** | **Real, and yours to quantify.** `AFE_ON` is raised in `run()` and dropped only when `_repsRemaining` hits 0, and the LED PDM buffer is transmitted every cycle — so `cycles × 7.8 ms` is *continuous* emitter-on time. |
 | **Feedback latency** | **Real.** No hit result exists until the whole run completes. 40 cycles = 312 ms between trigger and response; 20 (Outflow today) = 156 ms. |
@@ -310,10 +330,19 @@ Traced through `Enlight`, with the numbers this hardware actually produces
 
 **Conclusion: nothing in the firmware constrains `cycles` below ~8000.** The
 ceiling is a playability and battery budget, so pick it from measurement, not
-from code. `MAX_CYCLES = 40` (312 ms) is proposed above as a defensible
-playability ceiling — it leaves `LONG` at 30 with headroom while staying inside
-the tremor window. If a battery-current measurement says the AFE duty cycle
-should be tighter, lower it; nothing else in the tree cares.
+from code — and the instrument already exists. `EnlightTestMode` varies `reps`
+live and prints the colour coordinates and raw sums for each shot, so a sweep
+against a target at a marked distance answers *both* open questions at once:
+where added cycles stop improving hit reliability (the real `MAX_CYCLES`), and
+how the far sums fall with distance (the falloff exponent of §2.2).
+
+`MAX_CYCLES = 100` is adopted above to match the existing `MAX_REPS`, on the
+grounds that a ceiling already chosen and exercised by the test tool beats one
+invented here. Note it is a *clamp*, not a recommendation: it only catches a
+typo in a ruleset table. The playable range stays far below it — `LONG` at 30 is
+240 ms, already near the hand-tremor limit, and 100 cycles is 780 ms of
+continuous emission, which the battery budget will almost certainly rule out
+long before the classifier does.
 
 ### 3.5 Optional: a balance check
 
@@ -722,6 +751,7 @@ would be circular.
 | `src/game/LightAir_GameSetupMenu.cpp` | render `labels` when present |
 | `src/enlight/Enlight.h/.cpp` | `setRangeM`, range-derived thresholds in `classify()`, `RANGE_FALLOFF_EXP` |
 | `src/nvs_config.h/.cpp` | `refFarR/G/B` keys; retire `limpow` |
+| `src/tools/EnlightTestMode.cpp` | replace the local `MAX_REPS` with `ProjectorLimits::MAX_CYCLES` |
 | `src/tools/EnlightCalibRoutine.cpp` | step 1 prompt, step 2 saves the reference, step 4 shows `Rmax` |
 | `src/ui/player/LightAir_UICtrl.h/.cpp` | `UIEvent::ProjectorChange` + table row |
 | `src/LightAir.h` | include the two new headers |
@@ -744,9 +774,11 @@ The standard table goes in `LightAir_Projector.h` rather than `config.h` —
    `refFar / thresh_far` will say. If it comes out well under the README's 40 m,
    the current classifier is already gating shorter than the hardware can see —
    independent of this feature, but this is what would reveal it.
-3. **`MAX_CYCLES`** — answered in §3.4: nothing in the firmware binds below
-   ~8000. The proposed 40 is a playability figure; a battery-current measurement
-   of the AFE duty cycle is what should set it.
+3. **`MAX_CYCLES`** — answered in §3.4: the name is new, nothing in the firmware
+   binds below ~8000, and a ceiling of 100 already exists as `MAX_REPS` in
+   `EnlightTestMode`. Adopt that number, hoist it to `config.h` so the tool and
+   the projector clamp share it, and set the *playable* range from a battery
+   measurement of the AFE duty cycle.
 4. **Naming of `strength`** (§2.5).
 5. **Per-colour range accuracy.** The gate necessarily uses a reference target's
    reflectivity, so darker players are gated closer (§2.3). A per-colour
