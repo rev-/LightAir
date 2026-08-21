@@ -28,7 +28,7 @@ Projector from becoming a god-object wired into everything:
 | Group | Fields | Consumer | Lives in |
 |---|---|---|---|
 | **Optical** | `cycles`, `cooldownMs`, `rangeM` | `Enlight` | pushed via setters |
-| **Game** | `strength` (damage), `roleTag`, `energyCost` | ruleset logic + the radio packet | read by rules |
+| **Game** | `strength` (damage), `roleTag`, the shot economy | ruleset logic + the radio packet | read by rules / `ProjectorCtrl` |
 | **Identity** | `id`, `name` | menu, display, UI event | read by UI |
 
 Four consequences follow, and they define the whole architecture:
@@ -64,22 +64,32 @@ Four consequences follow, and they define the whole architecture:
 ```cpp
 // src/game/LightAir_Projector.h
 struct Projector {
-    uint8_t     id;             // ProjectorId value; index into the registry
-    const char* name;           // <= ProjectorLimits::NAME_LEN-1 chars, shown on the OLED
+    uint8_t     id;              // ProjectorId value; index into the registry
+    const char* name;            // <= ProjectorLimits::NAME_LEN-1 chars, shown on the OLED
 
     // ---- optical: pushed into Enlight ----
-    uint16_t    cycles;         // = Enlight::setRepetitions(); burst = cycles * MS_PER_REP
-    uint16_t    cooldownMs;     // = Enlight::setCooldown(); dead time after each measurement
-    uint8_t     rangeM;         // approximate reach in metres; 0 = whatever the device can see
+    uint16_t    cycles;          // = Enlight::setRepetitions(); burst = cycles * MS_PER_REP
+    uint16_t    cooldownMs;      // = Enlight::setCooldown(); dead time after each measurement
+    uint8_t     rangeM;          // approximate reach in metres; 0 = whatever the device can see
 
-    // ---- game: read by rules, sent on the wire ----
-    uint8_t     strength;       // lives/energy taken from the target on a confirmed hit
-    uint8_t     roleTag;        // 0 = generic; the player's "role" for a per-game table (§7.3)
-    uint8_t     energyCost;     // energy consumed per shot; 0 = free, 1 = today's behaviour
+    // ---- game: the shot economy (§2.5) ----
+    uint8_t     energyCost;      // energy consumed per shot
+    uint8_t     maxEnergy;       // pool size after a full recharge; 0 = ruleset owns energy
+    uint16_t    rechargeDelayMs; // idle time before recharging starts
+    uint16_t    rechargeMs;      // empty -> full duration; 0 = instant refill
 
-    uint8_t     reserved[3];    // future fields; keeps the struct at 16 bytes
+    // ---- game: the effect, sent on the wire ----
+    uint8_t     strength;        // lives/energy taken from the target on a confirmed hit
+    uint8_t     roleTag;         // 0 = generic; the player's "role" for a per-game table (§7.3)
+
+    // ---- game: handling and feedback ----
+    uint16_t    readyMs;         // deploy time after a switch before the first shot (§2.5.4)
+    uint8_t     shotUiEvent;     // UIEvent id fired on each shot; 0 = the standard Enlight
 };
 ```
+
+The struct lands at ~24 bytes with padding. Eight of them is under 200 bytes of
+flash, so there is no reason to contort the layout to keep a round size.
 
 ### 2.1 Fire rate and cooldown are already the same knob
 
@@ -122,7 +132,7 @@ constexpr float RANGE_FALLOFF_EXP = 3.0f;   // measured retroreflector falloff
 ```
 
 The whole conversion collapses into one `powf` executed **once per projector
-switch**, in the setter — so a non-integer exponent (2.8, 3.2) costs nothing at
+switch**, in the setter — so a non-integer exponent (2.7, 3.2) costs nothing at
 runtime, and re-fitting the law against new field measurements is a one-constant
 edit rather than a rewrite:
 
@@ -221,7 +231,116 @@ close as contact. If `refFar / thresh_far` turns out not to support 40 m, the
 existing classifier is already gating shorter than the hardware can see — a
 useful thing to learn regardless of this feature.
 
-### 2.5 A naming note
+### 2.5 The shot economy
+
+`maxEnergy` and the two recharge fields are the least speculative addition in
+this document, because **they do not add a feature — they centralise one that is
+already copy-pasted five times.** `GameFreeForAll`, `GameFlag`, `GameTeams`,
+`GameKingOfHill` and `GameUpkeep` each carry this block verbatim:
+
+```cpp
+if (triggerWasActive && !triggerActive) releaseAt = millis();
+triggerWasActive = triggerActive;
+
+if (!triggerActive && energy < startEnergy) {
+    if ((millis() - releaseAt) >= (uint32_t)rechargeSecs * 1000)
+        energy = startEnergy;
+}
+```
+
+plus the matching `startEnergy` / `rechargeSecs` config vars, the `releaseAt`
+and `triggerWasActive` statics, and the `energy--` / `energySpent++` in the
+trigger loop. Five identical copies, and a sixth variant in `GameOutflow` where
+energy is also drained passively. Moving the pool into `ProjectorCtrl` deletes
+all five.
+
+#### 2.5.1 Who owns `energy` — one switch, no ambiguity
+
+> **`maxEnergy == 0` → `ProjectorCtrl` manages nothing about energy; the ruleset
+> owns it exactly as today. `maxEnergy > 0` → `ProjectorCtrl` owns the pool, the
+> per-shot cost and the recharge.**
+
+That single rule settles every awkward case without a magic value:
+
+- `BASE` sets `maxEnergy = 0`, so the no-op property survives this addition
+  intact — no existing ruleset changes behaviour until it opts in.
+- `GameOutflow`, where energy *is* the life bar and must never recharge, opts out
+  by leaving `maxEnergy = 0` and keeps its own drain loop untouched.
+- A projector that sets `maxEnergy` **overrides** the ruleset's `startEnergy`
+  config var for as long as it is held. If a game wants the DM's knob to keep
+  mattering for such projectors, it scales the value itself — that is ruleset
+  business, not a second framework mechanism.
+
+`ProjectorCtrl` exposes the pool as a global `int` (`extern int projectorEnergy;`)
+for the same reason as the name buffer (§8): `MonitorVar` tables are
+`static const`, so the bound pointer must be a compile-time constant.
+
+#### 2.5.2 Two fields, because one cannot express what exists
+
+"Time for recharge" splits into two, and the split is what makes today's
+behaviour representable *and* unlocks the other model:
+
+| | `rechargeDelayMs` | `rechargeMs` | behaviour |
+|---|---|---|---|
+| today's five rulesets | 10000 | 0 | full refill after 10 s idle |
+| classic regeneration | 0 | 5000 | +1 every `rechargeMs / maxEnergy` ms |
+| grace-then-regen | 1500 | 4000 | brief pause, then a visible refill ramp |
+
+`rechargeDelayMs` is the idle time before recharging starts (reset on every
+shot); `rechargeMs` is how long empty → full takes once it does. Integer
+stepping — `rechargeStepMs = rechargeMs / maxEnergy`, one unit per step — avoids
+floats entirely, and `rechargeMs = 0` degenerates to the instant refill the code
+does now. One extra `uint16_t` buys the whole second model.
+
+#### 2.5.3 What happens to the pool on a switch
+
+This is the question the fields force, and if it isn't answered here every
+ruleset will answer it differently. **Keep the absolute value, clamp to the new
+`maxEnergy`.** Not "refill", which would make tap-switching a free reload; not
+"proportional", which is unintuitive mid-fight. Absolute-and-clamp cannot be
+exploited in either direction: switching to a bigger pool carries your low count
+over, and switching back truncates it again.
+
+#### 2.5.4 `readyMs` — the exploit the magazines open
+
+Once switching is free, in-game and instant (§6), a player can dodge a long
+cooldown or a slow recharge by flicking to another projector and back.
+`readyMs` — a deploy time after a switch before the first shot is allowed — is
+the guard, and it doubles as characterisation: a heavy projector that takes
+600 ms to bring up *feels* heavy. `ProjectorCtrl` implements it by pushing a
+one-shot cooldown into `Enlight` on switch, so it costs no new state.
+
+#### 2.5.5 `shotUiEvent` — the projector is the weapon's identity
+
+Every ruleset currently fires the same `out.ui.triggerEnlight(cycleTime())`, so
+every projector will feel the same. `LightAir_UICtrl` already has four empty
+`Custom1..4` slots and a `defineCustomAction()` to fill them; one `uint8_t`
+naming which event this projector fires makes `STRONG` sound and buzz unlike
+`FAST` for free. `0` keeps the standard `Enlight` action, so nothing changes
+unless a projector asks.
+
+### 2.6 What else was considered, and rejected
+
+Kept out deliberately, with the reason, so the same ideas don't get relitigated:
+
+| Idea | Why not |
+|---|---|
+| `minLives`, team restriction, role restriction | All three are `isAvailable()` (§6.4) written differently. One predicate already covers every conditional-availability rule. |
+| An `icon` field | **No CGRAM budget.** `LightAir_Display_Icons.h` defines eight icons and `ICON_TIME` is already an alias reusing `ICON_HOURGLASS`'s slot. There is nothing to allocate a per-projector icon from. |
+| Heat / overheat | A second resource with the same shape as energy. `energyCost` + `rechargeMs` already expresses "fires fast, then must stop". |
+| Unlock price / economy | No consumer. `unlockedMask` already answers "do I have this"; what it *cost* is a game that doesn't exist yet. |
+| Accuracy / spread | The optics have no such knob. `rangeM` and `cycles` are the only real levers on detection, and both are already exposed. |
+| `hitCooldownMs` | Still deferred per §2.1 — cheapest of the deferred fields, but wait for a ruleset to ask. |
+
+One thing worth raising as a **balance question rather than a field**:
+`GameFreeForAll.cpp:63` hardcodes `HIT_IMMUNITY_MS = 3000`, a per-attacker
+immunity window on the receiving side. That constant is what currently stops hit
+spam, and it interacts directly with `FAST` (short cooldown) and `strength` > 1.
+It should probably become a config var before `FAST` ships, but it belongs to the
+game's balance, not to the attacker's projector — the receiver enforces it and
+the receiver should own it.
+
+### 2.7 A naming note
 
 The repo's nonviolent-semantics guideline argues against a field literally named
 `damage`. `strength` is used above: it reads correctly next to the `STRONG`
@@ -268,6 +387,9 @@ namespace ProjectorLimits {
     constexpr uint8_t  MIN_RANGE_M  = 1,  MAX_RANGE_M  = 100;     // 0 = device max, unclamped
     constexpr uint8_t  MIN_STRENGTH = 0,  MAX_STRENGTH = 10;
     constexpr uint8_t  MAX_ENERGY_COST = 10;
+    constexpr uint8_t  MAX_ENERGY      = 200;   // pool size ceiling (config vars cap at 100 today)
+    constexpr uint16_t MAX_RECHARGE_MS = 60000; // empty -> full, and the idle delay before it
+    constexpr uint16_t MAX_READY_MS    = 5000;  // deploy time after a switch
     constexpr uint8_t  MAX_CUSTOM      = 4;   // custom slots per ruleset
     constexpr uint8_t  NAME_LEN        = 8;   // fits the OLED cell width
     constexpr uint8_t  CAL_REF_DIST_M  = 5;   // distance for calibration step 1 (§2.3)
@@ -378,20 +500,24 @@ namespace ProjectorId {
 }
 ```
 
-| | cycles | burst | cooldown | period | rangeM | strength | character |
-|---|---|---|---|---|---|---|---|
-| `BASE`   | 10 | 80 ms  | **10 ms** | 90 ms   | 0 (device max) | 1 | the default profile |
-| `FAST`   | 4  | 32 ms  | 60 ms     | 92 ms   | 8              | 1 | quick, short reach |
-| `LONG`   | 30 | 240 ms | 400 ms    | 640 ms  | 0 (device max) | 1 | slow, maximum reach |
-| `STRONG` | 15 | 120 ms | 900 ms    | 1020 ms | 15             | 3 | slow, heavy, mid reach |
+| | cycles | burst | cooldown | period | rangeM | strength | energy | recharge | ready | character |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `BASE`   | 10 | 80 ms  | **10 ms** | 90 ms   | 0 (device max) | 1 | 0 (ruleset) | — | 0 | the default profile |
+| `FAST`   | 4  | 32 ms  | 60 ms     | 92 ms   | 8              | 1 | 30 × 1 | 1500 / 3000 ms | 150 ms | quick, short reach, drains fast |
+| `LONG`   | 30 | 240 ms | 400 ms    | 640 ms  | 0 (device max) | 1 | 20 × 1 | 4000 / 0 ms | 400 ms | slow, maximum reach |
+| `STRONG` | 15 | 120 ms | 900 ms    | 1020 ms | 15             | 3 | 8 × 2  | 6000 / 0 ms | 600 ms | slow, heavy, mid reach |
+
+(`energy` reads *pool × cost per shot*; `recharge` reads
+*`rechargeDelayMs` / `rechargeMs`*.)
 
 These are starting points for playtesting, with one exception that is an
 architectural commitment rather than a tuning value:
 
 > **`BASE` is today's behaviour apart from one deliberate change.**
 > `cycles = 10` is the current `Enlight` member initialiser, `strength = 1` is
-> the implicit `lives--`, and `rangeM = 0` reduces the classifier comparison to
-> exactly what it does now (§2.2). **`cooldownMs = 10` is the one accepted
+> the implicit `lives--`, `rangeM = 0` reduces the classifier comparison to
+> exactly what it does now (§2.2), and `maxEnergy = 0` leaves the energy pool
+> entirely to the ruleset (§2.5.1). **`cooldownMs = 10` is the one accepted
 > behavioural change**, applying to all six existing rulesets.
 
 That 10 ms is safe to introduce without touching ruleset code — verified against
@@ -443,9 +569,9 @@ Usage in a ruleset stays at the density the codebase is written for:
 
 ```cpp
 static const Projector customProjectors[] = {
-    //  id                 name      cycles cooldown range str role energy
-    { ProjectorId::CUSTOM1, "SNIPER",   40,     900,    0,   2,  0,   3 },
-    { ProjectorId::CUSTOM2, "SPRAY",     3,      40,    4,   1,  0,   1 },
+    //  id                 name     cyc  cool  rng | cost pool delay rech | str role | ready ui
+    { ProjectorId::CUSTOM1, "SNIPER", 40,  900,   0,    3,   6, 5000,   0,   2,   0,    800, 0 },
+    { ProjectorId::CUSTOM2, "SPRAY",   3,   40,   4,    1,  60, 2000, 4000,  1,   0,    100, 0 },
 };
 
 static const ProjectorSet projectorSet = {
@@ -743,7 +869,7 @@ would be circular.
 |---|---|
 | `src/config.h` | add `ProjectorLimits` |
 | `src/game/LightAir_Projector.h` | **new** — `Projector`, `ProjectorId`, `ProjectorSet`, `projectorClamp()`, standard table |
-| `src/game/LightAir_ProjectorCtrl.h/.cpp` | **new** — registry, `unlockedMask`, availability re-check, Enlight push, name buffer |
+| `src/game/LightAir_ProjectorCtrl.h/.cpp` | **new** — registry, `unlockedMask`, availability re-check, Enlight push, name buffer, energy pool + recharge tick |
 | `src/game/LightAir_GameOutput.h` | add `ProjectorOutput proj` |
 | `src/game/LightAir_Game.h` | add `const ProjectorSet* projectors`; drop `const` on `onBegin`'s runner |
 | `src/game/LightAir_GameRunner.h/.cpp` | register the set in `begin()`, apply queue + availability in `flushOutput()`, `projector()` accessor |
@@ -755,7 +881,7 @@ would be circular.
 | `src/tools/EnlightCalibRoutine.cpp` | step 1 prompt, step 2 saves the reference, step 4 shows `Rmax` |
 | `src/ui/player/LightAir_UICtrl.h/.cpp` | `UIEvent::ProjectorChange` + table row |
 | `src/LightAir.h` | include the two new headers |
-| `src/rulesets/*.cpp` (×6) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature |
+| `src/rulesets/*.cpp` (×6) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature; the five identical recharge blocks deleted once each opts in (§2.5) |
 
 The standard table goes in `LightAir_Projector.h` rather than `config.h` —
 `config.h` is already 508 lines, and only the limits were asked to live there.
@@ -779,7 +905,7 @@ The standard table goes in `LightAir_Projector.h` rather than `config.h` —
    `EnlightTestMode`. Adopt that number, hoist it to `config.h` so the tool and
    the projector clamp share it, and set the *playable* range from a battery
    measurement of the AFE duty cycle.
-4. **Naming of `strength`** (§2.5).
+4. **Naming of `strength`** (§2.7).
 5. **Per-colour range accuracy.** The gate necessarily uses a reference target's
    reflectivity, so darker players are gated closer (§2.3). A per-colour
    reference table with a post-classification gate would fix it; probably v2.
