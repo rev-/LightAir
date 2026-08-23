@@ -416,10 +416,10 @@ rule to forget, because the baseline is not in the array eviction walks. It also
 means the availability fallback of §6.4 always has somewhere to go, which was the
 real reason the exemption existed.
 
-This merges two `ProjectorSet` fields into one: `startId` is now *the permanent
-slot-0 projector* — the one you always have, never lose, and fall back to — and
-the separate `fallbackId` is deleted. A ruleset that wants a different baseline
-than `BASE` simply names it in `startId`.
+`BASE` is *always* the occupant of slot 0; both `fallbackId` and `startId` are
+deleted. A game whose baseline needs different *values* retunes them in place
+with `ProjectorSet::baseOverride` (§5.1) rather than pointing the slot at a
+different id — the role stays structural, only the numbers change.
 
 **Eviction is first-in-first-out** on `acquiredAt` among the powered slots. Taking
 a fourth powered projector with `maxOwned = 3` drops the one held longest, and if
@@ -729,11 +729,10 @@ default definition":
 
 ```cpp
 struct ProjectorSet {
-    const Projector* custom;       // extra profiles; nullptr = none
+    const Projector* custom;       // extra powered profiles; nullptr = none
     uint8_t          customCount;  // <= ProjectorLimits::MAX_CUSTOM
-    uint16_t         catalogMask;  // bit i = ProjectorId i exists in this game
-    uint8_t          startId;      // the permanent slot-0 projector: always held, never
-                                   //   evicted, and the availability fallback (§2.5.4)
+    uint16_t         catalogMask;  // bit i = powered ProjectorId i exists in this game
+    const Projector* baseOverride; // this game's baseline values; nullptr = standard BASE
     const int*       maxOwned;     // powered slots; -> ruleset config var, null = DEFAULT
 
     // Per-cycle availability predicate — see §6.4.  nullptr = always available.
@@ -755,18 +754,76 @@ static const Projector customProjectors[] = {
 
 static const ProjectorSet projectorSet = {
     customProjectors, 2,
-    (1u<<ProjectorId::BASE) | (1u<<ProjectorId::FAST) |
-    (1u<<ProjectorId::STRONG) | (1u<<ProjectorId::CUSTOM1),
-    ProjectorId::BASE, &maxProjectors,
+    (1u<<ProjectorId::FAST) | (1u<<ProjectorId::STRONG) | (1u<<ProjectorId::CUSTOM1),
+    nullptr,                 // this game keeps the standard BASE
+    &maxProjectors,
     projAvailable,
 };
 ```
 
 `catalogMask` does triple duty: it is the list any picker offers, the set a totem
-or quest may grant, and the validity check on any runtime `select()`. What a
-player actually *holds* is the ordered inventory of §2.5.3, seeded with `startId`
-at full energy; a `select()` of an unowned or non-catalogued id is rejected and
-logged rather than silently applied.
+or quest may grant, and the validity check on any runtime `select()`. It lists
+only *powered* projectors — the baseline is structural and needs no bit (§2.5.4).
+What a player actually *holds* is the baseline plus the ordered inventory of
+§2.5.3; a `select()` of an unowned or non-catalogued id is rejected and logged
+rather than silently applied.
+
+### 5.1 `baseOverride` — retuning the baseline without renaming it
+
+An earlier revision made the baseline whatever `startId` named, which forced a
+game with non-standard baseline values — `GameOutflow` (§12) — to invent a
+`CUSTOM1` that then had to be *told* it was structurally special. That conflated
+two separable things:
+
+| | | |
+|---|---|---|
+| **The role** | always held, never counted as powered, never evicted, always the availability fallback | structural |
+| **The values** | cycles, cooldown, recharge, immunity, … | per-game |
+
+`baseOverride` separates them, exactly as §2.5.1 separated ownership from refill
+behaviour. `BASE` is *always* slot 0; `baseOverride` says what it is made of.
+`startId` disappears — one field fewer, and no indirection to follow.
+
+A ruleset that wants the standard baseline writes `nullptr`. One that does not
+writes a complete `Projector`:
+
+```cpp
+static const Projector outflowBase = { ProjectorId::BASE, "BASE", /* … */ };
+```
+
+**Full replacement, not a sparse patch.** A partial override would need a
+per-field "inherit" sentinel, which for `uint8_t` fields means magic numbers —
+the exact smell removed from `Recharge` in §2.5.2. Full replacement costs a few
+more lines in the one file that needs it and stays readable in the positional
+style the rest of the codebase already uses.
+
+**Two invariants, both cheap to enforce at compile time:**
+
+```cpp
+static_assert(outflowBase.id == ProjectorId::BASE,
+              "a base override must keep the BASE id");
+static_assert(outflowBase.recharge != Recharge::CONSUMED,
+              "the baseline is undroppable; CONSUMED would delete it at zero");
+```
+
+The second is a genuine contradiction rather than a style rule: `CONSUMED` means
+"dropped when it reaches 0" and the baseline is by definition undroppable. It is
+the one combination the two concepts cannot both hold, and it is worth failing
+the build over rather than discovering at runtime that a player has no projector.
+
+**Where `baseOverride` ends and `setPool()` begins.** They answer different
+questions and both are needed:
+
+| | `baseOverride` | `ProjectorCtrl::setPool()` (§2.5.1) |
+|---|---|---|
+| when | compile time | runtime, in `onBegin` |
+| expresses | "this game's baseline is built differently" | "the DM changed the numbers" |
+| `GameOutflow` uses it for | `cycles`, `cooldownMs`, `Recharge::NONE`, `targetImmunityMs = 0` | `startEnergy`, a config var |
+
+None of Outflow's structural values are DM-tunable and its pool size is, so the
+split falls exactly along the seam. If a future game needs a *config-var-driven*
+cooldown, that is a third mechanism and should be resisted until something
+actually needs it.
 
 ---
 
@@ -870,8 +927,9 @@ visible in exactly one line of the ruleset.
 
 ### 6.5 Asymmetric starts
 
-`ProjectorSet::startId` is the common default. A ruleset wanting per-player or
-per-role starts needs to select during `onBegin`, which currently receives
+Every player starts holding the baseline and nothing else. A ruleset wanting
+per-player or per-role starting loadouts must `give()` or `select()` during
+`onBegin`, which currently receives
 `(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*, const LightAir_GameRunner&)`
 — no `GameOutput`, and a `const` runner.
 
@@ -1293,9 +1351,12 @@ mechanical. Line numbers are from the current file.
 
 ### 12.1 The projector it declares
 
+Outflow has no powered projectors at all — it has one baseline whose values
+differ from the standard. That is exactly `baseOverride` (§5.1):
+
 ```cpp
-static const Projector outflowProjectors[] = {
-  { ProjectorId::CUSTOM1, "OUTFLOW",
+static const Projector outflowBase = {
+    ProjectorId::BASE, "BASE",   // the id is what makes it structural
     /* cycles          */ 20,     // was enlightPtr->setRepetitions(20)  L209
     /* cooldownMs      */ 20,     // was enlightPtr->setCooldown(20)     L208
     /* rangeM          */ 0,      // device max — today's classifier behaviour
@@ -1306,26 +1367,31 @@ static const Projector outflowProjectors[] = {
     /* strength        */ 1,      // one standard hit = hitDmg energy (§7.5)
     /* roleTag         */ 0,
     /* targetImmunityMs*/ 0,      // Outflow has NO immunity today — must stay 0
-    /* readyMs         */ 0,      // single projector, nothing to switch to
+    /* readyMs         */ 0,      // nothing to switch to
     /* shotAction      */ nullptr,             // keep the standard Enlight action
     /* icon            */ ICON_ENERGY_BITMAP,  // keep today's display
-  },
 };
+static_assert(outflowBase.id       == ProjectorId::BASE,     "structural id");
+static_assert(outflowBase.recharge != Recharge::CONSUMED,    "baseline is undroppable");
 
 static const ProjectorSet projectorSet = {
-    outflowProjectors, 1,
-    (1u << ProjectorId::CUSTOM1),
-    ProjectorId::CUSTOM1,   // the permanent slot-0 projector — not BASE
-    nullptr,                // maxOwned unused: nothing else is grantable
-    nullptr,                // isAvailable: always
+    nullptr, 0,        // no powered projectors
+    0,                 // empty catalogMask
+    &outflowBase,      // the baseline, retuned
+    nullptr,           // maxOwned unused: nothing is grantable
+    nullptr,           // isAvailable: never consulted for the baseline anyway
 };
 ```
 
-Two values in there are load-bearing and easy to get wrong:
-`targetImmunityMs = 0`, because Outflow is the one ruleset with no `litAt[]`
-table and no immunity rule at all — inheriting `BASE`'s 3000 ms would silently
-change the game; and `startId = CUSTOM1` rather than `BASE`, because §2.5.4 makes
-`startId` the permanent projector and Outflow's baseline is its own.
+The whole declaration is now four structural fields set to "none" plus one
+override, and the projector keeps its `BASE` identity — undroppable, uncounted,
+the fallback — without Outflow having to know any of that.
+
+One value in there is load-bearing and easy to get wrong: `targetImmunityMs = 0`,
+because Outflow is the one ruleset with no `litAt[]` table and no immunity rule
+at all. Inheriting the standard `BASE`'s 3000 ms would silently change the game —
+and note that this is precisely the kind of field a *sparse* override would have
+let an author forget (§5.1).
 
 ### 12.2 Every edit, in file order
 
