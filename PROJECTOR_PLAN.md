@@ -73,7 +73,7 @@ struct Projector {
     uint8_t     rangeM;          // approximate reach in metres; 0 = whatever the device can see
 
     // ---- game: the shot economy (§2.5) ----
-    Recharge    recharge;        // which refill rule applies (§2.5.2)
+    Recharge    recharge;        // refill behaviour: REFILL / RAMP / NONE / CONSUMED
     uint8_t     energyCost;      // energy consumed per shot
     uint8_t     maxEnergy;       // pool size when full / number of charges
     uint16_t    rechargeDelayMs; // idle time before recharging starts
@@ -257,25 +257,43 @@ trigger loop. Five identical copies, and a sixth variant in `GameOutflow` where
 energy is also drained passively. Moving the pool into `ProjectorCtrl` deletes
 all five.
 
-#### 2.5.1 Who owns `energy`
+#### 2.5.1 `ProjectorCtrl` always owns the pool
 
-> **`recharge == Recharge::RULESET` → `ProjectorCtrl` manages nothing about
-> energy; the ruleset owns it exactly as today. Any other mode → `ProjectorCtrl`
-> owns the pool, the per-shot cost and the refill.**
+An earlier revision had a `Recharge::RULESET` mode meaning "the framework manages
+nothing here". That was an ownership escape hatch dressed as a behaviour, and it
+existed because two genuinely different problems had been conflated:
 
-Since `RULESET` is the enum's zero value, a projector that says nothing about
-energy gets today's behaviour by default:
+- **A migration concern** — five rulesets manage energy today and must not change
+  behaviour.
+- **A game-design case** — `GameOutflow`, where energy never refills because it
+  *is* the life total.
 
-- `BASE` stays in `RULESET` mode, so the no-op property survives this addition —
-  no existing ruleset changes behaviour until it opts in.
-- `GameOutflow`, where energy *is* the life bar and must never refill, opts out
-  the same way and keeps its own drain loop untouched.
-- A projector in any other mode **overrides** the ruleset's `startEnergy` config
-  var for as long as it is held. If a game wants the DM's knob to keep mattering
-  for such projectors, it scales the value itself — that is ruleset business, not
-  a second framework mechanism.
+Separated, neither needs an opt-out. The migration concern is answered by giving
+`BASE` the values those rulesets already use (§4), and the design case is a real
+refill behaviour, `Recharge::NONE` (§2.5.2). So:
 
-`ProjectorCtrl` exposes the *active* projector's pool as a global `int`
+> **`ProjectorCtrl` owns the energy pool for every projector.** A ruleset that
+> needs different numbers *states* them; it does not opt out of the mechanism.
+
+The DM's `Energy` and `Recharge` config vars keep their authority through one
+explicit call, rather than through a mode that switches the framework off:
+
+```cpp
+// in the ruleset's onBegin — the config vars still win:
+runner.projector().setPool(startEnergy, (uint16_t)rechargeSecs * 1000);
+```
+
+One line added, the eight-line recharge block deleted — a net reduction in every
+ruleset that has one, and the intent is visible at the call site instead of
+hidden behind an enum value.
+
+**One constraint this creates, and it is not optional.** `GameOutflow` grants the
+shooter `startEnergy` on an elimination, *uncapped* — its own header says so. So
+`ProjectorCtrl` must **clamp to `maxEnergy` only when refilling, never on a
+direct write by a ruleset.** Clamping every write would silently break a
+mechanic that already exists.
+
+`ProjectorCtrl` exposes the active projector's pool as a global `int`
 (`extern int projectorEnergy;`) for the same reason as the name buffer (§8.3):
 `MonitorVar` tables are `static const`, so the bound pointer must be a
 compile-time constant.
@@ -289,22 +307,37 @@ that nobody will remember. One byte makes every case explicit:
 
 ```cpp
 enum class Recharge : uint8_t {
-    RULESET = 0,  // the ruleset owns energy entirely; every other field ignored
-    REFILL,       // after rechargeDelayMs idle, jump straight to maxEnergy
+    REFILL = 0,   // after rechargeDelayMs idle, jump straight to maxEnergy
     RAMP,         // after rechargeDelayMs idle, +1 every rechargeMs / maxEnergy
+    NONE,         // never refills; stays in the inventory when empty
     CONSUMED,     // never refills; the projector is DROPPED when it reaches 0
 };
 ```
 
 | mode | `rechargeDelayMs` | `rechargeMs` | behaviour |
 |---|---|---|---|
-| `RULESET` | — | — | today's five rulesets, untouched |
-| `REFILL`  | 10000 | — | full refill after 10 s idle (today's rule, framework-side) |
+| `REFILL`  | 10000 | — | full refill after 10 s idle — today's rule, framework-side |
 | `RAMP`    | 1500 | 4000 | brief pause, then a visible refill ramp |
+| `NONE`    | — | — | a fixed reserve; what happens at 0 is the ruleset's business |
 | `CONSUMED`| — | — | `maxEnergy` shots, then gone |
+
+The four values are a clean 2×2 — two that refill, differing in *shape*; two that
+do not, differing in *what happens at zero* — with no member that means "ignore
+this struct". That shape is itself evidence the abstraction is right; the version
+with an escape hatch did not have it.
 
 Integer stepping for `RAMP` — `rechargeStepMs = rechargeMs / maxEnergy`, one unit
 per step — avoids floats entirely.
+
+**`NONE` is what `GameOutflow` needs**, and it is the opposite of `CONSUMED`
+rather than a weaker version of it — a distinction an earlier revision of this
+document got wrong by dropping `NONE` as redundant. In Outflow, reaching zero is
+the *elimination condition*, handled by the ruleset's own `pendingDepletion`
+transition; the projector must stay in hand so the player can respawn with it.
+`CONSUMED` would delete the projector at exactly the moment the ruleset needs it.
+Outflow's projector is `NONE`, it keeps `tickDrain()` and its depletion rule
+untouched, and it *deletes* its own `energy--` from the shot loop because
+`ProjectorCtrl` now does that.
 
 **`CONSUMED` is what "single-time charge" should be.** A projector that can never
 refill but stays in the inventory is dead weight occupying a slot the player
@@ -320,8 +353,8 @@ This is also exactly where re-granting earns its keep (§2.5.3): handing a
 `CONSUMED` projector to someone who still holds it is a **restock**, which is the
 only reading under which "refill on re-grant" clearly makes sense.
 
-A fifth mode, `NEVER` (empty but retained — a trophy, or held for its `roleTag`),
-is a one-line addition if a game ever wants it. Left out until one does.
+A projector held only for its `roleTag`, with no shooting role at all, is just
+`NONE` with `maxEnergy = 0` — no fifth mode needed.
 
 #### 2.5.3 Every projector carries its own energy
 
@@ -624,7 +657,7 @@ namespace ProjectorId {
 
 | | cycles | burst | cooldown | period | rangeM | strength | energy | recharge | ready | character |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `BASE`   | 10 | 80 ms  | **10 ms** | 90 ms   | 0 (device max) | 1 | `RULESET` | — | 0 | the default profile |
+| `BASE`   | 10 | 80 ms  | **10 ms** | 90 ms   | 0 (device max) | 1 | `REFILL` 50 × 1 | 10000 ms | 0 | the default profile |
 | `FAST`   | 4  | 32 ms  | 60 ms     | 92 ms   | 8              | 1 | `RAMP` 30 × 1 | 1500 / 3000 ms | 150 ms | quick, short reach, drains fast |
 | `LONG`   | 30 | 240 ms | 400 ms    | 640 ms  | 0 (device max) | 1 | `REFILL` 20 × 1 | 4000 ms | 400 ms | slow, maximum reach |
 | `STRONG` | 15 | 120 ms | 900 ms    | 1020 ms | 15             | 3 | `REFILL` 8 × 2  | 6000 ms | 600 ms | slow, heavy, mid reach |
@@ -654,10 +687,16 @@ architectural commitment rather than a tuning value:
 
 > **`BASE` is today's behaviour apart from one deliberate change.**
 > `cycles = 10` is the current `Enlight` member initialiser, `strength = 1` is
-> the implicit `lives--`, `rangeM = 0` reduces the classifier comparison to
-> exactly what it does now (§2.2), and `Recharge::RULESET` leaves the energy pool
-> entirely to the ruleset (§2.5.1). **`cooldownMs = 10` is the one accepted
+> the implicit `lives--`, and `rangeM = 0` reduces the classifier comparison to
+> exactly what it does now (§2.2). **`cooldownMs = 10` is the one accepted
 > behavioural change**, applying to all six existing rulesets.
+
+`BASE`'s energy line is today's numbers, not an exemption from the mechanism:
+`REFILL / 50 / 10000 ms` is exactly `startEnergy = 50` and `rechargeSecs = 10`,
+the defaults every one of the five energy rulesets already declares. A ruleset
+whose DM changes those config vars keeps its numbers with one `setPool()` call in
+`onBegin` (§2.5.1) while deleting its eight-line recharge block — same behaviour,
+smaller file.
 
 That 10 ms is safe to introduce without touching ruleset code — verified against
 each one's shot loop:
@@ -1167,7 +1206,7 @@ would be circular.
 |---|---|
 | `src/config.h` | add `ProjectorLimits` |
 | `src/game/LightAir_Projector.h` | **new** — `Projector`, `ProjectorId`, `ProjectorSet`, `projectorClamp()`, standard table |
-| `src/game/LightAir_ProjectorCtrl.h/.cpp` | **new** — inventory + FIFO eviction over powered slots, active-slot energy and recharge tick, `setEnlightAction()` on switch, availability re-check, Enlight push, per-target immunity table, name/energy/icon globals |
+| `src/game/LightAir_ProjectorCtrl.h/.cpp` | **new** — inventory + FIFO eviction over powered slots, the energy pool + `setPool()` + active-slot recharge tick, `setEnlightAction()` on switch, availability re-check, Enlight push, per-target immunity table, name/energy/icon globals |
 | `src/game/LightAir_GameOutput.h` | add `ProjectorOutput proj` |
 | `src/ui/player/display/LightAir_DisplayCtrl.h/.cpp` | binding variant taking `const uint8_t* const*` instead of `IconType` (§8.2) |
 | `src/game/LightAir_Game.h` | add `const ProjectorSet* projectors`; drop `const` on `onBegin`'s runner |
@@ -1180,7 +1219,8 @@ would be circular.
 | `src/tools/EnlightCalibRoutine.cpp` | step 1 prompt, step 2 saves the reference, step 4 shows `Rmax` |
 | `src/ui/player/LightAir_UICtrl.h/.cpp` | `UIEvent::ProjectorChange` + one table row; `setEnlightAction()` extending the `resolveAction()` override hook (§8.1). `.cpp:352` and `:129` stay untouched. |
 | `src/LightAir.h` | include the two new headers |
-| `src/rulesets/*.cpp` (×6) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature; the five identical recharge blocks deleted once each opts in (§2.5); `litAt[]`/`notImmune()`/`REPLY_IMMUNE` removed (§7.4); a `Projectors` config var |
+| `src/rulesets/*.cpp` (×5) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature + one `setPool()` call; the identical recharge block deleted (§2.5); `litAt[]`/`notImmune()`/`REPLY_IMMUNE` removed (§7.4); a `Projectors` config var |
+| `src/rulesets/GameOutflow.cpp` | as above, but a `Recharge::NONE` projector: `tickDrain()` and the depletion rule stay; its own `energy--` in the shot loop goes; the uncapped kill reward writes the pool directly (§2.5.1) |
 
 The standard table goes in `LightAir_Projector.h` rather than `config.h` —
 `config.h` is already 508 lines, and only the limits were asked to live there.
