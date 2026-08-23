@@ -73,10 +73,11 @@ struct Projector {
     uint8_t     rangeM;          // approximate reach in metres; 0 = whatever the device can see
 
     // ---- game: the shot economy (§2.5) ----
+    Recharge    recharge;        // which refill rule applies (§2.5.2)
     uint8_t     energyCost;      // energy consumed per shot
-    uint8_t     maxEnergy;       // pool size after a full recharge; 0 = ruleset owns energy
+    uint8_t     maxEnergy;       // pool size when full / number of charges
     uint16_t    rechargeDelayMs; // idle time before recharging starts
-    uint16_t    rechargeMs;      // empty -> full duration; 0 = instant refill
+    uint16_t    rechargeMs;      // empty -> full duration (RAMP only)
 
     // ---- game: the effect ----
     uint8_t     strength;        // lives/energy taken from the target on a confirmed hit
@@ -85,7 +86,7 @@ struct Projector {
 
     // ---- game: handling and feedback ----
     uint16_t    readyMs;         // deploy time after a switch before the first shot (§2.5.5)
-    uint8_t     shotUiEvent;     // UIEvent fired on each shot (§8.1)
+    const LightAir_UICtrl::UIAction* shotAction;  // sound/vibration/colour of a shot (§8.1)
     const uint8_t* icon;         // 8x8 PROGMEM bitmap shown beside this projector's energy (§8.2)
 };
 ```
@@ -256,43 +257,71 @@ trigger loop. Five identical copies, and a sixth variant in `GameOutflow` where
 energy is also drained passively. Moving the pool into `ProjectorCtrl` deletes
 all five.
 
-#### 2.5.1 Who owns `energy` — one switch, no ambiguity
+#### 2.5.1 Who owns `energy`
 
-> **`maxEnergy == 0` → `ProjectorCtrl` manages nothing about energy; the ruleset
-> owns it exactly as today. `maxEnergy > 0` → `ProjectorCtrl` owns the pool, the
-> per-shot cost and the recharge.**
+> **`recharge == Recharge::RULESET` → `ProjectorCtrl` manages nothing about
+> energy; the ruleset owns it exactly as today. Any other mode → `ProjectorCtrl`
+> owns the pool, the per-shot cost and the refill.**
 
-That single rule settles every awkward case without a magic value:
+Since `RULESET` is the enum's zero value, a projector that says nothing about
+energy gets today's behaviour by default:
 
-- `BASE` sets `maxEnergy = 0`, so the no-op property survives this addition
-  intact — no existing ruleset changes behaviour until it opts in.
-- `GameOutflow`, where energy *is* the life bar and must never recharge, opts out
-  by leaving `maxEnergy = 0` and keeps its own drain loop untouched.
-- A projector that sets `maxEnergy` **overrides** the ruleset's `startEnergy`
-  config var for as long as it is held. If a game wants the DM's knob to keep
-  mattering for such projectors, it scales the value itself — that is ruleset
-  business, not a second framework mechanism.
+- `BASE` stays in `RULESET` mode, so the no-op property survives this addition —
+  no existing ruleset changes behaviour until it opts in.
+- `GameOutflow`, where energy *is* the life bar and must never refill, opts out
+  the same way and keeps its own drain loop untouched.
+- A projector in any other mode **overrides** the ruleset's `startEnergy` config
+  var for as long as it is held. If a game wants the DM's knob to keep mattering
+  for such projectors, it scales the value itself — that is ruleset business, not
+  a second framework mechanism.
 
-`ProjectorCtrl` exposes the pool as a global `int` (`extern int projectorEnergy;`)
-for the same reason as the name buffer (§8): `MonitorVar` tables are
-`static const`, so the bound pointer must be a compile-time constant.
+`ProjectorCtrl` exposes the *active* projector's pool as a global `int`
+(`extern int projectorEnergy;`) for the same reason as the name buffer (§8.3):
+`MonitorVar` tables are `static const`, so the bound pointer must be a
+compile-time constant.
 
-#### 2.5.2 Two fields, because one cannot express what exists
+#### 2.5.2 Recharge is a named mode, not a magic number
 
-"Time for recharge" splits into two, and the split is what makes today's
-behaviour representable *and* unlocks the other model:
+"Time for recharge" is two numbers *and* a rule about how they are read. Once
+"never refills" and "consumed when spent" are in scope, encoding the rule in the
+numbers themselves (0 = instant, 0xFFFF = never, …) becomes a set of magic values
+that nobody will remember. One byte makes every case explicit:
 
-| | `rechargeDelayMs` | `rechargeMs` | behaviour |
+```cpp
+enum class Recharge : uint8_t {
+    RULESET = 0,  // the ruleset owns energy entirely; every other field ignored
+    REFILL,       // after rechargeDelayMs idle, jump straight to maxEnergy
+    RAMP,         // after rechargeDelayMs idle, +1 every rechargeMs / maxEnergy
+    CONSUMED,     // never refills; the projector is DROPPED when it reaches 0
+};
+```
+
+| mode | `rechargeDelayMs` | `rechargeMs` | behaviour |
 |---|---|---|---|
-| today's five rulesets | 10000 | 0 | full refill after 10 s idle |
-| classic regeneration | 0 | 5000 | +1 every `rechargeMs / maxEnergy` ms |
-| grace-then-regen | 1500 | 4000 | brief pause, then a visible refill ramp |
+| `RULESET` | — | — | today's five rulesets, untouched |
+| `REFILL`  | 10000 | — | full refill after 10 s idle (today's rule, framework-side) |
+| `RAMP`    | 1500 | 4000 | brief pause, then a visible refill ramp |
+| `CONSUMED`| — | — | `maxEnergy` shots, then gone |
 
-`rechargeDelayMs` is the idle time before recharging starts (reset on every
-shot); `rechargeMs` is how long empty → full takes once it does. Integer
-stepping — `rechargeStepMs = rechargeMs / maxEnergy`, one unit per step — avoids
-floats entirely, and `rechargeMs = 0` degenerates to the instant refill the code
-does now. One extra `uint16_t` buys the whole second model.
+Integer stepping for `RAMP` — `rechargeStepMs = rechargeMs / maxEnergy`, one unit
+per step — avoids floats entirely.
+
+**`CONSUMED` is what "single-time charge" should be.** A projector that can never
+refill but stays in the inventory is dead weight occupying a slot the player
+cannot reclaim; one that *leaves* when spent is a resource used wisely, frees its
+slot automatically, and drops the holder back to the baseline projector with no
+special case. A one-shot power pickup is simply:
+
+```cpp
+{ ..., Recharge::CONSUMED, /*energyCost*/ 1, /*maxEnergy*/ 1, 0, 0, ... }
+```
+
+This is also exactly where re-granting earns its keep (§2.5.3): handing a
+`CONSUMED` projector to someone who still holds it is a **restock**, which is the
+only reading under which "refill on re-grant" clearly makes sense.
+
+A fifth mode, `NEVER` (empty but retained — a trophy, or held for its `roleTag`),
+is a one-line addition if a game ever wants it. Left out until one does.
 
 #### 2.5.3 Every projector carries its own energy
 
@@ -317,22 +346,58 @@ struct ProjectorSlot {
 
 Two consequences worth deciding explicitly rather than discovering:
 
-- **All owned projectors recharge in parallel**, not just the active one. The
-  alternative (only the held one refills) would make a spare projector useless
-  the moment it runs dry. The cost is one short loop per game cycle over at most
-  `MAX_OWNED` slots. *Balance note:* cycling through N projectors therefore
-  yields roughly N× sustained fire, and `readyMs` is the only brake on that — it
-  should be tuned with a full inventory in mind, not a single projector.
-- **Re-granting one you already hold refills it to `maxEnergy` and leaves
-  `acquiredAt` untouched.** Refilling makes a bonus totem worth taking even when
-  you already have the projector; keeping the timestamp stops re-granting from
-  being used to dodge eviction.
+- **Only the projector in hand recharges.** Time spent in the inventory is dead
+  time: a spare left empty is still empty when you come back to it. This is what
+  makes carrying several a real decision rather than a way to fire continuously
+  by cycling — put a projector away dry and you have to earn the pause to refill
+  it. It also makes the tick trivial: one slot per game cycle, not a loop.
+  The `rechargeDelayMs` gate is measured from that slot's own `lastShotAt`, so
+  switching back after a long absence starts refilling immediately (you gained
+  nothing while away, but you are past the just-fired grace period), while
+  `readyMs` independently blocks firing for a moment after the switch.
+- **Re-granting one you already hold refills it and leaves `acquiredAt`
+  untouched.** Refilling makes a pickup worth taking even when you already have
+  the projector — most meaningfully for `CONSUMED` profiles, where a re-grant is
+  a restock. Keeping the timestamp stops re-granting from being used to dodge
+  eviction.
 
-#### 2.5.4 The inventory has a size, and it is a config var
+#### 2.5.4 The baseline projector is structural, not inventory
 
-`ProjectorSet` gains a pointer to the ruleset's own config var, mirroring the
-`LightAir_Game::gameTimeLeft` idiom that already exists for exactly this
-"framework reads a live ruleset int" case:
+An earlier revision of this document exempted a `fallbackId` from eviction, which
+was a convoluted way of reaching a rule that is far better stated directly:
+
+> **`BASE` is not part of the inventory. It is always held, never counted, never
+> lost.** `maxOwned` counts only the *powered* projectors carried alongside it,
+> and eviction can only ever remove one of those.
+
+| `maxOwned` | the player holds |
+|---|---|
+| 0 | `BASE` only |
+| 1 | `BASE` + one powered projector |
+| 3 | `BASE` + up to three powered projectors |
+
+Concretely, `BASE` occupies slot 0 permanently and the inventory is
+`ProjectorSlot powered[MAX_OWNED]`; **eviction never looks at slot 0.** That
+removes the special case entirely rather than defending against it — there is no
+rule to forget, because the baseline is not in the array eviction walks. It also
+means the availability fallback of §6.4 always has somewhere to go, which was the
+real reason the exemption existed.
+
+This merges two `ProjectorSet` fields into one: `startId` is now *the permanent
+slot-0 projector* — the one you always have, never lose, and fall back to — and
+the separate `fallbackId` is deleted. A ruleset that wants a different baseline
+than `BASE` simply names it in `startId`.
+
+**Eviction is first-in-first-out** on `acquiredAt` among the powered slots. Taking
+a fourth powered projector with `maxOwned = 3` drops the one held longest, and if
+that happens to be the one currently in hand, the switch goes to the newly granted
+projector — which is what a player expects after picking one up. Eviction must be
+*visible*: a tray message plus `UIEvent::ProjectorChange`, or a player silently
+loses something they were counting on.
+
+`maxOwned` reaches the framework as a pointer to the ruleset's own config var,
+mirroring the `LightAir_Game::gameTimeLeft` idiom that already exists for exactly
+this "framework reads a live ruleset int" case:
 
 ```cpp
 // in ProjectorSet:
@@ -341,22 +406,16 @@ const int* maxOwned;    // nullptr = ProjectorLimits::DEFAULT_MAX_OWNED
 // in the ruleset:
 static int maxProjectors = 3;
 static const ConfigVar configVars[] = {
-    { "Projectors", &maxProjectors, 1, ProjectorLimits::MAX_OWNED, 1 },
+    { "Projectors", &maxProjectors, ProjectorLimits::MIN_OWNED,
+                                    ProjectorLimits::MAX_OWNED, 1 },
 };
 ```
 
-**Eviction is first-in-first-out** on `acquiredAt`, with one exemption that is a
-correctness constraint rather than a preference:
-
-> **`fallbackId` is never evicted** while anything else can be — the availability
-> mechanism (§6.4) switches to it when the active projector becomes unavailable,
-> so it must always be present. The exemption lifts only when the fallback is the
-> sole evictable entry (`maxOwned == 1`), where replacing it is the only option.
-
-If the evicted slot is the one currently held, switch to the newly granted
-projector — that is what a player expects after picking one up. And eviction must
-be *visible*: a tray message plus `UIEvent::ProjectorChange`, or a player silently
-loses a projector they were counting on.
+`MIN_OWNED = 1`, so a DM cannot accidentally set a game to zero powered slots and
+silently make every totem reward and quest unlock a no-op. The `maxOwned = 0` row
+above is therefore unreachable through the menu — and it does not need to be
+reachable, because the natural way to express a `BASE`-only game is to leave
+`LightAir_Game::projectors` as `nullptr`.
 
 #### 2.5.5 `readyMs` — the cost of switching
 
@@ -450,7 +509,8 @@ namespace ProjectorLimits {
     constexpr uint16_t MAX_RECHARGE_MS = 60000; // empty -> full, and the idle delay before it
     constexpr uint16_t MAX_READY_MS    = 5000;  // deploy time after a switch
     constexpr uint16_t MAX_IMMUNITY_MS = 30000; // min gap between hits on the same target
-    constexpr uint8_t  MAX_OWNED       = 8;     // inventory array bound (§2.5.4)
+    constexpr uint8_t  MIN_OWNED       = 1;     // never zero — see §2.5.4
+    constexpr uint8_t  MAX_OWNED       = 8;     // powered-slot array bound (BASE not counted)
     constexpr uint8_t  DEFAULT_MAX_OWNED = 3;   // used when ProjectorSet::maxOwned is null
     constexpr uint8_t  MAX_CUSTOM      = 4;   // custom slots per ruleset
     constexpr uint8_t  NAME_LEN        = 8;   // fits the OLED cell width
@@ -564,22 +624,25 @@ namespace ProjectorId {
 
 | | cycles | burst | cooldown | period | rangeM | strength | energy | recharge | ready | character |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `BASE`   | 10 | 80 ms  | **10 ms** | 90 ms   | 0 (device max) | 1 | 0 (ruleset) | — | 0 | the default profile |
-| `FAST`   | 4  | 32 ms  | 60 ms     | 92 ms   | 8              | 1 | 30 × 1 | 1500 / 3000 ms | 150 ms | quick, short reach, drains fast |
-| `LONG`   | 30 | 240 ms | 400 ms    | 640 ms  | 0 (device max) | 1 | 20 × 1 | 4000 / 0 ms | 400 ms | slow, maximum reach |
-| `STRONG` | 15 | 120 ms | 900 ms    | 1020 ms | 15             | 3 | 8 × 2  | 6000 / 0 ms | 600 ms | slow, heavy, mid reach |
+| `BASE`   | 10 | 80 ms  | **10 ms** | 90 ms   | 0 (device max) | 1 | `RULESET` | — | 0 | the default profile |
+| `FAST`   | 4  | 32 ms  | 60 ms     | 92 ms   | 8              | 1 | `RAMP` 30 × 1 | 1500 / 3000 ms | 150 ms | quick, short reach, drains fast |
+| `LONG`   | 30 | 240 ms | 400 ms    | 640 ms  | 0 (device max) | 1 | `REFILL` 20 × 1 | 4000 ms | 400 ms | slow, maximum reach |
+| `STRONG` | 15 | 120 ms | 900 ms    | 1020 ms | 15             | 3 | `REFILL` 8 × 2  | 6000 ms | 600 ms | slow, heavy, mid reach |
 
-(`energy` reads *pool × cost per shot*; `recharge` reads
-*`rechargeDelayMs` / `rechargeMs`*.)
+(`energy` reads *mode, pool × cost per shot*; `recharge` reads
+*`rechargeDelayMs` / `rechargeMs`*, with `rechargeMs` shown only for `RAMP`.)
 
 Identity and anti-spam, per §7.4, §8.1 and §8.2:
 
-| | `targetImmunityMs` | `shotUiEvent` | `icon` |
+| | `targetImmunityMs` | `shotAction` | `icon` |
 |---|---|---|---|
-| `BASE`   | 3000 (today's `HIT_IMMUNITY_MS`) | `Enlight`       | `ICON_ENERGY_BITMAP` (unchanged) |
-| `FAST`   | 1200                             | `EnlightFast`   | `PROJ_FAST_ICON` |
-| `LONG`   | 3000                             | `EnlightLong`   | `PROJ_LONG_ICON` |
-| `STRONG` | 6000                             | `EnlightStrong` | `PROJ_STRONG_ICON` |
+| `BASE`   | 3000 (today's `HIT_IMMUNITY_MS`) | `nullptr` — the standard `Enlight` row | `ICON_ENERGY_BITMAP` (unchanged) |
+| `FAST`   | 1200                             | `PROJ_FAST_ACTION`   | `PROJ_FAST_ICON` |
+| `LONG`   | 3000                             | `PROJ_LONG_ACTION`   | `PROJ_LONG_ICON` |
+| `STRONG` | 6000                             | `PROJ_STRONG_ACTION` | `PROJ_STRONG_ICON` |
+
+`BASE` leaving `shotAction` null means today's shot feedback is untouched, in the
+same way `ICON_ENERGY_BITMAP` keeps today's icon.
 
 `FAST`'s shorter immunity is what makes it feel fast against a single target;
 `STRONG`'s longer one is what stops `strength = 3` from erasing someone in a
@@ -592,7 +655,7 @@ architectural commitment rather than a tuning value:
 > **`BASE` is today's behaviour apart from one deliberate change.**
 > `cycles = 10` is the current `Enlight` member initialiser, `strength = 1` is
 > the implicit `lives--`, `rangeM = 0` reduces the classifier comparison to
-> exactly what it does now (§2.2), and `maxEnergy = 0` leaves the energy pool
+> exactly what it does now (§2.2), and `Recharge::RULESET` leaves the energy pool
 > entirely to the ruleset (§2.5.1). **`cooldownMs = 10` is the one accepted
 > behavioural change**, applying to all six existing rulesets.
 
@@ -630,10 +693,9 @@ struct ProjectorSet {
     const Projector* custom;       // extra profiles; nullptr = none
     uint8_t          customCount;  // <= ProjectorLimits::MAX_CUSTOM
     uint16_t         catalogMask;  // bit i = ProjectorId i exists in this game
-    uint8_t          startId;      // profile every player begins with
-    uint8_t          fallbackId;   // switched to when the active one becomes unavailable;
-                                   //   exempt from FIFO eviction (§2.5.4)
-    const int*       maxOwned;     // -> the ruleset's config var; nullptr = DEFAULT_MAX_OWNED
+    uint8_t          startId;      // the permanent slot-0 projector: always held, never
+                                   //   evicted, and the availability fallback (§2.5.4)
+    const int*       maxOwned;     // powered slots; -> ruleset config var, null = DEFAULT
 
     // Per-cycle availability predicate — see §6.4.  nullptr = always available.
     bool (*isAvailable)(uint8_t projectorId);
@@ -656,7 +718,7 @@ static const ProjectorSet projectorSet = {
     customProjectors, 2,
     (1u<<ProjectorId::BASE) | (1u<<ProjectorId::FAST) |
     (1u<<ProjectorId::STRONG) | (1u<<ProjectorId::CUSTOM1),
-    ProjectorId::BASE, ProjectorId::BASE, &maxProjectors,
+    ProjectorId::BASE, &maxProjectors,
     projAvailable,
 };
 ```
@@ -763,8 +825,8 @@ static bool projAvailable(uint8_t id) {
 ```
 
 `GameRunner` evaluates it once per cycle in the OUTPUT phase — one call — and if
-the active projector just became unavailable, switches to `fallbackId` and fires
-`UIEvent::ProjectorChange` plus a tray message. Cheap, and it makes the rule
+the active projector just became unavailable, switches to the permanent slot-0
+projector (§2.5.4) and fires `UIEvent::ProjectorChange` plus a tray message. Cheap, and it makes the rule
 visible in exactly one line of the ruleset.
 
 ### 6.5 Asymmetric starts
@@ -941,37 +1003,84 @@ per-attacker anti-spam and should not be folded into the projector.
 
 ## 8. UI and display linkage
 
-### 8.1 New standard UI events, not borrowed custom slots
+### 8.1 The shot's feedback travels inside the projector too
 
-The standard projectors get first-class events, so `Custom1..4` stay free for
-rulesets:
+#### What the trap actually is
+
+The `Enlight` UI event is unlike every other event in the table: its **duration
+is decided at runtime**, because the light burst lasts `cycles × MS_PER_REP` and
+that varies per projector. The mechanism is an `extraMs` override, and it is
+gated on one exact enum value — `LightAir_UICtrl.cpp:352`:
 
 ```cpp
-enum class UIEvent : uint8_t {
-    Enlight,          // BASE — unchanged, still the default
-    EnlightFast,      // NEW
-    EnlightLong,      // NEW
-    EnlightStrong,    // NEW
-    ProjectorChange,  // NEW — switch, grant, eviction, auto-fallback
-    Lit, Taken, ...
-};
+uint16_t duration =
+  (_current.id == UIEvent::Enlight && _current.extraMs > 0)
+    ? _current.extraMs                          // the real burst length
+    : _current.action->durations[_currentStep]; // the table's fixed 10 ms
 ```
 
-Keeping the four `Enlight*` values **contiguous and first** is not cosmetic —
-it is what makes the next point a cheap range test.
+with a matching hardcode at `.cpp:129`, where `triggerEnlight()` calls
+`applyPolicy(UIEvent::Enlight, ms)`.
 
-> **Implementation trap, worth writing down now.** The variable burst duration
-> is keyed on the exact event value in two places:
-> `LightAir_UICtrl.cpp:352` — `(_current.id == UIEvent::Enlight && _current.extraMs > 0)`
-> — and `LightAir_UICtrl.cpp:129`, where `triggerEnlight()` hardcodes
-> `applyPolicy(UIEvent::Enlight, ms)`. Add the new events without touching those
-> two lines and `FAST`/`LONG`/`STRONG` will silently ignore `cycleTime()` and use
-> the action table's fixed duration instead — a bug that shows up as "the beep is
-> the wrong length", not as a compile error. Both need an `isEnlightEvent(id)`
-> range check, and `UIOutput::triggerEnlight()` needs the event as a parameter.
+So if a `FAST` projector fired a *different* event — `UIEvent::EnlightFast` —
+that equality test would be false, `extraMs` would be discarded, and the buzzer,
+vibration and LED would run for the table's fixed 10 ms instead of the actual
+32 ms burst. No crash, no compile error: just feedback that feels subtly wrong,
+reported later as "the beep is off" and hard to trace back to a missing enum
+value in a conditional.
 
-`_actionTable` gains five rows (four above plus `ProjectorChange`). Since the
-table is sized by `UIEvent::Count`, that is additive.
+#### Your suggestion is the better fix — take it
+
+Rather than adding events and defending the conditional against them, **keep
+exactly one `UIEvent::Enlight` and swap the action behind it when the projector
+changes.** The trap then cannot occur, because the enum value never changes.
+
+`LightAir_UICtrl` already has the hook. `resolveAction()` consults an override
+table before falling back to the static one:
+
+```cpp
+const UIAction& LightAir_UICtrl::resolveAction(UIEvent event) {
+  uint8_t idx = (uint8_t)event;
+  if (idx >= (uint8_t)UIEvent::Custom1 && idx <= (uint8_t)UIEvent::Custom4) {
+    uint8_t ci = idx - (uint8_t)UIEvent::Custom1;
+    if (_customDefined[ci]) return _customActions[ci];
+  }
+  return _actionTable[idx];
+}
+```
+
+The change is to give the `Enlight` slot the same treatment — one extra stored
+action plus a `setEnlightAction(const UIAction&)` (or a `defineCustomAction()`
+whose slot check accepts `Enlight`). `ProjectorCtrl` calls it on every switch,
+passing the active projector's `shotAction`, and a null `shotAction` leaves the
+standard table entry in place.
+
+What this buys, beyond avoiding the trap:
+
+| | events-per-projector | action swapped at switch |
+|---|---|---|
+| `UICtrl.cpp:352` / `:129` | must both change | **untouched** |
+| `UIEvent` enum + action table | grows per standard projector | unchanged |
+| A custom ruleset projector | limited to the 4 `Custom` slots | same mechanism as the standards |
+| Adding a projector | edit the enum, the table, and the projector | **edit one table row** |
+
+That last row is the same self-containment property as the icon (§8.2), reached
+the same way: the definition carries its own artwork *and* its own sound.
+
+**One risk, and it is closed already.** Swapping the action while an `Enlight`
+event is mid-playback would let the remaining steps run with the new action —
+a glitch, not a crash, since the storage is a fixed member and the
+`ScheduledEvent`'s pointer stays valid. It cannot happen in practice: a switch is
+already deferred while `enlight.isActive()` (§6.2), and the `Enlight` UI event
+lasts exactly `cycleTime()`, i.e. the burst it accompanies. The two windows
+coincide, so the switch always lands after playback ends.
+
+#### One genuinely new event
+
+`ProjectorChange` — fired on a switch, a grant, an eviction, or an automatic
+fallback. This one carries **no trap**: it has a fixed duration like every other
+event in the table, takes no `extraMs`, and touches neither `.cpp:352` nor
+`:129`. Add it to the enum and give it one `_actionTable` row.
 
 ### 8.2 The icon travels inside the projector definition
 
@@ -1058,7 +1167,7 @@ would be circular.
 |---|---|
 | `src/config.h` | add `ProjectorLimits` |
 | `src/game/LightAir_Projector.h` | **new** — `Projector`, `ProjectorId`, `ProjectorSet`, `projectorClamp()`, standard table |
-| `src/game/LightAir_ProjectorCtrl.h/.cpp` | **new** — inventory + FIFO eviction, per-slot energy and recharge tick, availability re-check, Enlight push, per-target immunity table, name/energy/icon globals |
+| `src/game/LightAir_ProjectorCtrl.h/.cpp` | **new** — inventory + FIFO eviction over powered slots, active-slot energy and recharge tick, `setEnlightAction()` on switch, availability re-check, Enlight push, per-target immunity table, name/energy/icon globals |
 | `src/game/LightAir_GameOutput.h` | add `ProjectorOutput proj` |
 | `src/ui/player/display/LightAir_DisplayCtrl.h/.cpp` | binding variant taking `const uint8_t* const*` instead of `IconType` (§8.2) |
 | `src/game/LightAir_Game.h` | add `const ProjectorSet* projectors`; drop `const` on `onBegin`'s runner |
@@ -1069,7 +1178,7 @@ would be circular.
 | `src/nvs_config.h/.cpp` | `refFarR/G/B` keys; retire `limpow` |
 | `src/tools/EnlightTestMode.cpp` | replace the local `MAX_REPS` with `ProjectorLimits::MAX_CYCLES` |
 | `src/tools/EnlightCalibRoutine.cpp` | step 1 prompt, step 2 saves the reference, step 4 shows `Rmax` |
-| `src/ui/player/LightAir_UICtrl.h/.cpp` | 5 new `UIEvent`s + table rows; `isEnlightEvent()` range check at `.cpp:352` and `:129` (§8.1) |
+| `src/ui/player/LightAir_UICtrl.h/.cpp` | `UIEvent::ProjectorChange` + one table row; `setEnlightAction()` extending the `resolveAction()` override hook (§8.1). `.cpp:352` and `:129` stay untouched. |
 | `src/LightAir.h` | include the two new headers |
 | `src/rulesets/*.cpp` (×6) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature; the five identical recharge blocks deleted once each opts in (§2.5); `litAt[]`/`notImmune()`/`REPLY_IMMUNE` removed (§7.4); a `Projectors` config var |
 
