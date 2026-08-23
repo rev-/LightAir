@@ -63,6 +63,16 @@ static Enlight*           enlight      = nullptr;
 static EnlightCalibRoutine* calibRoutine = nullptr;
 static EnlightTestMode*   testMode     = nullptr;
 
+// ---- SPI ADC bus and sensors ----
+static SpiAdcBus   adcBus;
+static float       battVolts = SensorDefaults::ADC_VREF;
+static VDivSensor  battSensor(SensorDefaults::BATT_R_TOP, SensorDefaults::BATT_R_BOTTOM);
+static NtcSensor   ledTempSensor(SensorDefaults::LED_NTC_R_FIXED, SensorDefaults::LED_NTC_R0,
+                                  SensorDefaults::LED_NTC_BETA, &battVolts);
+static NtcSensor   pdTempSensor (SensorDefaults::PD_NTC_R_FIXED,  SensorDefaults::PD_NTC_R0,
+                                  SensorDefaults::PD_NTC_BETA,  &battVolts);
+static SpiExternal extSpi;
+
 
 // ---- Display ----
 static LightAir_SSD1306Display rawDisplay(PLAYER_I2C_SDA, PLAYER_I2C_SCL);
@@ -147,6 +157,21 @@ void _setup() {
         // PLAYER PATH
         // ------------------------------------------------------------
 
+        // SPI ADC bus — must be initialised before Enlight and sensors.
+        if (!adcBus.begin((spi_host_device_t)EnlightDefaults::ADC_HOST,
+                          EnlightDefaults::ADC_SDO, EnlightDefaults::ADC_SDI,
+                          EnlightDefaults::ADC_CLK, EnlightDefaults::ADC_CS,
+                          (int)EnlightDefaults::ADC_CLOCK_HZ,
+                          ENLIGHT_SPI_MAX_DMA_LEN)) {
+            Serial.println("SPI ADC bus init FAILED — halting");
+            while (true) delay(1000);
+        }
+        battSensor   .begin(adcBus, SensorDefaults::CMD_BATT_VOLT, "V");
+        ledTempSensor.begin(adcBus, SensorDefaults::CMD_LED_TEMP,  "C");
+        pdTempSensor .begin(adcBus, SensorDefaults::CMD_PD_TEMP,   "C");
+        extSpi.begin((spi_host_device_t)EnlightDefaults::ADC_HOST,
+                     SPI_EXT_CS, (int)EnlightDefaults::ADC_CLOCK_HZ);
+
         // Enlight
         enlight_calib_load(enlightCalib);
         enlight      = new Enlight(enlightCalib);
@@ -154,8 +179,9 @@ void _setup() {
         calibRoutine = new EnlightCalibRoutine(*enlight, rawDisplay, input,
                                                InputDefaults::KEYPAD_ID);
         testMode = new EnlightTestMode(*enlight, playerUi, rawDisplay, input,
-                                       InputDefaults::KEYPAD_ID);
-        if (!enlight->begin()) {
+                                       InputDefaults::KEYPAD_ID,
+                                       &battSensor, &ledTempSensor, &pdTempSensor);
+        if (!enlight->begin(adcBus.getHandle())) {
             Serial.println("Enlight init FAILED — halting");
             while (true) delay(1000);
         }
@@ -195,7 +221,9 @@ void _setup() {
         }
 
         // Start game
-        runner.begin(menu.selectedGame(), displayCtrl, input, *radio, &playerUi);
+        static SpiAdcSensor* gameSensors[] = { &battSensor, &ledTempSensor, &pdTempSensor };
+        runner.begin(menu.selectedGame(), displayCtrl, input, *radio, &playerUi,
+                     enlight, gameSensors, 3, &battVolts);
 
         Log.infoln("Player ready.");
     }

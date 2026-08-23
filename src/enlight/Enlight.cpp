@@ -141,7 +141,7 @@ void Enlight::buildGoertzTab(uint32_t phase) {
 /* ============================================================
  *   begin()
  * ============================================================ */
-bool Enlight::begin() {
+bool Enlight::begin(spi_device_handle_t adcHandle) {
     if (!generateWaveform()) return false;
     buildGoertzTab(_cal.phaseOff); if (!_goertzTab) return false;
 
@@ -179,20 +179,7 @@ bool Enlight::begin() {
         esp_rom_gpio_connect_out_signal(lp[n],ls[n],true,false);
     }
 
-    spi_bus_config_t ab={};
-    ab.mosi_io_num=EnlightDefaults::ADC_SDO;
-    ab.miso_io_num=EnlightDefaults::ADC_SDI;
-    ab.sclk_io_num=EnlightDefaults::ADC_CLK;
-    ab.quadwp_io_num=-1;
-    ab.quadhd_io_num=-1;
-    ab.max_transfer_sz=_adcBufBytes;
-
-    if (spi_bus_initialize((spi_host_device_t)EnlightDefaults::ADC_HOST,&ab,SPI_DMA_CH_AUTO)!=ESP_OK) {
-        ESP_LOGE(TAG,"ADC bus init failed"); return false; }
-    spi_device_interface_config_t ad={};
-    ad.clock_speed_hz=(int)EnlightDefaults::ADC_CLOCK_HZ; ad.mode=0; ad.spics_io_num=EnlightDefaults::ADC_CS; ad.queue_size=1;
-    if (spi_bus_add_device((spi_host_device_t)EnlightDefaults::ADC_HOST,&ad,&_adcDevice)!=ESP_OK) {
-        ESP_LOGE(TAG,"ADC dev add failed"); return false; }
+    _adcDevice = adcHandle;
 
     memset(&_ledTrans,0,sizeof(_ledTrans));
     _ledTrans.tx_buffer=_ledTxBuf;

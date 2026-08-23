@@ -9,8 +9,13 @@ EnlightTestMode::EnlightTestMode(Enlight&            e,
                                   LightAir_UICtrl&    ui,
                                   LightAir_Display&   disp,
                                   LightAir_InputCtrl& input,
-                                  uint8_t             keypadId)
-    : _e(e), _ui(ui), _disp(disp), _input(input), _keypadId(keypadId) {}
+                                  uint8_t             keypadId,
+                                  SpiAdcSensor*       battSensor,
+                                  SpiAdcSensor*       ledTempSensor,
+                                  SpiAdcSensor*       pdTempSensor)
+    : _e(e), _ui(ui), _disp(disp), _input(input), _keypadId(keypadId),
+      _battSensor(battSensor), _ledTempSensor(ledTempSensor),
+      _pdTempSensor(pdTempSensor) {}
 
 EnlightTestMode::KeyEvent EnlightTestMode::pollKey() {
     const InputReport& rep = _input.poll();
@@ -85,7 +90,9 @@ void EnlightTestMode::run() {
     char diagColor[12]         = "--";
     char diagRgb[24]           = "--";
     char diagColorCoord[24]    = "--";
-    char diagSs[24]            = "--";
+    char diagSensors[22]       = "--";
+    uint32_t satPct = 0;
+    bool     usedLP = false;
 
     // Initialize state tracking
     memset(_prevKeyState, (uint8_t)KeyState::OFF, sizeof(_prevKeyState));
@@ -102,12 +109,13 @@ void EnlightTestMode::run() {
         _disp.print(0, 0, line0);
 
         char line1[22];
-        snprintf(line1, sizeof(line1), "Hit: %s", diagColor);
+        snprintf(line1, sizeof(line1), "Hit:%s s:%lu%%%s",
+                 diagColor, (unsigned long)satPct, usedLP ? "L" : "");
         _disp.print(0, DisplayDefaults::FONT_HEIGHT, line1);
 
         _disp.print(0, DisplayDefaults::FONT_HEIGHT * 2, diagColorCoord);
         _disp.print(0, DisplayDefaults::FONT_HEIGHT * 3, diagRgb);
-        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 4, diagSs);
+        _disp.print(0, DisplayDefaults::FONT_HEIGHT * 4, diagSensors);
 
         legendW = _disp.textWidth("X:Back");
         legendX = (legendW < DisplayDefaults::SCREEN_WIDTH)
@@ -156,10 +164,9 @@ void EnlightTestMode::run() {
                      raw.rout >> bitCount, raw.gout >> bitCount, raw.bout >> bitCount, bitCount);
             snprintf(diagColorCoord, sizeof(diagColorCoord), "r:%.2f a:%.2f",
                      (double)color.outr, (double)color.outang);
-            const uint32_t satPct = (raw.totalSamples > 0)
+            satPct = (raw.totalSamples > 0)
                 ? (uint32_t)(raw.satCount * 100u / raw.totalSamples) : 0u;
-            snprintf(diagSs, sizeof(diagSs), "sat:%lu%%%s",
-                     (unsigned long)satPct, _e.usedLowPower() ? " LP" : "");
+            usedLP = _e.usedLowPower();
 
             if (res.status == EnlightStatus::PLAYER_HIT &&
                 res.id < PlayerDefs::MAX_PLAYER_ID) {
@@ -168,6 +175,18 @@ void EnlightTestMode::run() {
                 _ui.trigger(LightAir_UICtrl::UIEvent::Lit);
             } else {
                 snprintf(diagColor, sizeof(diagColor), "none(%d)", (int)res.status);
+            }
+
+            // Read sensors now that Enlight has released the SPI bus.
+            float bv, lt, pt;
+            bool bvOk = _battSensor    && _battSensor->read(bv);
+            bool ltOk = _ledTempSensor && _ledTempSensor->read(lt);
+            bool ptOk = _pdTempSensor  && _pdTempSensor->read(pt);
+            if (bvOk || ltOk || ptOk) {
+                snprintf(diagSensors, sizeof(diagSensors), "V:%.2f L:%dC P:%dC",
+                         bvOk ? (double)bv : 0.0,
+                         ltOk ? (int)lt : -99,
+                         ptOk ? (int)pt : -99);
             }
         }
     }

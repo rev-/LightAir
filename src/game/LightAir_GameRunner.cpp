@@ -11,13 +11,26 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
                                  LightAir_DisplayCtrl& display,
                                  LightAir_InputCtrl&   input,
                                  LightAir_Radio&       radio,
-                                 LightAir_UICtrl*      ui) {
+                                 LightAir_UICtrl*      ui,
+                                 Enlight*              enlight,
+                                 SpiAdcSensor**        sensors,
+                                 uint8_t               sensorCount,
+                                 float*                battVoltsOut) {
     _game    = &game;
     _display = &display;
     _input   = &input;
     _radio   = &radio;
     _ui      = ui;
     _bindingCount = 0;
+
+    _enlight     = enlight;
+    _battVoltsOut = battVoltsOut;
+    _sensorCount = (sensorCount < MAX_SENSORS) ? sensorCount : MAX_SENSORS;
+    for (uint8_t i = 0; i < _sensorCount; i++)
+        _sensors[i] = sensors ? sensors[i] : nullptr;
+    _lastEnlightActiveMs = 0;
+    _nextSensorReadMs    = 0;
+    _sensorReadPending   = false;
 
     // -- Build display binding sets from MonitorVar::stateMask --
 
@@ -109,6 +122,15 @@ uint8_t LightAir_GameRunner::totemIdForRole(uint8_t roleId, uint8_t idx) const {
 }
 
 /* =========================================================
+ *   SENSOR VALUE ACCESSOR
+ * ========================================================= */
+
+float LightAir_GameRunner::sensorValue(uint8_t idx) const {
+    if (idx >= _sensorCount) return 0.0f;
+    return _sensorValues[idx];
+}
+
+/* =========================================================
  *   TEAM MAP
  * ========================================================= */
 
@@ -127,6 +149,31 @@ uint8_t LightAir_GameRunner::teamOf(uint8_t id) const {
 
 void LightAir_GameRunner::update() {
     uint32_t loopStart = millis();
+
+    // ---- Sensor scheduling (three-state cadence) ----
+    if (_enlight && _sensorCount > 0) {
+        if (_enlight->isActive()) _lastEnlightActiveMs = loopStart;
+        if (loopStart >= _nextSensorReadMs || _sensorReadPending) {
+            if (_enlight->isActive()) {
+                _sensorReadPending = true;
+            } else {
+                for (uint8_t i = 0; i < _sensorCount; i++) {
+                    if (!_sensors[i]) continue;
+                    float v;
+                    if (_sensors[i]->read(v)) {
+                        _sensorValues[i] = v;
+                        if (i == 0 && _battVoltsOut) *_battVoltsOut = v;
+                    }
+                }
+                _sensorReadPending = false;
+                bool recentlyActive = (loopStart - _lastEnlightActiveMs)
+                                      < SensorDefaults::ACTIVE_WINDOW_MS;
+                _nextSensorReadMs = loopStart + (recentlyActive
+                    ? SensorDefaults::SENSOR_ACTIVE_CADENCE_MS
+                    : SensorDefaults::SENSOR_STANDBY_CADENCE_MS);
+            }
+        }
+    }
 
     // ---- Step 1: READ ----
     const InputReport& inputs = _input->poll();

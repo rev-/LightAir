@@ -505,4 +505,36 @@ namespace colorBox {
         };
 }
 
+// ---------------------------------------------------------------
+// Sensor configuration
+// ---------------------------------------------------------------
+namespace SensorDefaults {
+    // ADC channel-select commands — match to IC wiring.
+    static constexpr uint8_t  CMD_BATT_VOLT             = 0x30;
+    static constexpr uint8_t  CMD_LED_TEMP              = 0x38;
+    static constexpr uint8_t  CMD_PD_TEMP               = 0x40;
+
+    // ADC reference voltage.
+    static constexpr float    ADC_VREF                  = 3.3f;
+
+    // NTC parameters — LED board temperature sensor.
+    static constexpr float    LED_NTC_R_FIXED           = 10000.0f;
+    static constexpr float    LED_NTC_R0                = 10000.0f;
+    static constexpr float    LED_NTC_BETA              = 3950.0f;
+
+    // NTC parameters — photodiode temperature sensor.
+    static constexpr float    PD_NTC_R_FIXED            = 10000.0f;
+    static constexpr float    PD_NTC_R0                 = 10000.0f;
+    static constexpr float    PD_NTC_BETA               = 3950.0f;
+
+    // Battery voltage divider resistors.
+    static constexpr float    BATT_R_TOP                = 100000.0f;
+    static constexpr float    BATT_R_BOTTOM             =  33000.0f;
+
+    // Scheduling cadence.
+    static constexpr uint32_t ACTIVE_WINDOW_MS          =  30000;   // 30 s
+    static constexpr uint32_t SENSOR_ACTIVE_CADENCE_MS  =   2000;   //  2 s
+    static constexpr uint32_t SENSOR_STANDBY_CADENCE_MS = 600000;   // 10 min
+}
+
 #endif // CONFIG_H

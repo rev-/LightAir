@@ -3,9 +3,11 @@
 #include "LightAir_Game.h"
 #include "LightAir_GameOutput.h"
 #include "../input/LightAir_InputCtrl.h"
+#include "../input/SpiAdcSensor.h"
 #include "../radio/LightAir_Radio.h"
 #include "../ui/player/display/LightAir_DisplayCtrl.h"
 #include "../ui/player/LightAir_UICtrl.h"
+#include "../enlight/Enlight.h"
 
 // ----------------------------------------------------------------
 // LightAir_GameRunner — runtime driver for one LightAir_Game.
@@ -55,12 +57,25 @@ public:
 
     // One-time setup.  Creates display binding sets from MonitorVar::stateMask,
     // resets state to initialState, calls game.onBegin (if set).
-    // ui is optional: pass nullptr (default) to disable UI event dispatch.
+    // ui is optional (pass nullptr to disable UI event dispatch).
+    // enlight, sensors, sensorCount: optional sensor scheduling (pass nullptr/0
+    //   to disable).  sensors[0] is read first (expected: battery voltage divider).
+    // battVoltsOut: if non-null, updated with sensors[0] value after each read
+    //   so battery-referenced NTC sensors see the current supply voltage.
     void begin(const LightAir_Game& game,
                LightAir_DisplayCtrl& display,
                LightAir_InputCtrl&   input,
                LightAir_Radio&       radio,
-               LightAir_UICtrl*      ui = nullptr);
+               LightAir_UICtrl*      ui           = nullptr,
+               Enlight*              enlight      = nullptr,
+               SpiAdcSensor**        sensors      = nullptr,
+               uint8_t               sensorCount  = 0,
+               float*                battVoltsOut = nullptr);
+
+    // Last successfully read value for sensor at index idx.
+    // Returns 0.0f for unknown indices or sensors that have not yet been read.
+    float   sensorValue(uint8_t idx) const;
+    uint8_t sensorCount() const { return _sensorCount; }
 
     // One loop iteration: read → logic → output.
     // Delays for the remainder of GameDefaults::LOOP_MS if logic finishes early.
@@ -99,7 +114,18 @@ private:
     LightAir_DisplayCtrl* _display = nullptr;
     LightAir_InputCtrl*   _input   = nullptr;
     LightAir_Radio*       _radio   = nullptr;
-    LightAir_UICtrl*      _ui      = nullptr;  // optional
+    LightAir_UICtrl*      _ui      = nullptr;
+
+    // ---- Sensor scheduling ----
+    static constexpr uint8_t MAX_SENSORS = 8;
+    Enlight*      _enlight                    = nullptr;
+    SpiAdcSensor* _sensors[MAX_SENSORS]       = {};
+    uint8_t       _sensorCount                = 0;
+    float         _sensorValues[MAX_SENSORS]  = {};
+    float*        _battVoltsOut               = nullptr;
+    uint32_t      _lastEnlightActiveMs        = 0;
+    uint32_t      _nextSensorReadMs           = 0;
+    bool          _sensorReadPending          = false;
 
     // State → display binding-set mapping
     struct StateBinding { uint8_t state; uint8_t setId; };
