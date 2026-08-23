@@ -80,7 +80,7 @@ struct Projector {
     uint16_t    rechargeMs;      // empty -> full duration (RAMP only)
 
     // ---- game: the effect ----
-    uint8_t     strength;        // lives/energy taken from the target on a confirmed hit
+    uint8_t     strength;        // hit weight in STANDARD HITS, not health points (§7.5)
     uint8_t     roleTag;         // 0 = generic; the player's "role" for a per-game table (§7.3)
     uint16_t    targetImmunityMs;// min gap between two hits on the SAME target (§7.4)
 
@@ -536,7 +536,7 @@ namespace ProjectorLimits {
     constexpr uint16_t MIN_CYCLES   = 1,  MAX_CYCLES   = 100;     // see §3.4
     constexpr uint16_t MIN_COOLDOWN = 0,  MAX_COOLDOWN = 10000;   // ms
     constexpr uint8_t  MIN_RANGE_M  = 1,  MAX_RANGE_M  = 100;     // 0 = device max, unclamped
-    constexpr uint8_t  MIN_STRENGTH = 0,  MAX_STRENGTH = 10;
+    constexpr uint8_t  MIN_STRENGTH = 0,  MAX_STRENGTH = 10;   // standard hits — see §7.5
     constexpr uint8_t  MAX_ENERGY_COST = 10;
     constexpr uint8_t  MAX_ENERGY      = 200;   // pool size ceiling (config vars cap at 100 today)
     constexpr uint16_t MAX_RECHARGE_MS = 60000; // empty -> full, and the idle delay before it
@@ -1038,6 +1038,35 @@ the `litButImmune` / `REPLY_IMMUNE` rule pair, from every ruleset that has them.
 respawn-protection window, for instance — which is a different thing from
 per-attacker anti-spam and should not be folded into the projector.
 
+### 7.5 `strength` counts standard hits, not health points
+
+Migrating `GameOutflow` (§12) exposed a problem with the obvious reading of
+`strength`. Health is not denominated the same way across rulesets:
+
+| ruleset | health | one ordinary hit costs |
+|---|---|---|
+| `GameFreeForAll`, `GameFlag`, `GameTeams`, … | `lives`, 1–5 | **1** |
+| `GameOutflow` | `energy`, 50–200 | **`hitDmg`, 25–200** |
+
+Two orders of magnitude apart. A `strength` holding health points would need a
+range of 1–200, `MAX_STRENGTH` would become meaningless as a balance limit, and
+`STRONG` would have to be redefined per game to mean anything.
+
+> **`strength` is the hit's weight in *standard hits*.** `BASE` = 1, `STRONG` =
+> 3. Each ruleset decides what one standard hit costs in its own currency.
+
+```cpp
+// lives-based rulesets:  one standard hit = one life
+lives  -= dmg(pkt);
+// GameOutflow:           one standard hit = hitDmg energy
+energy -= dmg(pkt) * hitDmg;
+```
+
+This is better than a per-game fix in every way that matters: `MAX_STRENGTH = 10`
+stays a real limit, `STRONG` means "three times an ordinary hit" in *every* game
+without redefinition, and `hitDmg` stays a DM-tunable config var instead of being
+frozen into a compile-time projector field.
+
 ---
 
 ## 8. UI and display linkage
@@ -1252,3 +1281,146 @@ The standard table goes in `LightAir_Projector.h` rather than `config.h` —
    totem rewards into meta-progression. It changes the NVS layout and has real
    fairness implications between players with different play histories — suggest
    explicitly leaving it out of v1.
+
+---
+
+## 12. Worked migration: `GameOutflow`
+
+`GameOutflow` is the hardest of the six — energy is simultaneously ammo and life
+total, it is the only ruleset with passive drain, and it is the reason
+`Recharge::NONE` exists. If the design survives it, the other five are
+mechanical. Line numbers are from the current file.
+
+### 12.1 The projector it declares
+
+```cpp
+static const Projector outflowProjectors[] = {
+  { ProjectorId::CUSTOM1, "OUTFLOW",
+    /* cycles          */ 20,     // was enlightPtr->setRepetitions(20)  L209
+    /* cooldownMs      */ 20,     // was enlightPtr->setCooldown(20)     L208
+    /* rangeM          */ 0,      // device max — today's classifier behaviour
+    /* recharge        */ Recharge::NONE,
+    /* energyCost      */ 1,      // was the bare energy-- at L303
+    /* maxEnergy       */ 100,    // startEnergy default; setPool() overrides it
+    /* rechargeDelayMs */ 0, /* rechargeMs */ 0,
+    /* strength        */ 1,      // one standard hit = hitDmg energy (§7.5)
+    /* roleTag         */ 0,
+    /* targetImmunityMs*/ 0,      // Outflow has NO immunity today — must stay 0
+    /* readyMs         */ 0,      // single projector, nothing to switch to
+    /* shotAction      */ nullptr,             // keep the standard Enlight action
+    /* icon            */ ICON_ENERGY_BITMAP,  // keep today's display
+  },
+};
+
+static const ProjectorSet projectorSet = {
+    outflowProjectors, 1,
+    (1u << ProjectorId::CUSTOM1),
+    ProjectorId::CUSTOM1,   // the permanent slot-0 projector — not BASE
+    nullptr,                // maxOwned unused: nothing else is grantable
+    nullptr,                // isAvailable: always
+};
+```
+
+Two values in there are load-bearing and easy to get wrong:
+`targetImmunityMs = 0`, because Outflow is the one ruleset with no `litAt[]`
+table and no immunity rule at all — inheriting `BASE`'s 3000 ms would silently
+change the game; and `startId = CUSTOM1` rather than `BASE`, because §2.5.4 makes
+`startId` the permanent projector and Outflow's baseline is its own.
+
+### 12.2 Every edit, in file order
+
+| # | Line | Today | After |
+|---|---|---|---|
+| 1 | 78 | `static int energy = 100;` | **deleted** — the pool is `projectorEnergy` |
+| 2 | 97 | `{ "Energy", &energy, … }` | `{ "Energy", &startEnergy, … }` — **fixes a live bug, see §12.4** |
+| 3 | 107 | `MonitorVar::Int("Energy", &energy, …)` | `&projectorEnergy` |
+| 4 | 119-120 | `energy > hitDmg` / `energy <= hitDmg` | `projectorEnergy > dmg(pkt)*hitDmg` / `<=` |
+| 5 | 124-125 | `energy -= hitDmg; if (energy < 0) energy = 0;` | `projectorEnergy -= dmg(pkt)*hitDmg;` + same clamp |
+| 6 | 160 | `energy += startEnergy;` (uncapped kill reward) | `projectorEnergy += startEnergy;` — a **direct write, never clamped** (§2.5.1) |
+| 7 | 196 | `energy = startEnergy;` | `runner.projector().setPool(startEnergy, 0);` |
+| 8 | 208-209 | `setCooldown(20); setRepetitions(20);` | **deleted** — the projector carries both |
+| 9 | 232 | `energy--;` (passive drain) | `projectorEnergy--;` — the drain stays entirely Outflow's |
+| 10 | 268 | `energy = startEnergy;` (respawn) | `projectorEnergy = startEnergy;` |
+| 11 | 296-298 | `out.radio.sendTo(r.id, MSG_LIT)` | `sendTo(r.id, MSG_LIT, payload, 3)` with strength/id/roleTag (§7.2) |
+| 12 | 299-305 | `if ((energy > 0) && (enlightPtr->run())) { energy--; energySpent++; triggerEnlight(…); }` | `if (projector.fire()) energySpent++;` (§12.3) |
+| 13 | 312 | `if (energy == 0 && !pendingShone)` | `if (projectorEnergy <= 0 && !pendingShone)` — `<=` because a hit can now overshoot |
+| 14 | descriptor | — | `/* projectors */ Outflow::projectorSet,` |
+
+Net: roughly ten lines changed, two deleted, one added. The passive drain,
+`pendingShone` / `pendingDepletion`, the respawn timer, the state machine, the
+scoring and all five config vars are untouched.
+
+### 12.3 `fire()` — selection is queued, firing is immediate
+
+Line 12 above replaces the four-part shot idiom that all six rulesets repeat.
+`ProjectorCtrl::fire()` performs, in one place, what each copy does by hand:
+
+1. reject if `readyMs` has not elapsed since the last switch (§2.5.5);
+2. reject if `projectorEnergy < energyCost`;
+3. call `enlight.run()`, and reject if *it* refuses (still in cooldown);
+4. on success only: deduct `energyCost`, queue the shot's UI action with
+   `cycleTime()`, and stamp `lastShotAt` for the recharge delay.
+
+Note the ordering: energy is deducted **only when `enlight.run()` returns true**,
+which is exactly today's `(energy > 0) && (enlightPtr->run())` short-circuit. A
+refused shot has never cost energy and still must not.
+
+`fire()` is a **direct call, not a queued output** — unlike `out.proj.select()`.
+That is deliberate and matches the existing code: `enlightPtr->run()` is already
+called straight from the behavior, the measurement must start on this tick, and
+`Enlight` self-guards re-entry. Queueing the shot would delay it by a loop
+iteration for no benefit. The ruleset keeps its own statistics (`energySpent++`)
+because those are game data, not projector state.
+
+### 12.4 A live bug the migration forces into the open
+
+```cpp
+static int startEnergy = 100;                       // L71 — never menu-bound
+static const ConfigVar configVars[] = {
+    { "Energy", &energy, 50, 200, 25 },             // L97 — targets the RUNTIME var
+};
+static void onBegin(…) { energy = startEnergy; … }  // L196 — overwrites it
+```
+
+The `Energy` config var writes `energy`, which `onBegin` immediately overwrites
+with the hardcoded `startEnergy = 100`. **The DM's Energy setting has no effect
+today**, and neither do the kill reward (L160) or respawn (L268), which both read
+`startEnergy`.
+
+This is worth knowing for two reasons. It is a one-word fix (`&energy` →
+`&startEnergy`) that is safe at the default — the menu opens at 100, which is
+what the game already uses, so a DM who leaves it alone sees no change. And the
+migration **cannot preserve the bug even accidentally**: edit #1 deletes the
+variable the config var wrongly points at, so the compiler forces the question.
+
+### 12.5 Equivalence check, mechanic by mechanic
+
+| Mechanic | Preserved? |
+|---|---|
+| 1 energy per shot | Yes — `energyCost = 1`, deducted only on a successful `run()`, as today |
+| Passive drain every `10000/drainRate` ms | Yes — `tickDrain()` untouched, now writing `projectorEnergy` |
+| Hit costs `hitDmg`, clamped at 0 | Yes — `dmg(pkt) = 1` from a `strength = 1` projector, so `1 * hitDmg` (§7.5) |
+| Kill grants `startEnergy`, **uncapped** | Yes — direct write; `NONE` mode never refills, and clamping is refill-only |
+| Energy 0 ⇒ `pendingDepletion` ⇒ OUT_GAME | Yes — condition moves to `<= 0` |
+| Respawn restores `startEnergy` | Yes |
+| No recharge, ever | Yes — that is `Recharge::NONE` |
+| Projector never lost at 0 energy | Yes — `NONE`, not `CONSUMED`; the ruleset owns what zero means |
+| Cooldown 20 ms, 20 cycles | Yes — carried by the projector instead of two `onBegin` calls |
+| No hit immunity | Yes — **only because `targetImmunityMs = 0` is set explicitly** |
+| Energy shown with `ICON_ENERGY` | Yes — the projector's `icon` is that same bitmap |
+| Shot sound / vibration | Yes — `shotAction = nullptr` keeps the standard `Enlight` action |
+| Energy may exceed 255 after kills | Yes — **but see §12.6** |
+
+### 12.6 Two type constraints Outflow imposes on the framework
+
+Both are framework-side and would be silent corruption if missed:
+
+- **`ProjectorSlot::energy` must be `int16_t`, not `uint8_t`.** Outflow's kill
+  reward is uncapped and additive: three kills without spending puts the pool at
+  400. `maxEnergy` can stay `uint8_t` — it is only the refill target and the
+  starting value, never a ceiling on a direct write — but the live pool cannot.
+  `projectorEnergy` is likewise `int`, which `MonitorVar::Int` requires anyway.
+- **`ProjectorLimits::MAX_ENERGY` bounds `maxEnergy` only.** Outflow's config var
+  allows 200, within the 200 limit; the *live* pool is deliberately unbounded
+  above. Clamping the pool to `MAX_ENERGY` on every write would break the kill
+  reward exactly as clamping to `maxEnergy` would.
