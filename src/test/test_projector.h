@@ -31,9 +31,12 @@ static const Projector oneShot = {
     3, 7, 500, 200, nullptr, nullptr
 };
 
+// standardMask lists only the STANDARD projectors this game hands out.  The
+// ruleset's own profiles need no bit: the catalogue is derived from the ids in
+// custom[], so it is stated once, in the descriptions themselves.
 static const ProjectorSet set = {
     &oneShot, 1,
-    (1u << ProjectorId::FAST) | (1u << ProjectorId::STRONG) | (1u << ProjectorId::CUSTOM1),
+    (1u << ProjectorId::FAST) | (1u << ProjectorId::STRONG),
     nullptr, &maxOwned, available
 };
 
@@ -83,8 +86,9 @@ test(projector_defaults_to_baseline_alone) {
 test(projector_catalogue_gates_what_can_be_given) {
     projector.begin(nullptr, nullptr);
     projector.setGame(&ProjectorTest::set);
-    assertTrue (projector.give(ProjectorId::FAST));
-    assertFalse(projector.give(ProjectorId::LONG));   // not in the catalogue
+    assertTrue (projector.give(ProjectorId::FAST));      // named by standardMask
+    assertFalse(projector.give(ProjectorId::LONG));      // not in the catalogue
+    assertTrue (projector.give(ProjectorId::CUSTOM1));   // derived from custom[]
 }
 
 test(projector_fifo_evicts_oldest_powered_never_the_baseline) {
@@ -112,7 +116,7 @@ test(projector_each_profile_keeps_its_own_energy) {
 
     projector.select(ProjectorId::STRONG);
     const int strongFull = projectorEnergy;
-    projectorEnergy -= 3;                              // as a shot would
+    projectorEnergy -= 3;                              // as a shine would
 
     projector.select(ProjectorId::CUSTOM1);
     assertEqual(projectorEnergy, (int)ProjectorTest::oneShot.maxEnergy);

@@ -132,6 +132,11 @@ private:
     void activateStateDisplay(uint8_t state);
     void flushOutput(const GameOutput& out);
     void scoreUpdate(const InputReport&, const RadioReport&, GameOutput&);
+
+    // Services LightAir_Game::shinePolicy for one cycle: polls Enlight,
+    // signals a confirmed target, and reads the trigger.  No-op when the
+    // game declares no policy, which is what leaves polling to the ruleset.
+    void serviceShine(const InputReport&, GameOutput&);
     void replyToTotemBeacon(const RadioEvent& ev, GameOutput& output);
 
     // Score collection helpers (all defined in .cpp)

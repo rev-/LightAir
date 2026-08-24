@@ -1,8 +1,14 @@
 #include "LightAir_GameRunner.h"
 #include "LightAir_ProjectorCtrl.h"
+#include "../enlight/Enlight.h"
 #include <Arduino.h>
 #include <string.h>
 #include <esp_system.h>
+
+// The optical device, constructed by the sketch once NVS calibration is
+// loaded.  serviceShine() is the only place the framework polls it; rulesets
+// that declare no ShinePolicy keep polling it themselves.
+extern Enlight* enlightPtr;
 
 /* =========================================================
  *   BEGIN — one-time setup
@@ -279,6 +285,11 @@ void LightAir_GameRunner::update() {
         }
     }
 
+    // Step 2d-bis: shining, when the game declares a ShinePolicy.  Runs
+    // immediately before the behavior because that is where the hand-written
+    // loops sat, so a converted ruleset keeps the ordering it had.
+    serviceShine(inputs, output);
+
     // Step 2e: StateBehavior — per-state continuous logic.
     for (uint8_t i = 0; i < _game->behaviorCount; i++) {
         if (_game->behaviors[i].state != *_game->currentState) continue;
@@ -293,6 +304,42 @@ void LightAir_GameRunner::update() {
 
     // Enforce fixed loop duration.
     while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
+}
+
+/* =========================================================
+ *   SHINE SERVICE
+ *
+ *   The whole trigger -> beam -> signal path, written once.  Rulesets
+ *   that declare a ShinePolicy contain none of it; rulesets that do not
+ *   are untouched and keep polling Enlight themselves.
+ * ========================================================= */
+void LightAir_GameRunner::serviceShine(const InputReport& inputs, GameOutput& output) {
+    const ShinePolicy* pol = _game ? _game->shinePolicy : nullptr;
+    if (!pol) return;                                  // ruleset drives shining
+    if (!(pol->activeStates & (1u << *_game->currentState))) return;
+
+    // 1. A completed measurement.  Enlight::poll() is read-and-clear, so this
+    //    is the ONLY poll in the system whenever a policy is declared.
+    const EnlightResult r = enlightPtr ? enlightPtr->poll() : EnlightResult();
+    if (r.status == EnlightStatus::PLAYER_HIT &&
+        (!pol->isValidTarget || pol->isValidTarget(r.id)) &&
+        projector.mayLight(r.id)) {
+        const Projector& p = projector.active();
+        const uint8_t payload[3] = { p.strength, projector.activeId(), p.roleTag };
+        const uint8_t msgType = pol->hitMsgType ? pol->hitMsgType : RadioMsg::MSG_LIT;
+        output.radio.sendTo(r.id, msgType, payload, sizeof(payload));
+        projector.noteLit(r.id);
+    }
+    // NO_HIT / LOW_POW: a beam that found nothing — no radio traffic.
+
+    // 2. The trigger.  trigger() applies the deploy delay, the energy cost and
+    //    Enlight's own refusal, and spends energy only on an accepted run.
+    for (uint8_t i = 0; i < inputs.buttonCount; i++) {
+        if (inputs.buttons[i].id != pol->triggerButton) continue;
+        const ButtonState st = inputs.buttons[i].state;
+        if (st != ButtonState::PRESSED && st != ButtonState::HELD) continue;
+        if (projector.trigger() && pol->shineCounter) (*pol->shineCounter)++;
+    }
 }
 
 /* =========================================================

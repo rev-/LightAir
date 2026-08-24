@@ -17,7 +17,7 @@ class LightAir_UICtrl;
 //   - the inventory: the structural baseline plus up to maxOwned powered
 //     projectors, FIFO-evicted when full
 //   - each projector's own energy pool and its refill rule
-//   - the shot: readyMs, energy, Enlight::run(), the UI action
+//   - the shine: readyMs, energy, Enlight::run(), the UI action
 //   - attacker-side per-target anti-spam (targetImmunityMs)
 //   - keeping the display globals pointed at the active projector
 //
@@ -60,11 +60,11 @@ public:
     // baseline at full energy.  set may be nullptr = standard BASE only.
     void setGame(const ProjectorSet* set);
 
-    // ---- the shot -------------------------------------------------
+    // ---- the shine ------------------------------------------------
     // Direct call, not queued (see LightAir_ProjectorOutput.h).
-    // Returns true only if the shot actually started, and only then is
+    // Returns true only if the run actually started, and only then is
     // energy deducted — preserving today's (energy > 0) && run() short-circuit,
-    // under which a refused shot has never cost anything.
+    // under which a refused shine has never cost anything.
     bool trigger();
 
     // ---- attacker-side anti-spam ----------------------------------
@@ -114,7 +114,7 @@ private:
         uint8_t  id;
         int16_t  energy;      // int16: a ruleset may push the pool past 255
         uint32_t acquiredAt;  // fixes the FIFO eviction order
-        uint32_t lastShotAt;
+        uint32_t lastShineAt;
         uint32_t rampAt;      // next RAMP step due
     };
 
@@ -125,6 +125,11 @@ private:
     // Resolved, clamped definitions indexed by ProjectorId.
     Projector _defs[ProjectorId::COUNT];
     bool      _defined[ProjectorId::COUNT] = {};
+
+    // Derived at registration from standardMask plus the ids in custom[]:
+    // the set of projectors this game may hand out (the baseline excluded,
+    // since it is structural).
+    uint16_t  _catalogMask = 0;
 
     // Slot 0 is the baseline: always present, never counted against
     // maxOwned, never evicted.  Slots 1.._slotCount-1 are powered.

@@ -86,7 +86,7 @@ struct Projector {
 
     // ---- game: handling and feedback ----
     uint16_t    readyMs;         // deploy time after a switch before the first shot (§2.5.5)
-    const LightAir_UICtrl::UIAction* shotAction;  // sound/vibration/colour of a shot (§8.1)
+    const LightAir_UICtrl::UIAction* shineAction;  // sound/vibration/colour of a shot (§8.1)
     const uint8_t* icon;         // 8x8 PROGMEM bitmap shown beside this projector's energy (§8.2)
 };
 ```
@@ -373,7 +373,7 @@ struct ProjectorSlot {
     uint8_t  id;            // ProjectorId
     uint8_t  energy;        // this projector's own live pool
     uint32_t acquiredAt;    // millis() when earned — fixes the eviction order
-    uint32_t lastShotAt;    // per-slot, so rechargeDelayMs is per-projector
+    uint32_t lastShineAt;    // per-slot, so rechargeDelayMs is per-projector
 };
 ```
 
@@ -384,7 +384,7 @@ Two consequences worth deciding explicitly rather than discovering:
   makes carrying several a real decision rather than a way to fire continuously
   by cycling — put a projector away dry and you have to earn the pause to refill
   it. It also makes the tick trivial: one slot per game cycle, not a loop.
-  The `rechargeDelayMs` gate is measured from that slot's own `lastShotAt`, so
+  The `rechargeDelayMs` gate is measured from that slot's own `lastShineAt`, so
   switching back after a long absence starts refilling immediately (you gained
   nothing while away, but you are past the just-fired grace period), while
   `readyMs` independently blocks firing for a moment after the switch.
@@ -667,14 +667,14 @@ namespace ProjectorId {
 
 Identity and anti-spam, per §7.4, §8.1 and §8.2:
 
-| | `targetImmunityMs` | `shotAction` | `icon` |
+| | `targetImmunityMs` | `shineAction` | `icon` |
 |---|---|---|---|
 | `BASE`   | 3000 (today's `HIT_IMMUNITY_MS`) | `nullptr` — the standard `Enlight` row | `ICON_ENERGY_BITMAP` (unchanged) |
 | `FAST`   | 1200                             | `PROJ_FAST_ACTION`   | `PROJ_FAST_ICON` |
 | `LONG`   | 3000                             | `PROJ_LONG_ACTION`   | `PROJ_LONG_ICON` |
 | `STRONG` | 6000                             | `PROJ_STRONG_ACTION` | `PROJ_STRONG_ICON` |
 
-`BASE` leaving `shotAction` null means today's shot feedback is untouched, in the
+`BASE` leaving `shineAction` null means today's shot feedback is untouched, in the
 same way `ICON_ENERGY_BITMAP` keeps today's icon.
 
 `FAST`'s shorter immunity is what makes it feel fast against a single target;
@@ -1176,7 +1176,7 @@ const UIAction& LightAir_UICtrl::resolveAction(UIEvent event) {
 The change is to give the `Enlight` slot the same treatment — one extra stored
 action plus a `setEnlightAction(const UIAction&)` (or a `defineCustomAction()`
 whose slot check accepts `Enlight`). `ProjectorCtrl` calls it on every switch,
-passing the active projector's `shotAction`, and a null `shotAction` leaves the
+passing the active projector's `shineAction`, and a null `shineAction` leaves the
 standard table entry in place.
 
 What this buys, beyond avoiding the trap:
@@ -1304,7 +1304,7 @@ would be circular.
 | `src/tools/EnlightCalibRoutine.cpp` | step 1 prompt, step 2 saves the reference, step 4 shows `Rmax` |
 | `src/ui/player/LightAir_UICtrl.h/.cpp` | `UIEvent::ProjectorChange` + one table row; `setEnlightAction()` extending the `resolveAction()` override hook (§8.1). `.cpp:352` and `:129` stay untouched. |
 | `src/LightAir.h` | include the two new headers |
-| `src/rulesets/*.cpp` (×5) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature + one `setPool()` call; the identical recharge block deleted (§2.5); `litAt[]`/`notImmune()`/`REPLY_IMMUNE` removed (§7.4); a `Projectors` config var |
+| `src/rulesets/*.cpp` (unmigrated) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature + one `setPool()` call; the identical recharge block deleted (§2.5); `litAt[]`/`notImmune()`/`REPLY_IMMUNE` removed (§7.4); a `Projectors` config var |
 | `src/rulesets/GameOutflow.cpp` | as above, but a `Recharge::NONE` projector: `tickDrain()` and the depletion rule stay; its own `energy--` in the shot loop goes; the uncapped kill reward writes the pool directly (§2.5.1) |
 
 The standard table goes in `LightAir_Projector.h` rather than `config.h` —
@@ -1366,7 +1366,7 @@ static const Projector outflowBase = {
     /* roleTag         */ 0,
     /* targetImmunityMs*/ 0,      // Outflow has NO immunity today — must stay 0
     /* readyMs         */ 0,      // nothing to switch to
-    /* shotAction      */ nullptr,             // keep the standard Enlight action
+    /* shineAction      */ nullptr,             // keep the standard Enlight action
     /* icon            */ ICON_ENERGY_BITMAP,  // keep today's display
 };
 static_assert(outflowBase.id       == ProjectorId::BASE,     "structural id");
@@ -1425,7 +1425,7 @@ nonviolent lexicon the rest of the codebase keeps (LIT, SHONE, ENLIGHT).
 2. reject if `projectorEnergy < energyCost`;
 3. call `enlight.run()`, and reject if *it* refuses (still in cooldown);
 4. on success only: deduct `energyCost`, queue the shot's UI action with
-   `cycleTime()`, and stamp `lastShotAt` for the recharge delay.
+   `cycleTime()`, and stamp `lastShineAt` for the recharge delay.
 
 Note the ordering: energy is deducted **only when `enlight.run()` returns true**,
 which is exactly today's `(energy > 0) && (enlightPtr->run())` short-circuit. A
@@ -1474,7 +1474,7 @@ variable the config var wrongly points at, so the compiler forces the question.
 | Cooldown 20 ms, 20 cycles | Yes — carried by the projector instead of two `onBegin` calls |
 | No hit immunity | Yes — **only because `targetImmunityMs = 0` is set explicitly** |
 | Energy shown with `ICON_ENERGY` | Yes — the projector's `icon` is that same bitmap |
-| Shot sound / vibration | Yes — `shotAction = nullptr` keeps the standard `Enlight` action |
+| Shot sound / vibration | Yes — `shineAction = nullptr` keeps the standard `Enlight` action |
 | Energy may exceed 255 after kills | Yes — **but see §12.6** |
 
 ### 12.6 Two type constraints Outflow imposes on the framework
@@ -1560,4 +1560,82 @@ runtime variable that `onBegin` immediately overwrote, so the DM's setting never
 took effect. It now targets `&startEnergy`, which the kill reward and the respawn
 path already read. The default is unchanged at 100, so a DM who leaves the menu
 alone sees no difference.
+
+---
+
+## 14. The shine policy — and the survey that justified it
+
+An earlier revision recommended a one-line helper over an engine-driven loop,
+on the assumption that the six rulesets' shine loops differ substantially.
+**Surveying them showed the opposite**, so the recommendation is reversed here.
+
+### 14.1 What the six actually do
+
+| Dimension | Variants | |
+|---|---|---|
+| State where shining happens | `IN_GAME` | 6/6 |
+| Trigger button | `TRIG_1_ID` (`TRIG_2` unused anywhere) | 6/6 |
+| Button states | `PRESSED \|\| HELD` | 6/6 |
+| Hit message | `MSG_LIT` | 6/6 |
+| Tally | `energySpent++` | 6/6 |
+| Release-edge recharge | 5 identical, Outflow none | absorbed by `Recharge` |
+| Energy guard | 4 correct, **2 wrong** | — |
+| Target filter | none ×3 / `isOpponent \|\| friendlyFire` ×3 | **the only variation** |
+
+`GameOutflow`, assumed to need a custom rule, does not: its "energy is life"
+lives in `tickDrain()` and a `StateRule`, both outside the loop.
+
+### 14.2 The bug that settled it
+
+`GameTeams.cpp:341` and `GameUpkeep.cpp:449` spent energy, counted the shine and
+fired the UI event *before* calling `enlightPtr->run()`, discarding its result.
+`run()` refuses while a measurement is in flight, so holding the trigger drained
+about one energy per 10 ms tick across the whole ~80 ms burst — roughly eight per
+shine instead of one — and queued eight UI events for it. The other four guard on
+the return value.
+
+Hand-writing this loop produced a real defect in a third of the files. That is a
+correctness argument for writing it once, and it outweighs the stylistic
+objection raised earlier.
+
+### 14.3 The shape
+
+`ShinePolicy` needs exactly one hook, because there is exactly one axis of
+variation. Four of its five fields are identical in every existing ruleset:
+
+```cpp
+struct ShinePolicy {
+    uint32_t activeStates;      // must be set: each game numbers its own states
+    uint8_t  triggerButton;     // TRIG_1_ID is 0, so zero is already the default
+    uint8_t  hitMsgType;        // 0 = MSG_LIT
+    int*     shineCounter;      // optional, e.g. &energySpent
+    bool   (*isValidTarget)(uint8_t targetId);   // nullptr = anyone
+};
+```
+
+`isValidTarget` is deliberately *not* named `mayLight`:
+`ProjectorCtrl::mayLight()` is the active projector's per-target anti-spam
+window, always applied and about timing. This one is about who counts as a
+target. Both run, and they answer different questions.
+
+### 14.4 Two rules that keep it safe
+
+- **Polling.** `Enlight::poll()` is read-and-clear, so two callers would
+  silently eat each other's hits. The rule is mechanical, with no middle state:
+  **a declared policy means GameRunner polls and the ruleset must not; no policy
+  means the ruleset polls, as always.**
+- **The opt-out is complete.** `shinePolicy == nullptr` leaves a ruleset exactly
+  as it was. This is what makes the design safe to adopt on N=6 evidence drawn
+  from one author's idiom: the seventh ruleset, from an outside contributor,
+  is never blocked — if it does not fit, it declares no policy.
+
+Ordering: the runner services shining immediately **before** the state behavior,
+where the hand-written loops sat, so a converted ruleset keeps its ordering.
+
+### 14.5 Residual risk, stated plainly
+
+A policy-driven ruleset can no longer see the moment a beam is emitted. Today
+only `energySpent++` needs that, and `shineCounter` covers it. A future game
+wanting a per-shine reaction (recoil, an animation, ammo types) needs either a
+callback field or the opt-out. I would add the field only when something asks.
 

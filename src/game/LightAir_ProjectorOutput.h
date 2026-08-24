@@ -14,7 +14,7 @@
 // while a measurement is in flight would corrupt it.
 //
 // Note the asymmetry with LightAir_ProjectorCtrl::trigger(), which is a
-// DIRECT call: a shot must start on this tick, exactly as the existing
+// DIRECT call: a measurement must start on this tick, exactly as the existing
 // enlightPtr->run() does, so queueing it would only add a loop of latency.
 // Selection is queued; shining is immediate.
 //

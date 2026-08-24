@@ -642,5 +642,6 @@ extern const LightAir_Game game_flag = {
     /* teamMap               */ Flag::teamMap,
     /* gameTimeLeft          */ &Flag::gameTimeLeft,
     /* projectors            */ nullptr,
+    /* shinePolicy           */ nullptr,
     /* onEnd                 */ nullptr,
 };

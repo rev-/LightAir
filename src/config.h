@@ -238,7 +238,7 @@ namespace ProjectorLimits {
     constexpr uint8_t  MIN_OWNED       = 1;   // never 0: would deny every reward
     constexpr uint8_t  MAX_OWNED       = 8;   // powered slots; the baseline is extra
     constexpr uint8_t  DEFAULT_MAX_OWNED = 3;
-    constexpr uint8_t  MAX_CUSTOM      = 4;   // ruleset-local profiles
+    constexpr uint8_t  MAX_CUSTOM      = 8;   // ruleset-local profiles
     constexpr uint8_t  NAME_LEN        = 8;   // fits one OLED cell
     constexpr uint8_t  CAL_REF_DIST_M  = 5;   // distance used by calibration step 1
 }

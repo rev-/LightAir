@@ -15,14 +15,14 @@
 // stops the Projector from becoming a god-object:
 //
 //   optical   cycles, cooldownMs, rangeM   -> pushed into Enlight
-//   game      the shot economy, strength   -> LightAir_ProjectorCtrl + rules
-//   identity  name, icon, shotAction       -> the UI layer
+//   game      the shine economy, strength  -> LightAir_ProjectorCtrl + rules
+//   identity  name, icon, shineAction       -> the UI layer
 //
 // Enlight never sees this type: LightAir_ProjectorCtrl decomposes the
 // optical fields into the three Enlight setters.
 //
 // A projector definition is SELF-CONTAINED — it carries its own display
-// bitmap and its own shot feedback — so adding one means adding a row to a
+// bitmap and its own shine feedback — so adding one means adding a row to a
 // table and the artwork beside it, with no edits anywhere else.
 // ================================================================
 
@@ -53,9 +53,9 @@ struct Projector {
     uint16_t    cooldownMs;       // Enlight::setCooldown(); also the fire-rate limiter
     uint8_t     rangeM;           // approximate reach in metres; 0 = whatever the device sees
 
-    // ---- game: the shot economy ----
+    // ---- game: the shine economy ----
     Recharge    recharge;
-    uint8_t     energyCost;       // energy per shot; 0 = free
+    uint8_t     energyCost;       // energy per shine; 0 = free
     uint8_t     maxEnergy;        // pool when full, or the number of charges
     uint16_t    rechargeDelayMs;  // idle time before refilling starts
     uint16_t    rechargeMs;       // empty -> full duration (RAMP only)
@@ -70,8 +70,8 @@ struct Projector {
                                   //   enforced by the attacker (see ProjectorCtrl)
 
     // ---- game: handling and feedback ----
-    uint16_t    readyMs;          // deploy time after a switch before the first shot
-    const LightAir_UIAction* shotAction;  // nullptr = the standard Enlight action
+    uint16_t    readyMs;          // deploy time after a switch before the first shine
+    const LightAir_UIAction* shineAction;  // nullptr = the standard Enlight action
     const uint8_t*           icon;        // 8x8 PROGMEM bitmap; nullptr = ICON_ENERGY
 };
 
@@ -94,8 +94,19 @@ namespace ProjectorId {
     constexpr uint8_t CUSTOM2   = 5;
     constexpr uint8_t CUSTOM3   = 6;
     constexpr uint8_t CUSTOM4   = 7;
-    constexpr uint8_t COUNT     = STD_COUNT + ProjectorLimits::MAX_CUSTOM;  // 8
+    constexpr uint8_t CUSTOM5   = 8;
+    constexpr uint8_t CUSTOM6   = 9;
+    constexpr uint8_t CUSTOM7   = 10;
+    constexpr uint8_t CUSTOM8   = 11;
+    constexpr uint8_t COUNT     = STD_COUNT + ProjectorLimits::MAX_CUSTOM;  // 12
+
+    // A ruleset names its own with an enum seeded from CUSTOM1, so the names
+    // are readable and the ids stay explicit:
+    //     enum { SNIPER = ProjectorId::CUSTOM1, SPRAY, FLARE };
 }
+
+// catalogMask must hold one bit per id.
+static_assert(ProjectorId::COUNT <= 16, "catalogMask is uint16_t");
 
 // ----------------------------------------------------------------
 // projectorClamp — the single definition of the bounds logic.
@@ -131,7 +142,7 @@ constexpr Projector projectorClamp(const Projector& p) {
         p.roleTag,
         projectorClampValue<uint16_t>(p.targetImmunityMs, 0, ProjectorLimits::MAX_IMMUNITY_MS),
         projectorClampValue<uint16_t>(p.readyMs, 0, ProjectorLimits::MAX_READY_MS),
-        p.shotAction,
+        p.shineAction,
         p.icon,
     };
 }
@@ -146,10 +157,14 @@ struct ProjectorSet {
     const Projector* custom;        // ruleset-local powered profiles; may be nullptr
     uint8_t          customCount;   // <= ProjectorLimits::MAX_CUSTOM
 
-    // Bit i set = powered ProjectorId i exists in this game.  The baseline is
-    // structural and needs no bit.  Doubles as the picker list, the set a totem
-    // or quest may grant, and the guard on any runtime select().
-    uint16_t         catalogMask;
+    // Which of the STANDARD projectors this game hands out, e.g.
+    // (1u<<ProjectorId::FAST) | (1u<<ProjectorId::STRONG).  0 = none of them.
+    //
+    // The ruleset's own profiles need no bit here: LightAir_ProjectorCtrl
+    // derives them from the ids in custom[], so the catalogue is stated once,
+    // in the descriptions themselves.  The baseline is structural and is never
+    // listed anywhere.
+    uint16_t         standardMask;
 
     // This game's baseline values, retuned in place.  nullptr = the standard
     // BASE.  Must keep id == ProjectorId::BASE and must not be CONSUMED — the
@@ -214,7 +229,7 @@ static const uint8_t ICON_PROJ_STRONG[8] PROGMEM = {
     0b00011000
 };
 
-// ---- Shot feedback, installed into the Enlight slot on switch ----
+// ---- Shine feedback, installed into the Enlight slot on switch ----
 // Step durations are overridden at runtime with the real burst length
 // (see LightAir_UICtrl::executeStep), so durations[0] is only a fallback.
 

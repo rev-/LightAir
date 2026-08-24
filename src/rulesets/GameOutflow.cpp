@@ -53,8 +53,6 @@
 //   gameTime     : total game duration in seconds (default 900).
 // ================================================================
 
-extern Enlight* enlightPtr;
-
 namespace Outflow {
 
 // ---- States ----
@@ -300,36 +298,14 @@ static const StateRule rules[] = {
 };
 
 // ---- Per-state behaviors ----
-static void doInGame(const InputReport& inp, const RadioReport&,
-                     LightAir_DisplayCtrl&, GameOutput& out) {
+static void doInGame(const InputReport&, const RadioReport&,
+                     LightAir_DisplayCtrl&, GameOutput&) {
     tickGameTime();
     tickDrain();
 
-    // Poll Enlight; a confirmed hit sends MSG_LIT to the target, carrying this
-    // projector's strength so the target can weigh it.  mayLight() is the
-    // attacker-side anti-spam window (0 ms for this game, so always true).
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT && projector.mayLight(r.id)) {
-        const Projector& p = projector.active();
-        const uint8_t payload[3] = { p.strength, projector.activeId(), p.roleTag };
-        out.radio.sendTo(r.id, MSG_LIT, payload, sizeof(payload));
-        projector.noteLit(r.id);
-    }
-
-    for (uint8_t i = 0; i < inp.buttonCount; i++) {
-        if (inp.buttons[i].id != InputDefaults::TRIG_1_ID) continue;
-        ButtonState s = inp.buttons[i].state;
-        if (s == ButtonState::PRESSED || s == ButtonState::HELD) {
-            // trigger() folds the deploy-time check, the energy check,
-            // Enlight::run() and the UI action into one call, and deducts
-            // energy only when the run actually started.
-            if (projector.trigger()) energySpent++;
-        }
-    }
-
-    // Set depletion flag if energy reached zero (from either active or passive drain),
-    // unless a fatal hit already set pendingShone (mutually exclusive).
-    // <= 0 rather than == 0: a weighted hit can overshoot zero.
+    // Shining is serviced by GameRunner from shinePolicy below; this ruleset
+    // only says what reaching zero MEANS, which is what makes energy the life
+    // total here.  <= 0 rather than == 0: a weighted hit can overshoot.
     if (projectorEnergy <= 0 && !pendingShone)
         pendingDepletion = true;
 }
@@ -343,6 +319,18 @@ static const StateBehavior behaviors[] = {
     { IN_GAME,  doInGame  },
     { OUT_GAME, doOutGame },
     { GAME_END, nullptr   },
+};
+
+// ---- Shine policy ----
+//
+// No target filter: Outflow is a free-for-all, so anyone detected is
+// signalled.  GameRunner owns the loop and therefore the Enlight poll.
+static const ShinePolicy shinePolicy = {
+    /* activeStates  */ 1u << IN_GAME,
+    /* triggerButton */ InputDefaults::TRIG_1_ID,
+    /* hitMsgType    */ MSG_LIT,
+    /* shineCounter  */ &energySpent,
+    /* isValidTarget */ nullptr,
 };
 
 // ---- Projector ----
@@ -370,7 +358,7 @@ static const Projector outflowBase = {
     /* roleTag         */ 0,
     /* targetImmunityMs*/ 0,      // no immunity in this game — see above
     /* readyMs         */ 0,      // nothing to switch to
-    /* shotAction      */ nullptr,            // the standard Enlight action
+    /* shineAction      */ nullptr,            // the standard Enlight action
     /* icon            */ ICON_ENERGY_BITMAP, // today's display
 };
 static_assert(outflowBase.id == ProjectorId::BASE,
@@ -417,5 +405,6 @@ extern const LightAir_Game game_outflow = {
     /* teamMap               */ nullptr,
     /* gameTimeLeft          */ &Outflow::gameTimeLeft,
     /* projectors            */ &Outflow::projectorSet,
+    /* shinePolicy           */ &Outflow::shinePolicy,
     /* onEnd                 */ nullptr,
 };

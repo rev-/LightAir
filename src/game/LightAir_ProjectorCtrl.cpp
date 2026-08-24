@@ -37,7 +37,7 @@ void LightAir_ProjectorCtrl::setGame(const ProjectorSet* set) {
 
     _slots[0].id         = ProjectorId::BASE;
     _slots[0].acquiredAt = millis();
-    _slots[0].lastShotAt = millis();
+    _slots[0].lastShineAt = millis();
     _slots[0].energy     = (int16_t)_defs[ProjectorId::BASE].maxEnergy;
 
     activate(0);
@@ -49,6 +49,7 @@ void LightAir_ProjectorCtrl::setGame(const ProjectorSet* set) {
 // so bounds cannot drift between the two paths.
 void LightAir_ProjectorCtrl::registerDefs() {
     memset(_defined, 0, sizeof(_defined));
+    _catalogMask = 0;
 
     for (uint8_t i = 0; i < ProjectorId::STD_COUNT; i++) {
         _defs[i]    = projectorClamp(ProjectorDefs::kStandard[i]);
@@ -68,6 +69,11 @@ void LightAir_ProjectorCtrl::registerDefs() {
         }
     }
 
+    // Standards this game hands out are named by mask; the ruleset's own
+    // profiles are added from their ids, so the catalogue needs no separate
+    // hand-maintained list that could disagree with the descriptions.
+    _catalogMask = (uint16_t)(_set->standardMask & ~(1u << ProjectorId::BASE));
+
     const uint8_t n = (_set->customCount < ProjectorLimits::MAX_CUSTOM)
                     ? _set->customCount : ProjectorLimits::MAX_CUSTOM;
     for (uint8_t i = 0; i < n && _set->custom; i++) {
@@ -76,8 +82,11 @@ void LightAir_ProjectorCtrl::registerDefs() {
             ESP_LOGE(TAG, "custom projector id=%u out of range - ignored", c.id);
             continue;
         }
+        if (_defined[c.id])
+            ESP_LOGW(TAG, "custom projector id=%u declared twice - last wins", c.id);
         _defs[c.id]    = projectorClamp(c);
         _defined[c.id] = true;
+        _catalogMask  |= (uint16_t)(1u << c.id);
     }
 }
 
@@ -165,7 +174,7 @@ void LightAir_ProjectorCtrl::activate(uint8_t slotIdx) {
         _enlight->setCooldown(p.cooldownMs);
         _enlight->setRangeM(p.rangeM);
     }
-    if (_ui) _ui->setEnlightAction(p.shotAction);
+    if (_ui) _ui->setEnlightAction(p.shineAction);
 
     _readyAt = millis() + p.readyMs;
     _changed = true;
@@ -193,7 +202,7 @@ bool LightAir_ProjectorCtrl::give(uint8_t id) {
     if (id == ProjectorId::BASE) return true;   // always held already
     // No ProjectorSet at all means "the standard baseline alone", so nothing is
     // grantable — the guard must reject on a null set, not skip past it.
-    if (!_set || !(_set->catalogMask & (1u << id))) {
+    if (!_set || !(_catalogMask & (1u << id))) {
         ESP_LOGW(TAG, "give(%u): not in this game's catalogue", id);
         return false;
     }
@@ -215,7 +224,7 @@ bool LightAir_ProjectorCtrl::give(uint8_t id) {
     s.id         = id;
     s.energy     = (int16_t)_defs[id].maxEnergy;
     s.acquiredAt = millis();
-    s.lastShotAt = millis();
+    s.lastShineAt = millis();
     s.rampAt     = millis();
     _slotCount++;
     return true;
@@ -275,7 +284,7 @@ void LightAir_ProjectorCtrl::next() { cycle(+1); }
 void LightAir_ProjectorCtrl::prev() { cycle(-1); }
 
 /* ============================================================
- *   the shot
+ *   the shine
  * ============================================================ */
 bool LightAir_ProjectorCtrl::trigger() {
     if (!_enlight) return false;
@@ -285,11 +294,11 @@ bool LightAir_ProjectorCtrl::trigger() {
     if (p.energyCost > 0 && projectorEnergy < (int)p.energyCost) return false;
 
     // Energy is spent only if the run actually started — Enlight refuses while
-    // still in cooldown, and a refused shot has never cost anything.
+    // still in cooldown, and a refused shine has never cost anything.
     if (!_enlight->run()) return false;
 
     if (p.energyCost > 0) projectorEnergy -= p.energyCost;
-    _slots[_activeIdx].lastShotAt = millis();
+    _slots[_activeIdx].lastShineAt = millis();
     _slots[_activeIdx].rampAt     = millis() + rechargeDelayMs();
 
     if (_ui) _ui->triggerEnlight((uint16_t)_enlight->cycleTime());
@@ -359,7 +368,7 @@ void LightAir_ProjectorCtrl::tickRecharge() {
 
     Slot& s = _slots[_activeIdx];
     const uint32_t now = millis();
-    if ((uint32_t)(now - s.lastShotAt) < rechargeDelayMs()) return;
+    if ((uint32_t)(now - s.lastShineAt) < rechargeDelayMs()) return;
 
     if (p.recharge == Recharge::REFILL) {
         projectorEnergy = max;

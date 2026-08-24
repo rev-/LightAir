@@ -7,6 +7,7 @@
 #include "LightAir_WinnerVar.h"
 #include "LightAir_TotemRequirement.h"
 #include "LightAir_Projector.h"
+#include "LightAir_ShinePolicy.h"
 #include "../ui/player/LightAir_UICtrl.h"
 #include "../config.h"
 
@@ -245,6 +246,14 @@ struct LightAir_Game {
     // nullptr = the standard BASE alone, which is exactly today's behaviour
     // for a ruleset that says nothing about projectors.
     const ProjectorSet* projectors;
+
+    // How the trigger becomes a beam.  When set, GameRunner services shining
+    // itself — reading the trigger, calling the projector, polling Enlight and
+    // signalling the target — and the ruleset writes none of that.
+    //
+    // nullptr = the ruleset drives shining from its own StateBehavior, which
+    // is also what decides who may poll Enlight.  See LightAir_ShinePolicy.h.
+    const ShinePolicy* shinePolicy;
 
     // Called by GameRunner immediately before esp_restart() after the player
     // presses A+B on the end-game screen.  Use for last-moment display updates

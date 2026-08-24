@@ -32,6 +32,7 @@
 #include "game/LightAir_GameOutput.h"
 #include "game/LightAir_GameVar.h"
 #include "game/LightAir_Projector.h"
+#include "game/LightAir_ShinePolicy.h"
 #include "game/LightAir_ProjectorOutput.h"
 #include "game/LightAir_ProjectorCtrl.h"
 #include "game/LightAir_StateRule.h"
