@@ -61,8 +61,6 @@
 //   endPoints        : combined CP-point limit for early GAME_END; 0 = disabled (default 150).
 // ================================================================
 
-extern Enlight* enlightPtr;
-
 namespace Upkeep {
 
 // ---- States ----
@@ -90,7 +88,6 @@ static constexpr uint8_t CP_TEAM_NONE = 0xFF;  // teamless
 // ---- RSSI proximity thresholds ----
 static constexpr int8_t  NEAR_CP_RSSI    = -65;  // ~3 m indoors for CP presence
 static constexpr int8_t  NEAR_BASE_RSSI  = -57;  // ~2 m indoors for BASE respawn
-static constexpr uint32_t HIT_IMMUNITY_MS = 3000;
 
 // ---- Config variables ----
 static int startLives       = 3;
@@ -103,7 +100,6 @@ static int endPoints        = 150;
 
 // ---- Runtime variables ----
 static int lives          = 3;
-static int energy         = 50;
 static int gameTimeLeft   = 900;
 static int shoneTimes     = 0;
 static int energySpent    = 0;
@@ -126,9 +122,6 @@ static uint8_t  myTeam;         // 0=O, 1=X; loaded from runner in onBegin
 static uint8_t  teamMap[PlayerDefs::MAX_PLAYER_ID];  // per-player team index; filled from config blob
 
 // Moved from doInGame static locals so they reset correctly on game restart.
-static bool     triggerWasActive = false;
-static uint32_t releaseAt        = 0;
-static uint32_t litAt[PlayerDefs::MAX_PLAYER_ID];
 
 // ---- Totem device-ID slots (populated in onBegin from runner) ----
 static uint8_t cpIds[6]     = {};
@@ -153,7 +146,7 @@ static const ConfigVar configVars[] = {
 static const MonitorVar monitorVars[] = {
     // IN_GAME display
     MonitorVar::Int("Lives",  &lives,        1u<<IN_GAME,                  ICON_LIFE,   0, 0),
-    MonitorVar::Int("Energy", &energy,       1u<<IN_GAME,                  ICON_ENERGY, 1, 0),
+    MonitorVar::IntDyn("Energy", &projectorEnergy, 1u<<IN_GAME, &projectorIcon, ICON_ENERGY, 1, 0),
     MonitorVar::Int("Time",   &gameTimeLeft, (1u<<IN_GAME)|(1u<<OUT_GAME), ICON_TIME,   0, 1),
     MonitorVar::Str("Points", teamScoreStr,  1u<<IN_GAME,                  ICON_SCORE,  1, 1),
     // GAME_END display
@@ -209,7 +202,6 @@ static void refreshScoreStr() {
 static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtrl* ui,
                     const LightAir_GameRunner& runner) {
     lives            = startLives;
-    energy           = startEnergy;
     gameTimeLeft     = gameTime;
     shoneTimes       = 0;
     energySpent      = 0;
@@ -219,9 +211,10 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
     canRespawn       = false;
     respawnAt        = 0;
     lastTickAt       = millis();
-    triggerWasActive = false;
-    releaseAt        = 0;
-    memset(litAt, 0, sizeof(litAt));
+
+    // The DM's Energy / Recharge knobs still decide the pool; the projector
+    // owns it from here, including the refill that used to live in doInGame.
+    projector.setPool(startEnergy, (uint16_t)rechargeSecs * 1000);
 
     for (uint8_t i = 0; i < 6; i++) cpState[i] = CP_TEAM_NONE;
     snprintf(teamScoreStr, sizeof(teamScoreStr), "0/0");
@@ -243,34 +236,32 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
 }
 
 // ---- DirectRadioRule conditions ----
-static bool notImmune(const RadioPacket& pkt) {
-    return pkt.senderId >= PlayerDefs::MAX_PLAYER_ID
-        || litAt[pkt.senderId] == 0
-        || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
+// Incoming hit weight: payload[0] is the sender's projector strength in
+// STANDARD HITS, and one standard hit costs one life here.  An empty payload
+// comes from pre-projector firmware and counts as one.
+static int litCost(const RadioPacket& pkt) {
+    return pkt.payloadLen ? (int)pkt.payload[0] : 1;
 }
 
 static bool litAndTakenAndValid(const RadioPacket& pkt) {
-    return lives > 1 && (pkt.team != myTeam || friendlyFire) && notImmune(pkt);
+    return lives >  litCost(pkt) && (pkt.team != myTeam || friendlyFire);
 }
 static bool litAndShoneAndValid(const RadioPacket& pkt) {
-    return lives <= 1 && (pkt.team != myTeam || friendlyFire) && notImmune(pkt);
+    return lives <= litCost(pkt) && (pkt.team != myTeam || friendlyFire);
 }
 static bool litButFriendly(const RadioPacket& pkt) {
     return pkt.team == myTeam && !friendlyFire;
 }
-static bool litButImmune(const RadioPacket& pkt) {
-    return (pkt.team != myTeam || friendlyFire) && !notImmune(pkt);
-}
 
 // ---- DirectRadioRule actions ----
 static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput& out) {
-    lives--;
-    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+    lives -= litCost(pkt);
+    if (lives < 0) lives = 0;
     out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
 static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
-    lives--;
-    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+    lives -= litCost(pkt);
+    if (lives < 0) lives = 0;
 }
 
 static void onCpScore(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
@@ -288,7 +279,6 @@ static const DirectRadioRule directRadioRules[] = {
     { IN_GAME,  MSG_LIT,        litAndTakenAndValid, REPLY_TAKEN,  onLitTaken },
     { IN_GAME,  MSG_LIT,        litAndShoneAndValid, REPLY_SHONE,  onLitShone },
     { IN_GAME,  MSG_LIT,        litButFriendly,      REPLY_FRIEND, nullptr    },
-    { IN_GAME,  MSG_LIT,        litButImmune,        REPLY_IMMUNE, nullptr    },
     { OUT_GAME, MSG_LIT,        nullptr,             REPLY_DOWN,   nullptr    },
     { IN_GAME,  MSG_CP_SCORE,   nullptr,             0,            onCpScore  },
     { OUT_GAME, MSG_CP_SCORE,   nullptr,             0,            onCpScore  },
@@ -307,17 +297,11 @@ static void onReplyFriend(const RadioPacket&, const RadioPacket&,
                           LightAir_DisplayCtrl&, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::Friend);
 }
-static void onReplyImmune(const RadioPacket&, const RadioPacket&,
-                          LightAir_DisplayCtrl&, GameOutput& out) {
-    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
-}
-
 static const ReplyRadioRule replyRadioRules[] = {
     //  activeInStateMask               eventType                       subType        condition  onReply
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_FRIEND, nullptr, onReplyFriend },
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election rules ----
@@ -403,10 +387,9 @@ static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::Down);
 }
 static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
-    lives      = startLives;
-    energy     = startEnergy;
-    canRespawn = false;
-    memset(litAt, 0, sizeof(litAt));
+    lives           = startLives;
+    projectorEnergy = startEnergy;
+    canRespawn      = false;
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
 }
@@ -427,44 +410,13 @@ static const StateRule rules[] = {
 
 // ---- Per-state behaviors ----
 
-static void doInGame(const InputReport& inp, const RadioReport& radio,
+static void doInGame(const InputReport&, const RadioReport& radio,
                      LightAir_DisplayCtrl& disp, GameOutput& out) {
     tickGameTime();
     scanCpBeacons(radio, disp, out, true);
 
-    // ---- Combat ----
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT) {
-        if (isOpponent(r.id) || friendlyFire)
-            out.radio.sendTo(r.id, MSG_LIT);
-    }
-
-    bool triggerActive = false;
-
-    for (uint8_t i = 0; i < inp.buttonCount; i++) {
-        if (inp.buttons[i].id != InputDefaults::TRIG_1_ID) continue;
-        ButtonState s = inp.buttons[i].state;
-        if (s == ButtonState::PRESSED || s == ButtonState::HELD) {
-            triggerActive = true;
-            // Spend energy only if the run actually started: Enlight refuses
-            // while a measurement is in flight, and a refused shine has never
-            // cost anything.  Without the guard the trigger drained one energy
-            // per 10 ms loop tick for the whole ~80 ms burst.
-            if ((energy > 0) && (enlightPtr->run())) {
-                energy--;
-                energySpent++;
-                out.ui.triggerEnlight(enlightPtr->cycleTime());
-            }
-        }
-    }
-
-    if (triggerWasActive && !triggerActive) releaseAt = millis();
-    triggerWasActive = triggerActive;
-
-    if (!triggerActive && energy < startEnergy) {
-        if ((millis() - releaseAt) >= (uint32_t)rechargeSecs * 1000)
-            energy = startEnergy;
-    }
+    // Shining — the trigger, the beam, the energy cost and the MSG_LIT to a
+    // confirmed target — is serviced by GameRunner from shinePolicy below.
 }
 
 static void doOutGame(const InputReport&, const RadioReport& radio,
@@ -494,6 +446,23 @@ static void doOutGame(const InputReport&, const RadioReport& radio,
         break;
     }
 }
+
+// ---- Shine policy ----
+//
+// Everything this game says about turning the trigger into a beam.  GameRunner
+// owns the loop and therefore the Enlight poll: nothing in this file may call
+// enlightPtr->poll() while this is declared.
+static bool isValidTarget(uint8_t targetId) {
+    return isOpponent(targetId) || friendlyFire;
+}
+
+static const ShinePolicy shinePolicy = {
+    /* activeStates  */ 1u << IN_GAME,
+    /* triggerButton */ InputDefaults::TRIG_1_ID,
+    /* hitMsgType    */ MSG_LIT,
+    /* shineCounter  */ &energySpent,
+    /* isValidTarget */ isValidTarget,
+};
 
 static const StateBehavior behaviors[] = {
     { IN_GAME,  doInGame  },
@@ -574,6 +543,6 @@ extern const LightAir_Game game_upkeep = {
     /* teamMap               */ Upkeep::teamMap,
     /* gameTimeLeft          */ &Upkeep::gameTimeLeft,
     /* projectors            */ nullptr,
-    /* shinePolicy           */ nullptr,
+    /* shinePolicy           */ &Upkeep::shinePolicy,
     /* onEnd                 */ nullptr,
 };

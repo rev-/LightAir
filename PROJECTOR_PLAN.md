@@ -1304,7 +1304,7 @@ would be circular.
 | `src/tools/EnlightCalibRoutine.cpp` | step 1 prompt, step 2 saves the reference, step 4 shows `Rmax` |
 | `src/ui/player/LightAir_UICtrl.h/.cpp` | `UIEvent::ProjectorChange` + one table row; `setEnlightAction()` extending the `resolveAction()` override hook (§8.1). `.cpp:352` and `:129` stay untouched. |
 | `src/LightAir.h` | include the two new headers |
-| `src/rulesets/*.cpp` (unmigrated) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature + one `setPool()` call; the identical recharge block deleted (§2.5); `litAt[]`/`notImmune()`/`REPLY_IMMUNE` removed (§7.4); a `Projectors` config var |
+| `src/rulesets/*.cpp` (all six) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature + one `setPool()` call; the identical recharge block deleted (§2.5); `litAt[]`/`notImmune()`/`REPLY_IMMUNE` removed (§7.4); a `Projectors` config var |
 | `src/rulesets/GameOutflow.cpp` | as above, but a `Recharge::NONE` projector: `tickDrain()` and the depletion rule stay; its own `energy--` in the shot loop goes; the uncapped kill reward writes the pool directly (§2.5.1) |
 
 The standard table goes in `LightAir_Projector.h` rather than `config.h` —
@@ -1638,4 +1638,34 @@ A policy-driven ruleset can no longer see the moment a beam is emitted. Today
 only `energySpent++` needs that, and `shineCounter` covers it. A future game
 wanting a per-shine reaction (recoil, an animation, ammo types) needs either a
 callback field or the opt-out. I would add the field only when something asks.
+
+### 14.6 All six converted
+
+Every ruleset now declares a `ShinePolicy` and contains no shine loop. What each
+`doInGame` reduced to:
+
+| Ruleset | remaining body | `isValidTarget` |
+|---|---|---|
+| `GameFreeForAll` | `tickGameTime()` | none |
+| `GameTeams`      | `tickGameTime()` | `isOpponent \|\| friendlyFire` |
+| `GameKingOfHill` | `tickGameTime(); scanCpBeacons(...)` | none |
+| `GameUpkeep`     | `tickGameTime(); scanCpBeacons(...)` | `isOpponent \|\| friendlyFire` |
+| `GameFlag`       | `tickGameTime()` + flag pickup/score | `isOpponent \|\| friendlyFire` |
+| `GameOutflow`    | `tickGameTime(); tickDrain();` + depletion flag | none |
+
+Net across the four converted last: **280 lines removed, 160 added.**
+
+Also gone from every one of them, because the projector now owns it:
+
+- the `energy` runtime variable, the release-edge statics (`triggerWasActive`,
+  `releaseAt`) and the eight-line refill block
+- the receiver-side `litAt[]` table, `HIT_IMMUNITY_MS`, `notImmune()`,
+  `litButImmune()` and the `REPLY_IMMUNE` rule pair — anti-spam is enforced at
+  the source now
+- `extern Enlight* enlightPtr` — **no ruleset references the optical layer at
+  all any more**
+
+And gained: `litCost(pkt)`, three lines that weigh an incoming hit by the
+sender's projector strength while treating an empty payload as one standard hit,
+so a ruleset still interoperates with pre-projector firmware.
 

@@ -44,10 +44,6 @@
 //   gameTimeLeft reaches 0 from either IN_GAME or OUT_GAME → GAME_END.
 // ================================================================
 
-// Enlight is constructed in setup() after NVS calib is loaded.
-// The sketch exposes it as a global pointer; game files use the pointer.
-extern Enlight* enlightPtr;
-
 namespace FFA {
 
 // ---- States ----
@@ -58,7 +54,6 @@ using RadioMsg::MSG_LIT;           // 0x10
 using RadioMsg::MSG_SCORE_COLLECT; // 0x12
 enum ReplySubType: uint8_t { REPLY_TAKEN = 1, REPLY_SHONE = 2, REPLY_DOWN = 3, REPLY_IMMUNE = 4 };
 
-static constexpr uint32_t HIT_IMMUNITY_MS = 3000;
 
 // ---- Config variables ----
 // default value, if not changed in startup menu
@@ -70,7 +65,6 @@ static int gameTime     = 900;   // total game duration in seconds
 
 // ---- Runtime variables ----
 static int lives        = 3;
-static int energy       = 50;
 static int gameTimeLeft = 900;  // live countdown (seconds)
 static int points       = 0;
 static int energySpent  = 0;
@@ -79,9 +73,6 @@ static int shoneTimes   = 0;
 static uint8_t   gState;
 static uint32_t  respawnAt;   // millis() when respawn fires
 static uint32_t  lastTickAt;  // millis() of last per-second decrement
-static bool      triggerWasActive = false;
-static uint32_t  releaseAt        = 0;
-static uint32_t  litAt[PlayerDefs::MAX_PLAYER_ID];
 
 // ---- Config vars (startup menu) ----
 // all vars must be int, 
@@ -98,7 +89,7 @@ static const ConfigVar configVars[] = {
 static const MonitorVar monitorVars[] = {
     // IN_GAME display
     MonitorVar::Int("Lives",    &lives,        1u<<IN_GAME,                  ICON_LIFE,   0, 0),
-    MonitorVar::Int("Energy",   &energy,       1u<<IN_GAME,                  ICON_ENERGY, 1, 0),
+    MonitorVar::IntDyn("Energy", &projectorEnergy, 1u<<IN_GAME, &projectorIcon, ICON_ENERGY, 1, 0),
     MonitorVar::Int("Time",     &gameTimeLeft, (1u<<IN_GAME)|(1u<<OUT_GAME), ICON_TIME,   0, 1),
     MonitorVar::Int("Points",   &points,       1u<<IN_GAME,                  ICON_SCORE,  1, 1),
     // GAME_END display (gameTime shared with configVars)
@@ -110,31 +101,30 @@ static const MonitorVar monitorVars[] = {
 
 // ---- DirectRadioRules — incoming message handlers ----
 
-static bool notImmune(const RadioPacket& pkt) {
-    return pkt.senderId >= PlayerDefs::MAX_PLAYER_ID
-        || litAt[pkt.senderId] == 0
-        || millis() - litAt[pkt.senderId] >= HIT_IMMUNITY_MS;
+// Incoming hit weight: payload[0] is the sender's projector strength in
+// STANDARD HITS, and one standard hit costs one life here.  An empty payload
+// comes from pre-projector firmware and counts as one.
+static int litCost(const RadioPacket& pkt) {
+    return pkt.payloadLen ? (int)pkt.payload[0] : 1;
 }
 
-static bool litAndTaken (const RadioPacket& pkt) { return lives > 1  && notImmune(pkt); }
-static bool litAndShone (const RadioPacket& pkt) { return lives <= 1 && notImmune(pkt); }
-static bool litButImmune(const RadioPacket& pkt) { return !notImmune(pkt); }
+static bool litAndTaken (const RadioPacket& pkt) { return lives >  litCost(pkt); }
+static bool litAndShone (const RadioPacket& pkt) { return lives <= litCost(pkt); }
 
 static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput& out) {
-    lives--;
-    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+    lives -= litCost(pkt);
+    if (lives < 0) lives = 0;
     out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
 static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
-    lives--;
-    if (pkt.senderId < PlayerDefs::MAX_PLAYER_ID) litAt[pkt.senderId] = millis();
+    lives -= litCost(pkt);
+    if (lives < 0) lives = 0;
 }
 
 static const DirectRadioRule directRadioRules[] = {
     //  state     msgType   condition      replySubType   onReceive
     { IN_GAME,  MSG_LIT, litAndTaken,  REPLY_TAKEN,  onLitTaken },
     { IN_GAME,  MSG_LIT, litAndShone,  REPLY_SHONE,  onLitShone },
-    { IN_GAME,  MSG_LIT, litButImmune, REPLY_IMMUNE, nullptr    },
     { OUT_GAME, MSG_LIT, nullptr,      REPLY_DOWN,   nullptr    },
 };
 
@@ -143,11 +133,6 @@ static const DirectRadioRule directRadioRules[] = {
 static void onReplyTaken(const RadioPacket&, const RadioPacket&,
                          LightAir_DisplayCtrl&, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::Taken);
-}
-
-static void onReplyImmune(const RadioPacket&, const RadioPacket&,
-                          LightAir_DisplayCtrl&, GameOutput& out) {
-    out.ui.trigger(LightAir_UICtrl::UIEvent::Immune);
 }
 
 static void onReplyShone(const RadioPacket&, const RadioPacket&,
@@ -160,7 +145,6 @@ static const ReplyRadioRule replyRadioRules[] = {
     //  activeInStateMask               eventType                       subType        condition  onReply
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_TAKEN,  nullptr, onReplyTaken  },
     { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_SHONE,  nullptr, onReplyShone  },
-    { (1u<<IN_GAME)|(1u<<OUT_GAME), RadioEventType::ReplyReceived, REPLY_IMMUNE, nullptr, onReplyImmune },
 };
 
 // ---- Winner election rules ----
@@ -173,15 +157,15 @@ static const WinnerVar winnerVars[] = {
 static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
                     const LightAir_GameRunner&) {
     lives        = startLives;
-    energy       = startEnergy;
     gameTimeLeft = gameTime;
     points       = 0;
     energySpent  = 0;
     shoneTimes       = 0;
     lastTickAt       = millis();
-    triggerWasActive = false;
-    releaseAt        = 0;
-    memset(litAt, 0, sizeof(litAt));
+
+    // The DM's Energy / Recharge knobs still decide the pool; the projector
+    // owns it from here, including the refill that used to live in doInGame.
+    projector.setPool(startEnergy, (uint16_t)rechargeSecs * 1000);
 
     ui->trigger(LightAir_UICtrl::UIEvent::GameStart);
 }
@@ -220,8 +204,7 @@ static void onShone(LightAir_DisplayCtrl& disp, GameOutput& out) {
 
 static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
     lives  = startLives;
-    energy = startEnergy;
-    memset(litAt, 0, sizeof(litAt));
+    projectorEnergy = startEnergy;
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
 }
@@ -242,48 +225,32 @@ static const StateRule rules[] = {
 
 // ---- Per-state behaviors ----
 
-static void doInGame(const InputReport& inp, const RadioReport&,
-                     LightAir_DisplayCtrl&, GameOutput& out) {
+static void doInGame(const InputReport&, const RadioReport&,
+                     LightAir_DisplayCtrl&, GameOutput&) {
     tickGameTime();
 
-    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
-    // points++ is deferred to onReplyShone when the target confirms elimination.
-    EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT)
-        out.radio.sendTo(r.id, MSG_LIT);
-    // NO_HIT / LOW_POW: missed shot — no radio message.
-
-    bool triggerActive = false;
-
-    for (uint8_t i = 0; i < inp.buttonCount; i++) {
-        if (inp.buttons[i].id != InputDefaults::TRIG_1_ID) continue;
-        ButtonState s = inp.buttons[i].state;
-        if (s == ButtonState::PRESSED || s == ButtonState::HELD) {
-            triggerActive = true;
-            if ((energy > 0) && (enlightPtr->run())) {
-                energy--;
-                energySpent++;
-                out.ui.triggerEnlight(enlightPtr->cycleTime());
-            }
-        }
-    }
-
-    // Detect release edge → start rechargeSecs cooldown.
-    if (triggerWasActive && !triggerActive)
-        releaseAt = millis();
-    triggerWasActive = triggerActive;
-
-    // Restore full energy once cooldown has elapsed.
-    if (!triggerActive && energy < startEnergy) {
-        if ((millis() - releaseAt) >= (uint32_t)rechargeSecs * 1000)
-            energy = startEnergy;
-    }
+    // Shining — the trigger, the beam, the energy cost and the MSG_LIT to a
+    // confirmed target — is serviced by GameRunner from shinePolicy below.
 }
 
 static void doOutGame(const InputReport&, const RadioReport&,
                       LightAir_DisplayCtrl&, GameOutput&) {
     tickGameTime();   // keep countdown running while waiting to respawn
 }
+
+// ---- Shine policy ----
+//
+// Everything this game says about turning the trigger into a beam.  GameRunner
+// owns the loop and therefore the Enlight poll: nothing in this file may call
+// enlightPtr->poll() while this is declared.  No target filter — every player
+// is fair game here.
+static const ShinePolicy shinePolicy = {
+    /* activeStates  */ 1u << IN_GAME,
+    /* triggerButton */ InputDefaults::TRIG_1_ID,
+    /* hitMsgType    */ MSG_LIT,
+    /* shineCounter  */ &energySpent,
+    /* isValidTarget */ nullptr,
+};
 
 static const StateBehavior behaviors[] = {
     { IN_GAME,  doInGame  },
@@ -307,8 +274,8 @@ extern const LightAir_Game game_ffa = {
     /* name                  */ "Free for All",
     /* configVars            */ FFA::configVars,         /* configCount            */ 5,
     /* monitorVars           */ FFA::monitorVars,        /* monitorCount           */ 8,
-    /* directRadioRules      */ FFA::directRadioRules,   /* directRadioRuleCount   */ 4,
-    /* replyRadioRules       */ FFA::replyRadioRules,    /* replyRadioRuleCount    */ 3,
+    /* directRadioRules      */ FFA::directRadioRules,   /* directRadioRuleCount   */ 3,
+    /* replyRadioRules       */ FFA::replyRadioRules,    /* replyRadioRuleCount    */ 2,
     /* rules                 */ FFA::rules,              /* ruleCount              */ 4,
     /* behaviors             */ FFA::behaviors,          /* behaviorCount          */ 3,
     /* currentState          */ &FFA::gState,            /* initialState           */ FFA::IN_GAME,
@@ -322,6 +289,6 @@ extern const LightAir_Game game_ffa = {
     /* teamMap               */ nullptr,
     /* gameTimeLeft          */ &FFA::gameTimeLeft,
     /* projectors            */ nullptr,
-    /* shinePolicy           */ nullptr,
+    /* shinePolicy           */ &FFA::shinePolicy,
     /* onEnd                 */ nullptr,
 };
