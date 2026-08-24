@@ -26,7 +26,7 @@
 //   than CONSUMED — the projector must survive zero so the player can respawn
 //   holding it.
 //   Projecting light costs 1 energy per trigger event (no recharge).
-//   A hit reduces energy by hitDmg (clamped to 0).
+//   Being lit reduces energy by the absorbed amount (clamped to 0).
 //   Passive drain reduces energy by 1 every (10000/drainRate) ms.
 //   If a hit or drain reduces energy to 0 the player goes OUT_GAME.
 //   On eliminating another player, the shooter gains startEnergy (uncapped).
@@ -47,7 +47,7 @@
 //
 // Config vars
 //   startEnergy  : energy at game start / after respawn (default 100).
-//   hitDmg       : energy lost per hit received (default 50, clamp to 0).
+//   absorption   : energy absorbed per standard hit (default 50, clamp to 0).
 //   drainRate    : energy points drained per 10 seconds (default 10 → 1/s).
 //   respawnSecs  : seconds until auto-respawn (default 30).
 //   gameTime     : total game duration in seconds (default 900).
@@ -71,7 +71,7 @@ enum ReplySubType : uint8_t {
 
 // ---- Config variables ----
 static int startEnergy = 100;
-static int hitDmg      = 50;
+static int absorption  = 50;   // energy absorbed per standard hit
 static int drainRate   = 10;   // energy points per 10 s; drainIntervalMs = 10000/drainRate
 static int respawnSecs = 30;
 static int gameTime    = 900;
@@ -96,7 +96,7 @@ static bool pendingDepletion;   // passive drain zeroed energy this cycle
 static const ConfigVar configVars[] = {
     //name           value           min   max   step
     { "Energy",     &startEnergy,   50,   200,  25  },
-    { "HitDmg",     &hitDmg,        25,   200,  25  },
+    { "Absorb",     &absorption,    25,   200,  25  },
     { "DrainRate",  &drainRate,      2,    20,   2  },
     { "Respawn",    &respawnSecs,    5,   120,   5  },
     { "Time",       &gameTime,      60,   900,  60  },
@@ -116,22 +116,23 @@ static const MonitorVar monitorVars[] = {
     MonitorVar::Int("Depletions", &depletions,   1u<<GAME_END, ICON_DOWN,   1, 1),
 };
 
-// ---- Incoming hit weight ----
-// payload[0] is the attacker's projector strength in STANDARD HITS; one
-// standard hit costs hitDmg energy here.  A packet with no payload comes from
+// ---- Absorption ----
+// How much energy this player takes in from one incoming beam.  payload[0] is
+// the sender's projector strength in STANDARD HITS, and one standard hit is
+// absorbed as `absorption` energy here.  A packet with no payload comes from
 // pre-projector firmware and counts as one standard hit.
-static int litCost(const RadioPacket& pkt) {
+static int absorbed(const RadioPacket& pkt) {
     const int hits = pkt.payloadLen ? (int)pkt.payload[0] : 1;
-    return hits * hitDmg;
+    return hits * absorption;
 }
 
 // ---- DirectRadioRule conditions ----
-static bool litAndTaken(const RadioPacket& pkt) { return projectorEnergy >  litCost(pkt); }
-static bool litAndShone(const RadioPacket& pkt) { return projectorEnergy <= litCost(pkt); }
+static bool litAndTaken(const RadioPacket& pkt) { return projectorEnergy >  absorbed(pkt); }
+static bool litAndShone(const RadioPacket& pkt) { return projectorEnergy <= absorbed(pkt); }
 
 // ---- DirectRadioRule actions ----
 static void onLitTaken(const RadioPacket& reply, LightAir_DisplayCtrl& disp, GameOutput& out) {
-    projectorEnergy -= litCost(reply);
+    projectorEnergy -= absorbed(reply);
     if (projectorEnergy < 0) projectorEnergy = 0;
     const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
                    ? PlayerDefs::playerShort[reply.senderId] : "???";
@@ -354,7 +355,7 @@ static const Projector outflowBase = {
     /* maxEnergy       */ 100,    // startEnergy default; setPool() carries the config var
     /* rechargeDelayMs */ 0,
     /* rechargeMs      */ 0,
-    /* strength        */ 1,      // one standard hit = hitDmg energy
+    /* strength        */ 1,      // one standard hit; the target absorbs `absorption`
     /* roleTag         */ 0,
     /* targetImmunityMs*/ 0,      // no immunity in this game — see above
     /* readyMs         */ 0,      // nothing to switch to

@@ -62,9 +62,9 @@ struct Projector {
 
     // ---- game: the effect, sent on the wire ----
     uint8_t     strength;         // weight in STANDARD HITS, not health points:
-                                  //   each ruleset decides what one standard hit
-                                  //   costs in its own currency (1 life, or hitDmg
-                                  //   energy).  BASE = 1, STRONG = 3.
+                                  //   each ruleset decides how much one standard
+                                  //   hit is absorbed as, in its own currency
+                                  //   (one life, or N energy).  BASE = 1, STRONG = 3.
     uint8_t     roleTag;          // 0 = generic; the holder's role for a per-game table
     uint16_t    targetImmunityMs; // min gap between two hits on the SAME target,
                                   //   enforced by the attacker (see ProjectorCtrl)

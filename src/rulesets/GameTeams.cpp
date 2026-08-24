@@ -194,11 +194,11 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio& radio, LightAir_UICtr
     }
 }
 
-// ---- Incoming hit weight ----
-// payload[0] is the sender's projector strength in STANDARD HITS; one standard
-// hit costs one life here.  An empty payload comes from pre-projector firmware
-// and counts as one.
-static int litCost(const RadioPacket& pkt) {
+// Absorption: how much this player takes in from one incoming beam.  payload[0]
+// is the sender's projector strength in STANDARD HITS, and one standard hit is
+// absorbed as one life here.  An empty payload comes from pre-projector
+// firmware and counts as one standard hit.
+static int absorbed(const RadioPacket& pkt) {
     return pkt.payloadLen ? (int)pkt.payload[0] : 1;
 }
 
@@ -207,10 +207,10 @@ static int litCost(const RadioPacket& pkt) {
 // suppresses a repeat hit at the source, which is the same rule seen from the
 // other end and gives the sender instant feedback instead of a reply timeout.
 static bool litAndTakenAndValid(const RadioPacket& pkt) {
-    return lives >  litCost(pkt) && (pkt.team != myTeam || friendlyFire);
+    return lives >  absorbed(pkt) && (pkt.team != myTeam || friendlyFire);
 }
 static bool litAndShoneAndValid(const RadioPacket& pkt) {
-    return lives <= litCost(pkt) && (pkt.team != myTeam || friendlyFire);
+    return lives <= absorbed(pkt) && (pkt.team != myTeam || friendlyFire);
 }
 static bool litButFriendly(const RadioPacket& pkt) {
     return pkt.team == myTeam && !friendlyFire;
@@ -218,11 +218,11 @@ static bool litButFriendly(const RadioPacket& pkt) {
 
 // ---- DirectRadioRule actions ----
 static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput& out) {
-    lives -= litCost(pkt);
+    lives -= absorbed(pkt);
     out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
 static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
-    lives -= litCost(pkt);
+    lives -= absorbed(pkt);
     if (lives < 0) lives = 0;
 }
 

@@ -101,23 +101,24 @@ static const MonitorVar monitorVars[] = {
 
 // ---- DirectRadioRules — incoming message handlers ----
 
-// Incoming hit weight: payload[0] is the sender's projector strength in
-// STANDARD HITS, and one standard hit costs one life here.  An empty payload
-// comes from pre-projector firmware and counts as one.
-static int litCost(const RadioPacket& pkt) {
+// Absorption: how much this player takes in from one incoming beam.  payload[0]
+// is the sender's projector strength in STANDARD HITS, and one standard hit is
+// absorbed as one life here.  An empty payload comes from pre-projector
+// firmware and counts as one standard hit.
+static int absorbed(const RadioPacket& pkt) {
     return pkt.payloadLen ? (int)pkt.payload[0] : 1;
 }
 
-static bool litAndTaken (const RadioPacket& pkt) { return lives >  litCost(pkt); }
-static bool litAndShone (const RadioPacket& pkt) { return lives <= litCost(pkt); }
+static bool litAndTaken (const RadioPacket& pkt) { return lives >  absorbed(pkt); }
+static bool litAndShone (const RadioPacket& pkt) { return lives <= absorbed(pkt); }
 
 static void onLitTaken(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput& out) {
-    lives -= litCost(pkt);
+    lives -= absorbed(pkt);
     if (lives < 0) lives = 0;
     out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
 static void onLitShone(const RadioPacket& pkt, LightAir_DisplayCtrl&, GameOutput&) {
-    lives -= litCost(pkt);
+    lives -= absorbed(pkt);
     if (lives < 0) lives = 0;
 }
 

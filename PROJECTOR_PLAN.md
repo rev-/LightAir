@@ -28,7 +28,7 @@ Projector from becoming a god-object wired into everything:
 | Group | Fields | Consumer | Lives in |
 |---|---|---|---|
 | **Optical** | `cycles`, `cooldownMs`, `rangeM` | `Enlight` | pushed via setters |
-| **Game** | `strength` (damage), `roleTag`, the shot economy | ruleset logic + the radio packet | read by rules / `ProjectorCtrl` |
+| **Game** | `strength`, `roleTag`, the shine economy | ruleset logic + the radio packet | read by rules / `ProjectorCtrl` |
 | **Identity** | `id`, `name` | menu, display, UI event | read by UI |
 
 Four consequences follow, and they define the whole architecture:
@@ -45,7 +45,7 @@ Four consequences follow, and they define the whole architecture:
    threshold, because that conversion needs the calibration constants and the
    falloff exponent, which are physics, not game design (§2.2).
 
-3. **Damage never travels as a table lookup.** It travels as a byte in the
+3. **The hit's weight never travels as a table lookup.** It travels as a byte in the
    `MSG_LIT` payload (§7). No projector definition ever has to be distributed
    over the radio — which is what makes both ruleset-local custom projectors and
    per-player asymmetric loadouts work with no wire-format negotiation at all.
@@ -491,14 +491,33 @@ the "reuses the hourglass CGRAM slot" comment in `LightAir_Display_Icons.h:18`
 is a leftover from an earlier character-LCD implementation. The icon is in, and
 in the better form — see §8.2.
 
-### 2.7 A naming note
+### 2.7 Naming: `strength` and `absorption`, not `damage`
 
-The repo's nonviolent-semantics guideline argues against a field literally named
-`damage`. `strength` is used above: it reads correctly next to the `STRONG`
-standard, and unlike `power` or `intensity` it doesn't collide with the optical
-vocabulary (`LOW_POW`, correlator power). `drain` is another candidate and
-matches Outflow's energy language. Trivial to rename — flagged because the choice
-propagates into the wire-format comment and the ruleset API.
+The repo's nonviolent-semantics guideline rules out a field called `damage`, and
+the vocabulary splits cleanly in two once you notice the two ends are different
+things:
+
+| | | |
+|---|---|---|
+| **`strength`** | the projector's | weight of one beam, in standard hits |
+| **`absorption`** | the receiver's | how much one standard hit is taken in as |
+
+`strength` reads correctly next to the `STRONG` standard and, unlike `power` or
+`intensity`, does not collide with the optical vocabulary (`LOW_POW`, correlator
+power).
+
+`absorption` is not a coinage: **the project already used the word for exactly
+this event**, in every ruleset's header (`REPLY_TAKEN : target absorbed the
+hit`) and in `UICtrl.cpp` (`receiver absorbed a hit but survived`). Promoting it
+to an identifier keeps the code and the prose in one vocabulary. It is also
+optically exact — absorption is what a body does with incident radiation — and
+it relocates the agency: "damage" is something done *to* you by an attacker,
+while absorption is a property of the receiver. That is the reframing rather
+than a euphemism for the same idea.
+
+The computed per-hit amount is `absorbed(pkt)`, present in all six rulesets:
+`hits × absorption` in `GameOutflow`, plain `hits` where one standard hit costs
+one life.
 
 ---
 
@@ -836,7 +855,7 @@ open questions at once.
 
 ### 6.1 The wire format already supports it, for free
 
-Because damage travels as a value in the packet rather than as a projector id
+Because the hit's weight travels as a value in the packet rather than as a projector id
 resolved against a shared table (§7), two players holding different projectors
 need no negotiation, no config-blob field and no shared state. The design decision
 taken in §1 for a different reason turns out to be exactly what asymmetry
@@ -982,11 +1001,11 @@ static void awardStrong(LightAir_DisplayCtrl& d, GameOutput& out) {
 
 ---
 
-## 7. Damage on the wire
+## 7. Hit weight on the wire
 
 ### 7.1 The problem
 
-Damage is applied by the **receiver** (`lives--` in `onLitTaken`), but the
+The loss is applied by the **receiver** (`lives--` in `onLitTaken`), but the
 projector belongs to the **sender**. Something has to cross the radio.
 
 ### 7.2 Payload, not table lookup
@@ -1016,8 +1035,8 @@ static bool litAndTaken(const RadioPacket& pkt) { return lives >  1 && notImmune
 static bool litAndShone(const RadioPacket& pkt) { return lives <= 1 && notImmune(pkt); }
 ```
 
-which must become `lives > dmg(pkt)` / `lives <= dmg(pkt)` with a shared helper
-`static inline int dmg(const RadioPacket& p) { return p.payloadLen ? p.payload[0] : 1; }`.
+which must become `lives > absorbed(pkt)` / `lives <= absorbed(pkt)` with a shared
+helper `static int absorbed(const RadioPacket& p) { return p.payloadLen ? p.payload[0] : 1; }`.
 Six rulesets, two lines each — mechanical, but it must be done everywhere or
 `STRONG` silently behaves like `BASE`.
 
@@ -1031,7 +1050,7 @@ knows both — its own, and the sender's from `payload[2]`:
 ```cpp
 // entirely inside a ruleset; no framework support
 static const uint8_t rps[ROLE_COUNT][ROLE_COUNT] = { ... };   // [attacker][defender]
-// on receive:  dmg = rps[pkt.payload[2]][myRoleTag];
+// on receive:  taken = rps[pkt.payload[2]][myRoleTag];
 ```
 
 The outcome then flows back to the shooter through the existing reply
@@ -1102,7 +1121,7 @@ Migrating `GameOutflow` (§12) exposed a problem with the obvious reading of
 | ruleset | health | one ordinary hit costs |
 |---|---|---|
 | `GameFreeForAll`, `GameFlag`, `GameTeams`, … | `lives`, 1–5 | **1** |
-| `GameOutflow` | `energy`, 50–200 | **`hitDmg`, 25–200** |
+| `GameOutflow` | `energy`, 50–200 | **`absorption`, 25–200** |
 
 Two orders of magnitude apart. A `strength` holding health points would need a
 range of 1–200, `MAX_STRENGTH` would become meaningless as a balance limit, and
@@ -1113,14 +1132,14 @@ range of 1–200, `MAX_STRENGTH` would become meaningless as a balance limit, an
 
 ```cpp
 // lives-based rulesets:  one standard hit = one life
-lives  -= dmg(pkt);
-// GameOutflow:           one standard hit = hitDmg energy
-energy -= dmg(pkt) * hitDmg;
+lives  -= absorbed(pkt);
+// GameOutflow:           one standard hit is absorbed as `absorption` energy
+energy -= hits * absorption;
 ```
 
 This is better than a per-game fix in every way that matters: `MAX_STRENGTH = 10`
 stays a real limit, `STRONG` means "three times an ordinary hit" in *every* game
-without redefinition, and `hitDmg` stays a DM-tunable config var instead of being
+without redefinition, and `absorption` stays a DM-tunable config var instead of being
 frozen into a compile-time projector field.
 
 ---
@@ -1304,7 +1323,7 @@ would be circular.
 | `src/tools/EnlightCalibRoutine.cpp` | step 1 prompt, step 2 saves the reference, step 4 shows `Rmax` |
 | `src/ui/player/LightAir_UICtrl.h/.cpp` | `UIEvent::ProjectorChange` + one table row; `setEnlightAction()` extending the `resolveAction()` override hook (§8.1). `.cpp:352` and `:129` stay untouched. |
 | `src/LightAir.h` | include the two new headers |
-| `src/rulesets/*.cpp` (all six) | one `projectors` field; `dmg(pkt)` in the lit conditions; `onBegin` signature + one `setPool()` call; the identical recharge block deleted (§2.5); `litAt[]`/`notImmune()`/`REPLY_IMMUNE` removed (§7.4); a `Projectors` config var |
+| `src/rulesets/*.cpp` (all six) | one `projectors` field; `absorbed(pkt)` in the lit conditions; `onBegin` signature + one `setPool()` call; the identical recharge block deleted (§2.5); `litAt[]`/`notImmune()`/`REPLY_IMMUNE` removed (§7.4); a `Projectors` config var |
 | `src/rulesets/GameOutflow.cpp` | as above, but a `Recharge::NONE` projector: `tickDrain()` and the depletion rule stay; its own `energy--` in the shot loop goes; the uncapped kill reward writes the pool directly (§2.5.1) |
 
 The standard table goes in `LightAir_Projector.h` rather than `config.h` —
@@ -1362,7 +1381,7 @@ static const Projector outflowBase = {
     /* energyCost      */ 1,      // was the bare energy-- at L303
     /* maxEnergy       */ 100,    // startEnergy default; setPool() overrides it
     /* rechargeDelayMs */ 0, /* rechargeMs */ 0,
-    /* strength        */ 1,      // one standard hit = hitDmg energy (§7.5)
+    /* strength        */ 1,      // one standard hit; target absorbs `absorption` (§7.5)
     /* roleTag         */ 0,
     /* targetImmunityMs*/ 0,      // Outflow has NO immunity today — must stay 0
     /* readyMs         */ 0,      // nothing to switch to
@@ -1398,8 +1417,8 @@ let an author forget (§5.1).
 | 1 | 78 | `static int energy = 100;` | **deleted** — the pool is `projectorEnergy` |
 | 2 | 97 | `{ "Energy", &energy, … }` | `{ "Energy", &startEnergy, … }` — **fixes a live bug, see §12.4** |
 | 3 | 107 | `MonitorVar::Int("Energy", &energy, …)` | `&projectorEnergy` |
-| 4 | 119-120 | `energy > hitDmg` / `energy <= hitDmg` | `projectorEnergy > dmg(pkt)*hitDmg` / `<=` |
-| 5 | 124-125 | `energy -= hitDmg; if (energy < 0) energy = 0;` | `projectorEnergy -= dmg(pkt)*hitDmg;` + same clamp |
+| 4 | 119-120 | `energy > hitDmg` / `energy <= hitDmg` | `projectorEnergy > absorbed(pkt)` / `<=` |
+| 5 | 124-125 | `energy -= hitDmg; if (energy < 0) energy = 0;` | `projectorEnergy -= absorbed(pkt);` + same clamp |
 | 6 | 160 | `energy += startEnergy;` (uncapped kill reward) | `projectorEnergy += startEnergy;` — a **direct write, never clamped** (§2.5.1) |
 | 7 | 196 | `energy = startEnergy;` | `projector.setPool(startEnergy, 0);` |
 | 8 | 208-209 | `setCooldown(20); setRepetitions(20);` | **deleted** — the projector carries both |
@@ -1465,7 +1484,7 @@ variable the config var wrongly points at, so the compiler forces the question.
 |---|---|
 | 1 energy per shot | Yes — `energyCost = 1`, deducted only on a successful `run()`, as today |
 | Passive drain every `10000/drainRate` ms | Yes — `tickDrain()` untouched, now writing `projectorEnergy` |
-| Hit costs `hitDmg`, clamped at 0 | Yes — `dmg(pkt) = 1` from a `strength = 1` projector, so `1 * hitDmg` (§7.5) |
+| Hit costs the absorbed amount, clamped at 0 | Yes — `strength = 1` gives one standard hit, so `1 * absorption` (§7.5) |
 | Kill grants `startEnergy`, **uncapped** | Yes — direct write; `NONE` mode never refills, and clamping is refill-only |
 | Energy 0 ⇒ `pendingDepletion` ⇒ OUT_GAME | Yes — condition moves to `<= 0` |
 | Respawn restores `startEnergy` | Yes |
