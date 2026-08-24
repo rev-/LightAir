@@ -454,5 +454,6 @@ extern const LightAir_Game game_koh = {
     /* teamCount             */ 0,
     /* teamMap               */ nullptr,
     /* gameTimeLeft          */ &KoH::gameTimeLeft,
+    /* projectors            */ nullptr,
     /* onEnd                 */ nullptr,
 };

@@ -6,6 +6,7 @@
 #include "LightAir_ReplyRadioRule.h"
 #include "LightAir_WinnerVar.h"
 #include "LightAir_TotemRequirement.h"
+#include "LightAir_Projector.h"
 #include "../ui/player/LightAir_UICtrl.h"
 #include "../config.h"
 
@@ -234,6 +235,16 @@ struct LightAir_Game {
     // e.g. &gameTimeLeft.  Sent to totems in the 0xF1 activation reply so they can
     // arm a self-revert watchdog.  nullptr = ruleset has no such counter.
     const int* gameTimeLeft;
+
+    // ---- Projectors ----
+    //
+    // The profiles this game offers: ruleset-local powered projectors, which
+    // of the standard ones are grantable, this game's baseline values, the
+    // inventory size, and any conditional-availability rule.
+    //
+    // nullptr = the standard BASE alone, which is exactly today's behaviour
+    // for a ruleset that says nothing about projectors.
+    const ProjectorSet* projectors;
 
     // Called by GameRunner immediately before esp_restart() after the player
     // presses A+B on the end-game screen.  Use for last-moment display updates

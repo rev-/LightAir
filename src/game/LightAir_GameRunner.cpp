@@ -1,4 +1,5 @@
 #include "LightAir_GameRunner.h"
+#include "LightAir_ProjectorCtrl.h"
 #include <Arduino.h>
 #include <string.h>
 #include <esp_system.h>
@@ -47,7 +48,11 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
             const uint8_t py = var.row * DisplayDefaults::CELL_HEIGHT
                                + 3 * DisplayDefaults::FONT_HEIGHT;
             if (var.type == VarType::INT)
-                display.bindIntVariable(var.asInt, var.icon, px, py);
+                if (var.iconPtr)
+                    display.bindIntVariableDynamicIcon(var.asInt, var.iconPtr,
+                                                       var.icon, px, py);
+                else
+                    display.bindIntVariable(var.asInt, var.icon, px, py);
             else
                 display.bindStringVariable(var.asChars, var.icon, px, py);
         }
@@ -64,6 +69,10 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     // Stamp the game's typeId on the radio layer so all outgoing packets
     // carry it and incoming packets from other games are filtered out.
     radio.setTypeId(game.typeId);
+
+    // Projector inventory: reset to this game's baseline before onBegin, so a
+    // ruleset can hand out starting loadouts or call setPool() from there.
+    projector.setGame(game.projectors);
 
     // User-provided setup (radio init, opening messages, etc.)
     if (game.onBegin) game.onBegin(display, radio, ui, *this);
@@ -562,6 +571,12 @@ void LightAir_GameRunner::activateStateDisplay(uint8_t state) {
 }
 
 void LightAir_GameRunner::flushOutput(const GameOutput& out) {
+    // Projector switches, then the per-cycle tick: applies any switch deferred
+    // while Enlight was mid-measurement, refills the projector in hand, and
+    // hands back to the baseline if the active one just became unavailable.
+    projector.apply(out.proj);
+    projector.update();
+
     // Radio messages
     for (uint8_t i = 0; i < out.radio.count; i++) {
         const RadioOutMsg& m = out.radio.msgs[i];
@@ -580,6 +595,15 @@ void LightAir_GameRunner::flushOutput(const GameOutput& out) {
             _radio->replyTo(r.senderId, r.origMsgType, r.origTimestamp);
     }
 
+    // A change of projector in hand — switch, grant, eviction or automatic
+    // fallback — is announced once, whatever caused it.
+    if (projector.consumeEvicted() && _display) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "Lost %s", projector.evictedName());
+        _display->showMessage(buf, 2000);
+    }
+    const bool projChanged = projector.consumeChanged();
+
     // UI events (skipped if no UICtrl was provided)
     if (!_ui) return;
     for (uint8_t i = 0; i < out.ui.count; i++) {
@@ -589,4 +613,5 @@ void LightAir_GameRunner::flushOutput(const GameOutput& out) {
         else
             _ui->trigger(m.event);
     }
+    if (projChanged) _ui->trigger(LightAir_UICtrl::UIEvent::ProjectorChange);
 }

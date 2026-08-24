@@ -58,6 +58,9 @@ LightAir_UICtrl::_actionTable[(uint8_t)UIEvent::Count] = {
   // RoleChange
   {{100,100,100,0},3,{2000,2500,3000,0},{120,160,200,0},{ {255,0,255},{0,255,255},{255,255,255},{0,0,0} },2},
 
+  // ProjectorChange — rising triad; a new projector is in hand
+  {{90,90,140,0},3,{2600,3300,4400,0},{140,170,210,0},{ {0,180,255},{120,220,255},{255,255,255},{0,0,0} },3},
+
   // Stop
   {{0,0,0,0},0,{0,0,0,0},{0,0,0,0},{ {0,0,0},{0,0,0},{0,0,0},{0,0,0} },1},
 
@@ -102,7 +105,9 @@ _sequenceCounter(0),
 _isRunning(false),
 _currentStep(0),
 _hasBackground(false),
-_backgroundRunning(false)
+_backgroundRunning(false),
+_enlightAction{},
+_enlightDefined(false)
 {
   for (int i = 0; i < 4; i++)
     _customDefined[i] = false;
@@ -148,12 +153,26 @@ void LightAir_UICtrl::defineCustomAction(
   _customDefined[ci] = true;
 }
 
+void LightAir_UICtrl::setEnlightAction(
+  const UIAction* action)
+{
+  if (action) {
+    _enlightAction  = *action;
+    _enlightDefined = true;
+  } else {
+    _enlightDefined = false;
+  }
+}
+
 // ================= RESOLVE =================
 
 const LightAir_UICtrl::UIAction&
 LightAir_UICtrl::resolveAction(UIEvent event)
 {
   uint8_t idx = (uint8_t)event;
+
+  if (event == UIEvent::Enlight && _enlightDefined)
+    return _enlightAction;
 
   if (idx >= (uint8_t)UIEvent::Custom1 &&
     idx <= (uint8_t)UIEvent::Custom4)

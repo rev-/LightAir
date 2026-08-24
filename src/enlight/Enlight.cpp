@@ -214,6 +214,44 @@ bool Enlight::begin() {
 }
 
 /* ============================================================
+ *   setRangeM() / maxRangeM()
+ *
+ *   The metric range model.  A projector states its reach in metres;
+ *   the conversion to a correlator threshold lives here because it needs
+ *   the calibration constants and the falloff exponent, which are
+ *   physics rather than game design.
+ * ============================================================ */
+void Enlight::setRangeM(uint8_t metres) {
+    _rangeM = metres;
+    // No reference calibration -> no metric gate.  classify() then compares
+    // against the bare thresh_far_* floor, i.e. pre-projector behaviour.
+    if (metres == 0 || (_cal.refFarR == 0 && _cal.refFarG == 0 && _cal.refFarB == 0)) {
+        _rangeMul = 0.0f;
+        return;
+    }
+    const float refDist = (_cal.refDistM > 0) ? (float)_cal.refDistM
+                                              : (float)ProjectorLimits::CAL_REF_DIST_M;
+    _rangeMul = powf(refDist / (float)metres, EnlightDefaults::RANGE_FALLOFF_EXP);
+}
+
+float Enlight::maxRangeM() const {
+    // Use the strongest reference channel against its own floor: the device can
+    // still see a target while ANY channel is above threshold.
+    float best = 0.0f;
+    const uint32_t ref[3]  = { _cal.refFarR,     _cal.refFarG,     _cal.refFarB     };
+    const uint32_t flr[3]  = { _cal.thresh_far_r, _cal.thresh_far_g, _cal.thresh_far_b };
+    const float refDist = (_cal.refDistM > 0) ? (float)_cal.refDistM
+                                              : (float)ProjectorLimits::CAL_REF_DIST_M;
+    for (int i = 0; i < 3; i++) {
+        if (ref[i] == 0 || flr[i] == 0) continue;
+        const float r = refDist * powf((float)ref[i] / (float)flr[i],
+                                       1.0f / EnlightDefaults::RANGE_FALLOFF_EXP);
+        if (r > best) best = r;
+    }
+    return best;
+}
+
+/* ============================================================
  *   run()  +  poll()
  * ============================================================ */
 bool Enlight::run() {
@@ -479,9 +517,16 @@ EnlightResult Enlight::classify() {
     // Check if total power in all channels is below white-wall diffusing surface reference.
     // thresh_far_* are per-cycle peaks from calibration; scale by baseScale to match
     // the accumulated _rout/_gout/_bout values.
-    if ((_rout < (long long)(_cal.thresh_far_r * baseScale)) &&
-        (_gout < (long long)(_cal.thresh_far_g * baseScale)) &&
-        (_bout < (long long)(_cal.thresh_far_b * baseScale))){
+    // Detection floor.  The active projector's range raises it; it can never
+    // lower it below the calibrated white-wall reference, so no projector
+    // definition can claim to see through noise.  _rangeMul == 0 (no projector
+    // gate, or no reference calibration) leaves the bare floor untouched.
+    const float tr = fmaxf(_cal.refFarR * _rangeMul, (float)_cal.thresh_far_r);
+    const float tg = fmaxf(_cal.refFarG * _rangeMul, (float)_cal.thresh_far_g);
+    const float tb = fmaxf(_cal.refFarB * _rangeMul, (float)_cal.thresh_far_b);
+    if ((_rout < (long long)(tr * baseScale)) &&
+        (_gout < (long long)(tg * baseScale)) &&
+        (_bout < (long long)(tb * baseScale))){
         return {EnlightStatus::LOW_POW, 0};
     }
     const long long eff_rcal     = (long long)roundf((float)_cal.rcal     * baseScale);

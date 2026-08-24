@@ -48,6 +48,20 @@ public:
         uint8_t y
     );
 
+    /* Same as bindIntVariable, but the icon is read through a pointer on
+     * every render instead of being fixed at bind time.  Aim it at a global
+     * that something else keeps current — LightAir_ProjectorCtrl points
+     * projectorIcon at the active projector's bitmap — and the icon follows
+     * a change with no re-binding.  A null iconBitmapPtr, or a null value
+     * behind it, falls back to the IconType. */
+    bool bindIntVariableDynamicIcon(
+        int* variable,
+        const uint8_t* const* iconBitmapPtr,
+        IconType fallbackIcon,
+        uint8_t x,
+        uint8_t y
+    );
+
     /* ================================
      *       TRAY MESSAGES
      *
@@ -79,6 +93,8 @@ private:
             const char* strVariable; // TYPE_STRING
         };
         IconType icon;
+        // When non-null, *iconBitmapPtr wins over icon at render time.
+        const uint8_t* const* iconBitmapPtr;
         BindingType type;
         uint8_t  x;
         uint8_t  y;
@@ -108,6 +124,7 @@ private:
     void renderTray();
 
     void drawIcon(IconType icon, uint8_t x, uint8_t y);
+    void drawBindingIcon(const VariableBinding& b, uint8_t x, uint8_t y);
     const uint8_t* getIconBitmap(IconType icon);
     void drawBar(uint8_t x, uint8_t y, uint8_t width, uint8_t height, float ratio);
 

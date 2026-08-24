@@ -321,5 +321,6 @@ extern const LightAir_Game game_ffa = {
     /* teamCount             */ 0,
     /* teamMap               */ nullptr,
     /* gameTimeLeft          */ &FFA::gameTimeLeft,
+    /* projectors            */ nullptr,
     /* onEnd                 */ nullptr,
 };

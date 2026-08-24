@@ -458,5 +458,6 @@ extern const LightAir_Game game_teams = {
     /* teamCount             */ 2,
     /* teamMap               */ Teams::teamMap,
     /* gameTimeLeft          */ &Teams::gameTimeLeft,
+    /* projectors            */ nullptr,
     /* onEnd                 */ nullptr,
 };

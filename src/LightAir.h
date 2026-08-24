@@ -17,6 +17,7 @@
 #include "ui/player/audio/LightAir_BuzzerAudio.h"
 #include "ui/player/rgb/LightAir_RGB_HW.h"
 #include "ui/player/vib/LightAir_MotorVibration.h"
+#include "ui/player/LightAir_UIAction.h"
 #include "ui/player/LightAir_UICtrl.h"
 #include "ui/player/LightAir_UIEventObserver.h"
 
@@ -30,6 +31,9 @@
 #include "game/LightAir_UIOutput.h"
 #include "game/LightAir_GameOutput.h"
 #include "game/LightAir_GameVar.h"
+#include "game/LightAir_Projector.h"
+#include "game/LightAir_ProjectorOutput.h"
+#include "game/LightAir_ProjectorCtrl.h"
 #include "game/LightAir_StateRule.h"
 #include "game/LightAir_StateBehavior.h"
 #include "game/LightAir_TotemRequirement.h"

@@ -1,16 +1,21 @@
 #pragma once
 #include "LightAir_RadioOutput.h"
 #include "LightAir_UIOutput.h"
+#include "LightAir_ProjectorOutput.h"
 
 // ----------------------------------------------------------------
 // GameOutput — unified output bundle passed to all game callbacks.
 //
-// Bundles RadioOutput (queued outgoing radio messages) and
-// UIOutput (queued UI events) into one argument so callback
-// signatures stay concise and remain extensible.
+// Bundles RadioOutput (queued outgoing radio messages), UIOutput
+// (queued UI events) and ProjectorOutput (queued projector switches)
+// into one argument so callback signatures stay concise and remain
+// extensible.
 //
-// Both queues are flushed by GameRunner in step 3 (OUTPUT phase)
-// after all rules and behaviors have run.
+// All three queues are flushed by GameRunner in step 3 (OUTPUT phase)
+// after all rules and behaviors have run.  Note that SHINING is not
+// queued — LightAir_ProjectorCtrl::trigger() is called directly, exactly
+// as enlightPtr->run() already is, because the measurement must start on
+// this tick.  Only the switch is deferred.
 //
 // Usage in a StateBehavior::onUpdate:
 //
@@ -37,6 +42,7 @@
 //   }
 // ----------------------------------------------------------------
 struct GameOutput {
-    RadioOutput radio;
-    UIOutput    ui;
+    RadioOutput     radio;
+    UIOutput        ui;
+    ProjectorOutput proj;
 };

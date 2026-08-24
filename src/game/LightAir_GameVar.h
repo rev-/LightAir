@@ -60,6 +60,10 @@ struct MonitorVar {
     char*       asChars;    // non-null when type == CHARS
     uint32_t    stateMask;  // bit N → display in state N
     IconType    icon;
+    // Optional: when non-null the icon is read through this pointer on every
+    // render, so it can follow runtime state.  Aim it at a global something
+    // else keeps current — &projectorIcon tracks the active projector.
+    const uint8_t* const* iconPtr;
     uint8_t     col, row;
 
     // ---- factory helpers ----
@@ -74,7 +78,22 @@ struct MonitorVar {
         v.asChars   = nullptr;
         v.stateMask = stateMask;
         v.icon      = icon;
+        v.iconPtr   = nullptr;
         v.col       = col;  v.row = row;
+        return v;
+    }
+
+    // As Int(), but with a runtime-resolved icon.  fallback is used whenever
+    // *iconPtr is null.
+    //
+    //   MonitorVar::IntDyn("Energy", &projectorEnergy, 1u<<IN_GAME,
+    //                      &projectorIcon, ICON_ENERGY, 0, 0)
+    static MonitorVar IntDyn(const char* name, int* value,
+                             uint32_t stateMask,
+                             const uint8_t* const* iconPtr, IconType fallback,
+                             uint8_t col, uint8_t row) {
+        MonitorVar v = Int(name, value, stateMask, fallback, col, row);
+        v.iconPtr    = iconPtr;
         return v;
     }
 
@@ -88,6 +107,7 @@ struct MonitorVar {
         v.asChars   = buf;
         v.stateMask = stateMask;
         v.icon      = icon;
+        v.iconPtr   = nullptr;
         v.col       = col;  v.row = row;
         return v;
     }

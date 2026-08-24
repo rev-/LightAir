@@ -280,7 +280,7 @@ explicit call, rather than through a mode that switches the framework off:
 
 ```cpp
 // in the ruleset's onBegin — the config vars still win:
-runner.projector().setPool(startEnergy, (uint16_t)rechargeSecs * 1000);
+projector.setPool(startEnergy, (uint16_t)rechargeSecs * 1000);
 ```
 
 One line added, the eight-line recharge block deleted — a net reduction in every
@@ -927,18 +927,16 @@ visible in exactly one line of the ruleset.
 
 ### 6.5 Asymmetric starts
 
-Every player starts holding the baseline and nothing else. A ruleset wanting
-per-player or per-role starting loadouts must `give()` or `select()` during
-`onBegin`, which currently receives
-`(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl*, const LightAir_GameRunner&)`
-— no `GameOutput`, and a `const` runner.
+Every player starts holding the baseline and nothing else.  A ruleset wanting
+per-player or per-role starting loadouts calls `give()` or `select()` from
+`onBegin`, which is safe without the queue: Enlight is idle and no loop is
+running yet.
 
-Selection at begin-time is safe (Enlight is idle, no loop is running), so the
-queue is unnecessary there. **Recommendation: expose a direct
-`LightAir_GameRunner::projector()` accessor** and drop the `const` on that
-parameter, mirroring how the runner already exposes `totemIdForRole()` to
-`onBegin`. Six one-word signature edits, and it avoids inventing a second
-queueing path for a case that doesn't need one.
+`LightAir_ProjectorCtrl` is reachable there as the file-scope global
+`projector`, the same idiom the optical layer already uses (`extern Enlight*
+enlightPtr`).  An earlier revision proposed a `LightAir_GameRunner::projector()`
+accessor and dropping the `const` on `onBegin`'s runner parameter; the global
+makes both unnecessary, so `onBegin`'s signature is untouched.
 
 ### 6.6 What the pre-game `ConfigVar` is *not* for
 
@@ -1403,12 +1401,12 @@ let an author forget (§5.1).
 | 4 | 119-120 | `energy > hitDmg` / `energy <= hitDmg` | `projectorEnergy > dmg(pkt)*hitDmg` / `<=` |
 | 5 | 124-125 | `energy -= hitDmg; if (energy < 0) energy = 0;` | `projectorEnergy -= dmg(pkt)*hitDmg;` + same clamp |
 | 6 | 160 | `energy += startEnergy;` (uncapped kill reward) | `projectorEnergy += startEnergy;` — a **direct write, never clamped** (§2.5.1) |
-| 7 | 196 | `energy = startEnergy;` | `runner.projector().setPool(startEnergy, 0);` |
+| 7 | 196 | `energy = startEnergy;` | `projector.setPool(startEnergy, 0);` |
 | 8 | 208-209 | `setCooldown(20); setRepetitions(20);` | **deleted** — the projector carries both |
 | 9 | 232 | `energy--;` (passive drain) | `projectorEnergy--;` — the drain stays entirely Outflow's |
 | 10 | 268 | `energy = startEnergy;` (respawn) | `projectorEnergy = startEnergy;` |
 | 11 | 296-298 | `out.radio.sendTo(r.id, MSG_LIT)` | `sendTo(r.id, MSG_LIT, payload, 3)` with strength/id/roleTag (§7.2) |
-| 12 | 299-305 | `if ((energy > 0) && (enlightPtr->run())) { energy--; energySpent++; triggerEnlight(…); }` | `if (projector.fire()) energySpent++;` (§12.3) |
+| 12 | 299-305 | `if ((energy > 0) && (enlightPtr->run())) { energy--; energySpent++; triggerEnlight(…); }` | `if (projector.trigger()) energySpent++;` (§12.3) |
 | 13 | 312 | `if (energy == 0 && !pendingShone)` | `if (projectorEnergy <= 0 && !pendingShone)` — `<=` because a hit can now overshoot |
 | 14 | descriptor | — | `/* projectors */ Outflow::projectorSet,` |
 
@@ -1416,10 +1414,12 @@ Net: roughly ten lines changed, two deleted, one added. The passive drain,
 `pendingShone` / `pendingDepletion`, the respawn timer, the state machine, the
 scoring and all five config vars are untouched.
 
-### 12.3 `fire()` — selection is queued, firing is immediate
+### 12.3 `trigger()` — selection is queued, shining is immediate
 
 Line 12 above replaces the four-part shot idiom that all six rulesets repeat.
-`ProjectorCtrl::fire()` performs, in one place, what each copy does by hand:
+It is named for the trigger the player pulls, not for what the beam does — the
+nonviolent lexicon the rest of the codebase keeps (LIT, SHONE, ENLIGHT).
+`ProjectorCtrl::trigger()` performs, in one place, what each copy does by hand:
 
 1. reject if `readyMs` has not elapsed since the last switch (§2.5.5);
 2. reject if `projectorEnergy < energyCost`;
@@ -1431,7 +1431,7 @@ Note the ordering: energy is deducted **only when `enlight.run()` returns true**
 which is exactly today's `(energy > 0) && (enlightPtr->run())` short-circuit. A
 refused shot has never cost energy and still must not.
 
-`fire()` is a **direct call, not a queued output** — unlike `out.proj.select()`.
+`trigger()` is a **direct call, not a queued output** — unlike `out.proj.select()`.
 That is deliberate and matches the existing code: `enlightPtr->run()` is already
 called straight from the behavior, the measurement must start on this tick, and
 `Enlight` self-guards re-entry. Queueing the shot would delay it by a loop
@@ -1490,3 +1490,74 @@ Both are framework-side and would be silent corruption if missed:
   allows 200, within the 200 limit; the *live* pool is deliberately unbounded
   above. Clamping the pool to `MAX_ENERGY` on every write would break the kill
   reward exactly as clamping to `maxEnergy` would.
+
+---
+
+## 13. Implementation status
+
+The design above is implemented. What landed, and where it departs from the
+plan:
+
+### Landed
+
+| Area | Files |
+|---|---|
+| The value type, ids, clamp, standard table + artwork | `src/game/LightAir_Projector.h` (new) |
+| Inventory, energy, refill, `trigger()`, anti-spam, display globals | `src/game/LightAir_ProjectorCtrl.h/.cpp` (new) |
+| The queue | `src/game/LightAir_ProjectorOutput.h` (new) |
+| Limits, falloff exponent | `src/config.h` |
+| Metric range gate, `setRangeM()`, `maxRangeM()` | `src/enlight/Enlight.h/.cpp` |
+| Reference calibration keys; `limpow` retired | `src/nvs_config.h/.cpp` |
+| Step 1 prompt, step 2 reference capture, step 4 `Rmax` readout | `src/tools/EnlightCalibRoutine.cpp` |
+| `UIEvent::ProjectorChange`, `setEnlightAction()` | `src/ui/player/LightAir_UICtrl.h/.cpp` |
+| `LightAir_UIAction` extracted so `Projector.h` stays light | `src/ui/player/LightAir_UIAction.h` (new) |
+| Runtime-resolved icon binding | `src/ui/player/display/LightAir_DisplayCtrl.h/.cpp` |
+| `MonitorVar::IntDyn` | `src/game/LightAir_GameVar.h` |
+| `projectors` field; set/apply/announce | `src/game/LightAir_Game.h`, `LightAir_GameRunner.cpp`, `LightAir_GameOutput.h` |
+| Hardware binding | `LightAir.ino`, `sketches/LightAir/LightAir.ino` |
+| Full migration (§12) | `src/rulesets/GameOutflow.cpp` |
+| Tests | `src/test/test_projector.h` |
+
+The other five rulesets carry `projectors = nullptr`, so they keep today's
+behaviour and migrate one at a time, exactly as §7.2's payload-length rule
+was designed to allow.
+
+### Departures from the plan
+
+- **`fire()` is `trigger()`** — named for the control the player operates
+  rather than for what the beam does, consistent with LIT / SHONE / ENLIGHT.
+- **No `LightAir_GameRunner::projector()` accessor** and no `const` change to
+  `onBegin`: the file-scope `projector` global covers it (§6.5).
+- **`ConfigVar::labels` (§6.6) not implemented.** It was an optional generic
+  improvement, and with the projector no longer selected through a config var
+  nothing needs it yet.
+- **`kStandard` is `constexpr`, not `static const`** — required for the
+  invariants beneath it to be `static_assert`able at all.
+
+### Verification
+
+No `arduino-cli` in the authoring environment, so the ESP32 build was not run.
+Instead the controller was compiled and executed on the host against fake
+Enlight and UICtrl implementations — 66 assertions covering inventory and FIFO
+eviction, per-projector energy, all four refill modes, `readyMs`, deferred
+switching during a live measurement, availability fallback, clamping, rejected
+base overrides, anti-spam, and Outflow's exact shape. `src/test/test_projector.h`
+carries the hardware-independent subset as AUnit cases.
+
+That harness earned its keep twice: `ProjectorDefs::kStandard` had to become
+`constexpr`, and `give()` skipped the catalogue guard entirely when
+`ProjectorSet` was null, so a game declaring no projectors could still be handed
+one.
+
+**Pre-existing, unrelated:** `src/test/LightAir_test.h` includes
+`<test/test_lua.h>`, which is not in the tree — the unit-test build was already
+broken before this change.
+
+### The Outflow config-var bug
+
+Fixed as part of the migration (§12.4): `{ "Energy", &energy, ... }` targeted the
+runtime variable that `onBegin` immediately overwrote, so the DM's setting never
+took effect. It now targets `&startEnergy`, which the kill reward and the respawn
+path already read. The default is unchanged at 100, so a DM who leaves the menu
+alone sees no difference.
+

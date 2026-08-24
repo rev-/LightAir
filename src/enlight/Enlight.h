@@ -35,7 +35,8 @@ static constexpr int32_t  KERN_MAG        = 2048;
 enum class EnlightStatus : uint8_t {
     IDLE        = 0,  // no run() issued since last poll()
     RUNNING     = 1,  // DMA cycles in progress
-    LOW_POW     = 2,  // rawsum below limpow -- no target
+    LOW_POW     = 2,  // below the detection floor (calibration, or the
+                      //   active projector's range gate) -- no target
     NO_HIT      = 3,  // power OK, no far hit-box matched
     PLAYER_HIT  = 4,  // far target; id = player index (1-based)
     NEAR        = 5,  // near object; id = near-target colour id
@@ -88,6 +89,24 @@ public:
 
     // Set cooldown time, in milliseconds
     void setCooldown(int64_t ms) { _cooldown = ms * 1000; }
+
+    // Set the detection range in metres for the projector now in hand.
+    // 0 = no projector gate: the classifier falls back to the bare calibrated
+    // floor, which is exactly the behaviour before ranges existed.
+    //
+    // Retroreflector return falls as 1/x^RANGE_FALLOFF_EXP, so a reference
+    // measurement at a known distance fixes the whole curve:
+    //     T(R) = refFar * (refDist / R)^EXP
+    // The one powf() runs here, on a switch, not per classification — which is
+    // also why a non-integer exponent costs nothing at runtime.
+    void setRangeM(uint8_t metres);
+    uint8_t rangeM() const { return _rangeM; }
+
+    // Maximum range this DEVICE can resolve, from its own calibration:
+    //     Rmax = refDist * (refFar / thresh_far)^(1/EXP)
+    // Returns 0 when the reference has not been calibrated.  Shown by the
+    // calibration summary so the operator can verify it by walking.
+    float maxRangeM() const;
 
     // Set repetitions  = number of DMA cycles before classify.
     // 1 cycle = _periodsPerCycle sine periods (13 at V6R2 defaults = 7.8 ms).
@@ -162,6 +181,11 @@ private:
 
     //Repetitions
     uint32_t    _repetitions        = 10;
+
+    // Range gate: multiplier applied to _cal.refFar* to obtain the far
+    // threshold.  0 = no projector gate (bare calibration floor).
+    float       _rangeMul           = 0.0f;
+    uint8_t     _rangeM             = 0;
 
     // Correlator kernel. FAR = goertzTab[idx], NEAR = goertzTab[(idx+_nearOffset)%_goertzPeriod]; no second array.
     int32_t*    _goertzTab  = nullptr;

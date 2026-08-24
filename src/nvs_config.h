@@ -19,7 +19,6 @@
 #define CAL_KEY_RCAL_NEAR       "rcal_near"    // near channel baselines
 #define CAL_KEY_GCAL_NEAR       "gcal_near"
 #define CAL_KEY_BCAL_NEAR       "bcal_near"
-#define CAL_KEY_LIMPOW          "limpow"       // min rawsum for classification
 #define CAL_KEY_RFACT           "rfact"        // white-balance float blob
 #define CAL_KEY_BFACT           "bfact"
 // nearRatio = (|rnear|+|gnear|+|bnear|) / (|rout|+|gout|+|bout|)
@@ -29,6 +28,16 @@
 // Calibrate at minimum acceptable working distance.
 #define CAL_KEY_NEAR_RATIO_MAX  "near_ratio"   // float blob
 #define CAL_KEY_PHASE_OFF       "phase_off"    // LED excitation delay in samples
+// Reference retroreflector return, per channel, measured at CAL_KEY_REF_DIST
+// metres during calibration step 1 and stored per DMA cycle (normalised by
+// REPS, exactly as thresh_far_* are).  These fix the 1/x^n falloff curve, which
+// is what lets a projector state its reach in metres.
+// Retired: "limpow" (min rawsum) — superseded by the range gate; classify() had
+// already stopped reading it.
+#define CAL_KEY_REF_FAR_R       "ref_far_r"    // reference far Red   (uint32)
+#define CAL_KEY_REF_FAR_G       "ref_far_g"    // reference far Green (uint32)
+#define CAL_KEY_REF_FAR_B       "ref_far_b"    // reference far Blue  (uint32)
+#define CAL_KEY_REF_DIST        "ref_dist"     // metres at which the above were taken
 // Step 3 — white diffusing surface (contact … 5 m):
 // maximum near and far correlator power seen during the sweep.
 // Used to distinguish reflective targets from diffusing surfaces.
@@ -61,13 +70,15 @@ bool player_config_save_hardware(DeviceHardware hw);  // update only hardware ty
 struct EnlightCalib {
     uint32_t    rcal, gcal, bcal;             // far  channel baselines
     uint32_t    rcalNear, gcalNear, bcalNear; // near channel baselines
-    uint32_t    limpow;
     uint32_t    phaseOff;                     // goertzTab phase offset (LED excitation delay, in samples)
     float       rfact, bfact;
     float       nearRatioMax;
     // Step 3 — per-channel low-power thresholds (white-wall sweep)
     uint32_t    thresh_near_r, thresh_near_g, thresh_near_b;
     uint32_t    thresh_far_r,  thresh_far_g,  thresh_far_b;
+    // Reference retroreflector return at refDistM metres (per DMA cycle).
+    uint32_t    refFarR, refFarG, refFarB;
+    uint8_t     refDistM;
 };
 
 bool enlight_calib_load(EnlightCalib& cal);

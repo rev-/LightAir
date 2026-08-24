@@ -57,12 +57,25 @@ bool LightAir_DisplayCtrl::bindIntVariable(int* variable, IconType icon, uint8_t
     if (set.locked || set.count >= DisplayDefaults::MAX_BINDINGS) return false;
 
     VariableBinding& b = set.bindings[set.count++];
-    b.variable  = variable;
-    b.icon      = icon;
-    b.type      = TYPE_INT;
-    b.x         = x;
-    b.y         = y;
-    b.lastValue = INT32_MIN;
+    b.variable       = variable;
+    b.icon           = icon;
+    b.iconBitmapPtr  = nullptr;
+    b.type           = TYPE_INT;
+    b.x              = x;
+    b.y              = y;
+    b.lastValue      = INT32_MIN;
+    return true;
+}
+
+bool LightAir_DisplayCtrl::bindIntVariableDynamicIcon(
+    int* variable,
+    const uint8_t* const* iconBitmapPtr,
+    IconType fallbackIcon,
+    uint8_t x,
+    uint8_t y) {
+    if (!bindIntVariable(variable, fallbackIcon, x, y)) return false;
+    BindingSet& set = _sets[_selectedSet];
+    set.bindings[set.count - 1].iconBitmapPtr = iconBitmapPtr;
     return true;
 }
 
@@ -82,6 +95,7 @@ bool LightAir_DisplayCtrl::bindCooldownVariable(
     VariableBinding& b = set.bindings[set.count++];
     b.variable       = variable;
     b.icon           = icon;
+    b.iconBitmapPtr  = nullptr;
     b.type           = TYPE_COOLDOWN;
     b.x              = x;
     b.y              = y;
@@ -101,6 +115,7 @@ bool LightAir_DisplayCtrl::bindStringVariable(const char* str, IconType icon, ui
     VariableBinding& b = set.bindings[set.count++];
     b.strVariable = str;
     b.icon        = icon;
+    b.iconBitmapPtr = nullptr;
     b.type        = TYPE_STRING;
     b.x           = x;
     b.y           = y;
@@ -188,7 +203,7 @@ void LightAir_DisplayCtrl::renderInt(VariableBinding& b) {
     _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
-    drawIcon(b.icon, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
+    drawBindingIcon(b, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
 
     char buf[12];
     snprintf(buf, sizeof(buf), "%d", value);
@@ -236,7 +251,7 @@ void LightAir_DisplayCtrl::renderString(VariableBinding& b) {
     _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
-    drawIcon(b.icon, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
+    drawBindingIcon(b, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
     _display.print(b.x + 10, b.y, b.lastText);
 }
 
@@ -282,6 +297,15 @@ void LightAir_DisplayCtrl::renderTray() {
 
 void LightAir_DisplayCtrl::drawIcon(IconType icon, uint8_t x, uint8_t y) {
     _display.drawBitmap(x, y, 8, 8, getIconBitmap(icon));
+}
+
+// A binding may carry its icon indirectly so it can change at runtime.
+void LightAir_DisplayCtrl::drawBindingIcon(const VariableBinding& b, uint8_t x, uint8_t y) {
+    if (b.iconBitmapPtr && *b.iconBitmapPtr) {
+        _display.drawBitmap(x, y, 8, 8, *b.iconBitmapPtr);
+        return;
+    }
+    drawIcon(b.icon, x, y);
 }
 
 const uint8_t* LightAir_DisplayCtrl::getIconBitmap(IconType icon) {

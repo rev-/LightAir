@@ -37,9 +37,12 @@ static int cmp_u32(const void* a, const void* b) {
 }
 
 void EnlightCalibRoutine::step1() {
+    char introDist[24];
+    snprintf(introDist, sizeof(introDist), "at %u m exactly.",
+             (unsigned)ProjectorLimits::CAL_REF_DIST_M);
     showLines("Step 1: Phase",
-              "Clear target in",
-              "view.",
+              "Clear target in view",
+              introDist,
               "TRIG1 per shot.");
 
     uint32_t  phases[N_RUNS];
@@ -51,7 +54,10 @@ void EnlightCalibRoutine::step1() {
         char prompt[24];
         snprintf(prompt, sizeof(prompt), "Shot %lu/%lu - TRIG1",
                  (unsigned long)(n + 1), (unsigned long)N_RUNS);
-        showLines("Clear target", prompt);
+        char atDist[24];
+        snprintf(atDist, sizeof(atDist), "Clear target @%um",
+                 (unsigned)ProjectorLimits::CAL_REF_DIST_M);
+        showLines(atDist, prompt);
         waitTrig(TRIG_1_ID);
 
         EnlightRawMeasure m;
@@ -183,6 +189,30 @@ void EnlightCalibRoutine::step2() {
     cal.gcalNear = (uint32_t)(sGN[mid] > 0 ? sGN[mid] / REPS : 0);
     cal.bcalNear = (uint32_t)(sBN[mid] > 0 ? sBN[mid] / REPS : 0);
 
+    // Persist the reference retroreflector return.  step1's shots were taken at
+    // CAL_REF_DIST_M against a clear target, so their baseline-subtracted median
+    // (normalised by REPS, exactly as thresh_far_* are) is the S(refDist) that
+    // anchors the 1/x^n falloff curve — which is what lets a projector state its
+    // reach in metres.  No extra measurement: the data was already collected.
+    // sRF/sGF/sBF have already yielded their medians into cal.rcal/gcal/bcal,
+    // so they are reused here rather than declaring three more N_RUNS arrays:
+    // this function is already carrying ~2.8 kB of stack on an 8 kB task.
+    if (_step1_n > 0) {
+        for (uint32_t i = 0; i < _step1_n; i++) {
+            sRF[i] = _step1_r[i] - (long long)REPS * (long long)cal.rcal;
+            sGF[i] = _step1_g[i] - (long long)REPS * (long long)cal.gcal;
+            sBF[i] = _step1_b[i] - (long long)REPS * (long long)cal.bcal;
+        }
+        qsort(sRF, _step1_n, sizeof(long long), cmp_ll);
+        qsort(sGF, _step1_n, sizeof(long long), cmp_ll);
+        qsort(sBF, _step1_n, sizeof(long long), cmp_ll);
+        const uint32_t rmid = _step1_n / 2;
+        cal.refFarR  = (uint32_t)(sRF[rmid] > 0 ? sRF[rmid] / REPS : 0);
+        cal.refFarG  = (uint32_t)(sGF[rmid] > 0 ? sGF[rmid] / REPS : 0);
+        cal.refFarB  = (uint32_t)(sBF[rmid] > 0 ? sBF[rmid] / REPS : 0);
+        cal.refDistM = ProjectorLimits::CAL_REF_DIST_M;
+    }
+
     // Compute white-balance factors from step1 clear-target measurements.
     // _step1_r/g/b[i] accumulated over REPS cycles; subtract REPS cycles of baseline.
     float rfact_arr[N_RUNS], bfact_arr[N_RUNS];
@@ -305,7 +335,7 @@ void EnlightCalibRoutine::step4() {
 
     // Build one formatted line per calibration value.
     struct CalEntry { char line[22]; };
-    const uint8_t N_ENTRIES    = 17;
+    const uint8_t N_ENTRIES    = 21;
     const uint8_t ROWS_PER_PAGE = 5;
     const uint8_t N_PAGES      = (N_ENTRIES + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
 
@@ -317,7 +347,7 @@ void EnlightCalibRoutine::step4() {
     snprintf(entries[4].line,  sizeof(entries[4].line),  "rcalN:  %lu",  (unsigned long)cal.rcalNear);
     snprintf(entries[5].line,  sizeof(entries[5].line),  "gcalN:  %lu",  (unsigned long)cal.gcalNear);
     snprintf(entries[6].line,  sizeof(entries[6].line),  "bcalN:  %lu",  (unsigned long)cal.bcalNear);
-    snprintf(entries[7].line,  sizeof(entries[7].line),  "limpow: %lu",  (unsigned long)cal.limpow);
+    snprintf(entries[7].line,  sizeof(entries[7].line),  "refDst: %u m", (unsigned)cal.refDistM);
     snprintf(entries[8].line,  sizeof(entries[8].line),  "rfact:  %.4g", (double)cal.rfact);
     snprintf(entries[9].line,  sizeof(entries[9].line),  "bfact:  %.4g", (double)cal.bfact);
     snprintf(entries[10].line, sizeof(entries[10].line), "nRatMx: %.4g", (double)cal.nearRatioMax);
@@ -327,6 +357,14 @@ void EnlightCalibRoutine::step4() {
     snprintf(entries[14].line, sizeof(entries[14].line), "thFrR:  %lu",  (unsigned long)cal.thresh_far_r);
     snprintf(entries[15].line, sizeof(entries[15].line), "thFrG:  %lu",  (unsigned long)cal.thresh_far_g);
     snprintf(entries[16].line, sizeof(entries[16].line), "thFrB:  %lu",  (unsigned long)cal.thresh_far_b);
+    snprintf(entries[17].line, sizeof(entries[17].line), "refFrR: %lu",  (unsigned long)cal.refFarR);
+    snprintf(entries[18].line, sizeof(entries[18].line), "refFrG: %lu",  (unsigned long)cal.refFarG);
+    snprintf(entries[19].line, sizeof(entries[19].line), "refFrB: %lu",  (unsigned long)cal.refFarB);
+    // The whole range model in one number the operator can verify by walking:
+    // calibrate, read Rmax, pace it out, confirm the target stops registering.
+    // If it disagrees with the field, the falloff exponent or the reference
+    // distance is wrong — and you find out here, not mid-game.
+    snprintf(entries[20].line, sizeof(entries[20].line), "Rmax:   %.1f m", (double)_e.maxRangeM());
 
     uint8_t page = 0;
     for (;;) {

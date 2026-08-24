@@ -204,6 +204,43 @@ namespace EnlightDefaults {
     constexpr float    SAT_DITCH_FRAC  = 0.95f; // ditch period if any channel has >95% saturated samples
     constexpr float    SAT_SWITCH_FRAC = 0.02f; // switch to low-power PDM if >2% of a cycle's active samples saturated
     constexpr float    LOW_POWER_FACTOR = 0.1f; // amplitude scale for the dim PDM buffer
+    // Retroreflector return falls as 1/x^RANGE_FALLOFF_EXP.  Used to turn a
+    // projector's range in metres into a correlator threshold; see
+    // Enlight::setRangeM().  Re-fit against measurement by editing this alone.
+    constexpr float    RANGE_FALLOFF_EXP = 3.0f;
+}
+
+// ---------------------------------------------------------------
+// Projector limits
+//
+// Bounds applied by projectorClamp() to every Projector definition,
+// standard and ruleset-local alike, so a typo in a table cannot reach
+// the hardware.  The *values* of the standard projectors live in
+// game/LightAir_Projector.h; only the limits belong here.
+//
+// MAX_CYCLES is NOT a hardware limit — nothing in Enlight constrains
+// the repetition count below ~8000 (the uint16_t millisecond cap in
+// triggerEnlight()).  100 matches the ceiling EnlightTestMode already
+// uses and is a typo guard, not a recommendation: the playable range is
+// far lower, bounded by AFE on-time and by how long a player can hold
+// a target steady.
+// ---------------------------------------------------------------
+namespace ProjectorLimits {
+    constexpr uint16_t MIN_CYCLES      = 1,   MAX_CYCLES      = 100;
+    constexpr uint16_t MIN_COOLDOWN_MS = 0,   MAX_COOLDOWN_MS = 10000;
+    constexpr uint8_t  MIN_RANGE_M     = 1,   MAX_RANGE_M     = 100;  // 0 = device max
+    constexpr uint8_t  MIN_STRENGTH    = 0,   MAX_STRENGTH    = 10;   // in standard hits
+    constexpr uint8_t  MAX_ENERGY_COST = 10;
+    constexpr uint8_t  MAX_ENERGY      = 200;    // bounds maxEnergy, NOT the live pool
+    constexpr uint16_t MAX_RECHARGE_MS = 60000;
+    constexpr uint16_t MAX_READY_MS    = 5000;
+    constexpr uint16_t MAX_IMMUNITY_MS = 30000;
+    constexpr uint8_t  MIN_OWNED       = 1;   // never 0: would deny every reward
+    constexpr uint8_t  MAX_OWNED       = 8;   // powered slots; the baseline is extra
+    constexpr uint8_t  DEFAULT_MAX_OWNED = 3;
+    constexpr uint8_t  MAX_CUSTOM      = 4;   // ruleset-local profiles
+    constexpr uint8_t  NAME_LEN        = 8;   // fits one OLED cell
+    constexpr uint8_t  CAL_REF_DIST_M  = 5;   // distance used by calibration step 1
 }
 
 // ---------------------------------------------------------------

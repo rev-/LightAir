@@ -20,7 +20,11 @@
 //   REPLY_DOWN  (3) : target was already OUT_GAME; hit ignored.
 //
 // Energy mechanics
-//   Energy is simultaneously weapon ammo and life total.
+//   Energy is simultaneously weapon ammo and life total.  The pool lives in
+//   LightAir_ProjectorCtrl as projectorEnergy; this ruleset still owns what
+//   reaching zero MEANS, which is why its projector is Recharge::NONE rather
+//   than CONSUMED — the projector must survive zero so the player can respawn
+//   holding it.
 //   Projecting light costs 1 energy per trigger event (no recharge).
 //   A hit reduces energy by hitDmg (clamped to 0).
 //   Passive drain reduces energy by 1 every (10000/drainRate) ms.
@@ -75,7 +79,6 @@ static int respawnSecs = 30;
 static int gameTime    = 900;
 
 // ---- Runtime variables ----
-static int energy       = 100;
 static int gameTimeLeft = 900;
 static int points       = 100;  // starts at 100; drops on self-depletion
 static int shoneTimes   = 0;
@@ -94,7 +97,7 @@ static bool pendingDepletion;   // passive drain zeroed energy this cycle
 // ---- Config vars (startup menu) ----
 static const ConfigVar configVars[] = {
     //name           value           min   max   step
-    { "Energy",     &energy,        50,   200,  25  },
+    { "Energy",     &startEnergy,   50,   200,  25  },
     { "HitDmg",     &hitDmg,        25,   200,  25  },
     { "DrainRate",  &drainRate,      2,    20,   2  },
     { "Respawn",    &respawnSecs,    5,   120,   5  },
@@ -104,7 +107,7 @@ static const ConfigVar configVars[] = {
 // ---- Monitor vars ----
 static const MonitorVar monitorVars[] = {
     // IN_GAME display
-    MonitorVar::Int("Energy",     &energy,       1u<<IN_GAME,                  ICON_ENERGY, 0, 0),
+    MonitorVar::IntDyn("Energy",  &projectorEnergy, 1u<<IN_GAME, &projectorIcon, ICON_ENERGY, 0, 0),
     MonitorVar::Int("Points",     &points,       1u<<IN_GAME,                  ICON_SCORE,  1, 0),
     MonitorVar::Int("Time",       &gameTimeLeft, (1u<<IN_GAME)|(1u<<OUT_GAME), ICON_TIME,   0, 1),
     MonitorVar::Int("Shone",      &shoneTimes,   1u<<IN_GAME,                  ICON_LIFE,   1, 1),
@@ -115,14 +118,23 @@ static const MonitorVar monitorVars[] = {
     MonitorVar::Int("Depletions", &depletions,   1u<<GAME_END, ICON_DOWN,   1, 1),
 };
 
+// ---- Incoming hit weight ----
+// payload[0] is the attacker's projector strength in STANDARD HITS; one
+// standard hit costs hitDmg energy here.  A packet with no payload comes from
+// pre-projector firmware and counts as one standard hit.
+static int litCost(const RadioPacket& pkt) {
+    const int hits = pkt.payloadLen ? (int)pkt.payload[0] : 1;
+    return hits * hitDmg;
+}
+
 // ---- DirectRadioRule conditions ----
-static bool litAndTaken(const RadioPacket&) { return energy > hitDmg; }
-static bool litAndShone(const RadioPacket&) { return energy <= hitDmg; }
+static bool litAndTaken(const RadioPacket& pkt) { return projectorEnergy >  litCost(pkt); }
+static bool litAndShone(const RadioPacket& pkt) { return projectorEnergy <= litCost(pkt); }
 
 // ---- DirectRadioRule actions ----
 static void onLitTaken(const RadioPacket& reply, LightAir_DisplayCtrl& disp, GameOutput& out) {
-    energy -= hitDmg;
-    if (energy < 0) energy = 0;
+    projectorEnergy -= litCost(reply);
+    if (projectorEnergy < 0) projectorEnergy = 0;
     const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
                    ? PlayerDefs::playerShort[reply.senderId] : "???";
     char buf[20];
@@ -131,8 +143,8 @@ static void onLitTaken(const RadioPacket& reply, LightAir_DisplayCtrl& disp, Gam
     out.ui.trigger(LightAir_UICtrl::UIEvent::GotLit);
 }
 static void onLitShone(const RadioPacket& reply, LightAir_DisplayCtrl& disp, GameOutput& out) {
-    energy       = 0;
-    pendingShone = true;
+    projectorEnergy = 0;
+    pendingShone    = true;
     const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
            ? PlayerDefs::playerShort[reply.senderId] : "???";
     char buf[20];
@@ -157,8 +169,11 @@ static void onReplyTaken(const RadioPacket&, const RadioPacket&,
 
 static void onReplyShone(const RadioPacket& reply, const RadioPacket&,
                          LightAir_DisplayCtrl& disp, GameOutput& out) {
-    energy += startEnergy;
-    points += 1;
+    // Deliberately uncapped, as before: ProjectorCtrl clamps on refill only,
+    // never on a direct write, so this mechanic survives the pool moving into
+    // the framework.
+    projectorEnergy += startEnergy;
+    points          += 1;
     const char* name = (reply.senderId < PlayerDefs::MAX_PLAYER_ID)
                ? PlayerDefs::playerShort[reply.senderId] : "???";
     char buf[20];
@@ -193,7 +208,6 @@ static const WinnerVar winnerVars[] = {
 // ---- onBegin: reset all runtime state from config ----
 static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
                     const LightAir_GameRunner&) {
-    energy          = startEnergy;
     gameTimeLeft    = gameTime;
     points          = 100;
     shoneTimes      = 0;
@@ -205,8 +219,9 @@ static void onBegin(LightAir_DisplayCtrl&, LightAir_Radio&, LightAir_UICtrl* ui,
     lastDrainAt     = millis();
     drainIntervalMs = (drainRate > 0) ? (10000u / (uint32_t)drainRate) : 1000u;
 
-    enlightPtr->setCooldown(20);
-    enlightPtr->setRepetitions(20);
+    // The projector carries cycles and cooldown now; only the DM-tunable pool
+    // has to be stated here.  Recharge::NONE means the delay is never used.
+    projector.setPool(startEnergy, 0);
 
     ui->trigger(LightAir_UICtrl::UIEvent::GameStart);
 }
@@ -228,9 +243,9 @@ static void tickDrain() {
     uint32_t now = millis();
     if (now - lastDrainAt >= drainIntervalMs) {
         lastDrainAt += drainIntervalMs;
-        if (energy > 0) {
-            energy--;
-            if (energy == 0)
+        if (projectorEnergy > 0) {
+            projectorEnergy--;
+            if (projectorEnergy <= 0)
                 pendingDepletion = true;
         }
     }
@@ -265,7 +280,7 @@ static void onDepletion(LightAir_DisplayCtrl& disp, GameOutput& out) {
     out.ui.trigger(LightAir_UICtrl::UIEvent::Down);
 }
 static void onRespawn(LightAir_DisplayCtrl& disp, GameOutput& out) {
-    energy = startEnergy;
+    projectorEnergy = startEnergy;
     lastDrainAt = millis();
     disp.showMessage("Back in game!", 1000);
     out.ui.trigger(LightAir_UICtrl::UIEvent::Up);
@@ -290,26 +305,32 @@ static void doInGame(const InputReport& inp, const RadioReport&,
     tickGameTime();
     tickDrain();
 
-    // Poll Enlight; a confirmed hit sends MSG_LIT to the target.
+    // Poll Enlight; a confirmed hit sends MSG_LIT to the target, carrying this
+    // projector's strength so the target can weigh it.  mayLight() is the
+    // attacker-side anti-spam window (0 ms for this game, so always true).
     EnlightResult r = enlightPtr->poll();
-    if (r.status == EnlightStatus::PLAYER_HIT)
-        out.radio.sendTo(r.id, MSG_LIT);
+    if (r.status == EnlightStatus::PLAYER_HIT && projector.mayLight(r.id)) {
+        const Projector& p = projector.active();
+        const uint8_t payload[3] = { p.strength, projector.activeId(), p.roleTag };
+        out.radio.sendTo(r.id, MSG_LIT, payload, sizeof(payload));
+        projector.noteLit(r.id);
+    }
 
     for (uint8_t i = 0; i < inp.buttonCount; i++) {
         if (inp.buttons[i].id != InputDefaults::TRIG_1_ID) continue;
         ButtonState s = inp.buttons[i].state;
         if (s == ButtonState::PRESSED || s == ButtonState::HELD) {
-            if ((energy > 0) && (enlightPtr->run())) {
-                energy--;
-                energySpent++;
-                out.ui.triggerEnlight(enlightPtr->cycleTime());
-            }
+            // trigger() folds the deploy-time check, the energy check,
+            // Enlight::run() and the UI action into one call, and deducts
+            // energy only when the run actually started.
+            if (projector.trigger()) energySpent++;
         }
     }
 
     // Set depletion flag if energy reached zero (from either active or passive drain),
     // unless a fatal hit already set pendingShone (mutually exclusive).
-    if (energy == 0 && !pendingShone)
+    // <= 0 rather than == 0: a weighted hit can overshoot zero.
+    if (projectorEnergy <= 0 && !pendingShone)
         pendingDepletion = true;
 }
 
@@ -322,6 +343,47 @@ static const StateBehavior behaviors[] = {
     { IN_GAME,  doInGame  },
     { OUT_GAME, doOutGame },
     { GAME_END, nullptr   },
+};
+
+// ---- Projector ----
+//
+// Outflow has no powered projectors: it has one baseline whose values differ
+// from the standard.  That is exactly what baseOverride is for — the profile
+// keeps the BASE id and therefore all of BASE's structural behaviour
+// (always held, never counted against maxOwned, never evicted, the
+// availability fallback) while stating its own numbers.
+//
+// targetImmunityMs = 0 is load-bearing: Outflow is the one ruleset with no
+// per-attacker immunity rule, so inheriting the standard BASE's 3000 ms would
+// silently change the game.
+static const Projector outflowBase = {
+    ProjectorId::BASE, "BASE",
+    /* cycles          */ 20,     // was enlightPtr->setRepetitions(20)
+    /* cooldownMs      */ 20,     // was enlightPtr->setCooldown(20)
+    /* rangeM          */ 0,      // device max — today's classifier behaviour
+    /* recharge        */ Recharge::NONE,   // energy is the life total; never refills
+    /* energyCost      */ 1,
+    /* maxEnergy       */ 100,    // startEnergy default; setPool() carries the config var
+    /* rechargeDelayMs */ 0,
+    /* rechargeMs      */ 0,
+    /* strength        */ 1,      // one standard hit = hitDmg energy
+    /* roleTag         */ 0,
+    /* targetImmunityMs*/ 0,      // no immunity in this game — see above
+    /* readyMs         */ 0,      // nothing to switch to
+    /* shotAction      */ nullptr,            // the standard Enlight action
+    /* icon            */ ICON_ENERGY_BITMAP, // today's display
+};
+static_assert(outflowBase.id == ProjectorId::BASE,
+              "a base override must keep the BASE id");
+static_assert(outflowBase.recharge != Recharge::CONSUMED,
+              "the baseline is undroppable; CONSUMED would delete it at zero");
+
+static const ProjectorSet projectorSet = {
+    nullptr, 0,      // no powered projectors
+    0,               // empty catalogue
+    &outflowBase,    // the baseline, retuned
+    nullptr,         // maxOwned unused: nothing is grantable
+    nullptr,         // isAvailable: never consulted for the baseline anyway
 };
 
 // ---- Totem requirements (BONUS and MALUS are optional) ----
@@ -354,5 +416,6 @@ extern const LightAir_Game game_outflow = {
     /* teamCount             */ 0,
     /* teamMap               */ nullptr,
     /* gameTimeLeft          */ &Outflow::gameTimeLeft,
+    /* projectors            */ &Outflow::projectorSet,
     /* onEnd                 */ nullptr,
 };

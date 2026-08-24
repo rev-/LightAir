@@ -160,6 +160,10 @@ void _setup() {
             while (true) delay(1000);
         }
 
+        // Projector: bind the hardware it drives.  The running game's
+        // profiles are bound separately by LightAir_GameRunner::begin().
+        projector.begin(enlight, &playerUi);
+
         // Display
         rawDisplay.begin();
         displayCtrl.begin();

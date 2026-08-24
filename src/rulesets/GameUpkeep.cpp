@@ -570,5 +570,6 @@ extern const LightAir_Game game_upkeep = {
     /* teamCount             */ 2,
     /* teamMap               */ Upkeep::teamMap,
     /* gameTimeLeft          */ &Upkeep::gameTimeLeft,
+    /* projectors            */ nullptr,
     /* onEnd                 */ nullptr,
 };

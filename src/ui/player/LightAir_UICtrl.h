@@ -8,6 +8,7 @@
 #include "rgb/LightAir_RGB.h"
 #include "display/LightAir_DisplayCtrl.h"
 #include "LightAir_UIEventObserver.h"
+#include "LightAir_UIAction.h"
 
 #define MAX_QUEUE 10
 
@@ -33,6 +34,7 @@ public:
     ControlGain,
     ControlLoss,
     RoleChange,
+    ProjectorChange,
     Stop,
     Bonus,
     Malus,
@@ -45,14 +47,9 @@ public:
     Count
   };
 
-  struct UIAction {
-    uint16_t durations[4];
-    uint8_t  stepCount;
-    uint16_t soundFreqs[4];
-    uint8_t  vibIntensity[4];
-    uint8_t  rgbColors[4][3];
-    uint8_t  priority;
-  };
+  // Defined in LightAir_UIAction.h so lightweight value types can carry an
+  // action without including this header.  Both spellings name one type.
+  using UIAction = LightAir_UIAction;
 
   LightAir_UICtrl(
     LightAir_Audio& audio,
@@ -66,6 +63,13 @@ public:
   void setObserver(LightAir_UIEventObserver* obs);
   void defineCustomAction(UIEvent slot,
                           const UIAction& action);
+
+  // Replace the action played for UIEvent::Enlight, or restore the standard
+  // one by passing nullptr.  Used by LightAir_ProjectorCtrl so each projector
+  // can sound different WITHOUT introducing new UIEvent values: the runtime
+  // burst-duration override in executeStep() is keyed on the event *value*,
+  // so a per-projector event id would silently discard the real burst length.
+  void setEnlightAction(const UIAction* action);
 
   void setBackground(const UIAction& action);
   void clearBackground();
@@ -129,6 +133,10 @@ private:
 
   UIAction _customActions[4];
   bool _customDefined[4];
+
+  // Enlight-slot override (see setEnlightAction).
+  UIAction _enlightAction;
+  bool     _enlightDefined;
 };
 
 #endif
