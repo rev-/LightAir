@@ -446,10 +446,13 @@ static void doInGame(const InputReport& inp, const RadioReport& radio,
         ButtonState s = inp.buttons[i].state;
         if (s == ButtonState::PRESSED || s == ButtonState::HELD) {
             triggerActive = true;
-            if (energy > 0) {
+            // Spend energy only if the run actually started: Enlight refuses
+            // while a measurement is in flight, and a refused shine has never
+            // cost anything.  Without the guard the trigger drained one energy
+            // per 10 ms loop tick for the whole ~80 ms burst.
+            if ((energy > 0) && (enlightPtr->run())) {
                 energy--;
                 energySpent++;
-                enlightPtr->run();
                 out.ui.triggerEnlight(enlightPtr->cycleTime());
             }
         }
