@@ -1,5 +1,6 @@
 #pragma once
 #include "../enlight/Enlight.h"
+#include "../input/SpiAdcSensor.h"
 #include "../ui/player/LightAir_UICtrl.h"
 #include "../ui/player/display/LightAir_Display.h"
 #include "../input/LightAir_InputCtrl.h"
@@ -10,7 +11,10 @@ public:
                     LightAir_UICtrl&    ui,
                     LightAir_Display&   disp,
                     LightAir_InputCtrl& input,
-                    uint8_t             keypadId);
+                    uint8_t             keypadId,
+                    SpiAdcSensor*       battSensor    = nullptr,
+                    SpiAdcSensor*       ledTempSensor = nullptr,
+                    SpiAdcSensor*       pdTempSensor  = nullptr);
 
     void run();  // blocking; interactive Enlight test mode
 
@@ -28,6 +32,9 @@ private:
     LightAir_Display&   _disp;
     LightAir_InputCtrl& _input;
     uint8_t             _keypadId;
+    SpiAdcSensor*       _battSensor;
+    SpiAdcSensor*       _ledTempSensor;
+    SpiAdcSensor*       _pdTempSensor;
 
     // Input state tracking (mimics GameSetupMenu's gPrevKeyState / gPrevButtonState)
     uint8_t    _prevKeyState[256]    = {};

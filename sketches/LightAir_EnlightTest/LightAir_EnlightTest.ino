@@ -70,6 +70,7 @@ static LightAir_HWButton  trig1(PLAYER_TRIG_1);
 static LightAir_HWButton  trig2(PLAYER_TRIG_2);
 static LightAir_InputCtrl input;
 
+static SpiAdcBus     adcBus;
 static EnlightCalib  enlightCalib;
 static Enlight*      enlight = nullptr;
 
@@ -396,10 +397,25 @@ void setup() {
     input.registerButton(InputDefaults::TRIG_1_ID, trig1);
     input.registerButton(InputDefaults::TRIG_2_ID, trig2);
 
+    // SPI ADC bus — owns the bus and the shared ADC device handle; must come
+    // before Enlight, which only borrows the handle for its DMA transactions.
+    if (!adcBus.begin((spi_host_device_t)EnlightDefaults::ADC_HOST,
+                      EnlightDefaults::ADC_SDO, EnlightDefaults::ADC_SDI,
+                      EnlightDefaults::ADC_CLK, EnlightDefaults::ADC_CS,
+                      (int)EnlightDefaults::ADC_CLOCK_HZ,
+                      ENLIGHT_SPI_MAX_DMA_LEN)) {
+        dispBegin();
+        dispRow(0, "SPI ADC bus");
+        dispRow(1, "FAILED");
+        dispRow(3, "Check hardware");
+        dispFlush();
+        while (true) delay(1000);
+    }
+
     // Enlight init
     enlight_calib_load(enlightCalib);
     enlight = new Enlight(enlightCalib);
-    if (!enlight->begin()) {
+    if (!enlight->begin(adcBus.getHandle())) {
         dispBegin();
         dispRow(0, "Enlight init");
         dispRow(1, "FAILED");

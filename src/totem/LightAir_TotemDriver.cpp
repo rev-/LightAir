@@ -76,6 +76,8 @@ void LightAir_TotemDriver::loop() {
                                          ev.packet.payload[3];
                 info.hasConfigSecs    = false;
                 info.configSecs       = 0;
+                // Own logical id, so a program can match notifies addressed to it.
+                info.selfId           = _radio.playerId();
 
                 uint16_t progLen = (uint16_t)(ev.packet.payload[5] |
                                               (ev.packet.payload[6] << 8));

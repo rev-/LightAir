@@ -5,7 +5,14 @@
 #include "nvs_config.h"
 
 // Optical shine emission + lit-target detection
+#include "enlight/SpiAdcBus.h"
 #include "enlight/Enlight.h"
+
+// Sensor inputs
+#include "input/SpiAdcSensor.h"
+#include "input/NtcSensor.h"
+#include "input/VDivSensor.h"
+#include "input/SpiExternal.h"
 
 // Radio
 #include "radio/LightAir_Radio.h"

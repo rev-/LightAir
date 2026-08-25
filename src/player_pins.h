@@ -47,3 +47,7 @@ static constexpr uint8_t PLAYER_SW_C3 = 18;   // col 2: > / B
 // ---- Trigger buttons ----
 static constexpr int PLAYER_TRIG_1 = 11;  // primary   trigger
 static constexpr int PLAYER_TRIG_2 = 10;  // secondary trigger
+
+// ---- External SPI on SPI2 — dedicated CS on a free GPIO ----
+// MOSI/CLK are shared with the ADC bus.  Assign when PCB is finalised.
+static constexpr int SPI_EXT_CS = -1;

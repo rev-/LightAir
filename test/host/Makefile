@@ -35,6 +35,8 @@ FW_SRC := $(ROOT)/src/lua/LightAir_LuaGame.cpp \
           $(ROOT)/src/game/LightAir_GameRunner.cpp \
           $(ROOT)/src/radio/LightAir_Radio.cpp \
           $(ROOT)/src/input/LightAir_InputCtrl.cpp \
+          $(ROOT)/src/input/SpiAdcSensor.cpp \
+          $(ROOT)/src/enlight/SpiAdcBus.cpp \
           $(ROOT)/src/ui/player/display/LightAir_DisplayCtrl.cpp \
           $(ROOT)/src/ui/player/LightAir_UICtrl.cpp
 
