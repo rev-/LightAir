@@ -35,7 +35,7 @@ public:
     // Close the state (safe to call twice).
     void end();
 
-    lua_State* L() const { return _L; }
+    lua_State* L() const { return _lua; }
 
     // Protected call with traceback + instruction budget.
     // Stack contract: function and nargs arguments on top, exactly like
@@ -51,7 +51,11 @@ public:
     const char* lastError() const { return _err; }
 
 private:
-    lua_State* _L = nullptr;
+    // Not `_L`: newlib's <ctype.h> defines _L (and _U/_N/_S/_P/_C/_X/_B)
+    // as character-class bit macros, and the Arduino core drags ctype.h in
+    // via Arduino.h -> WCharacter.h.  Any translation unit that includes
+    // Arduino.h before this header would see `lua_State* 02 = nullptr;`.
+    lua_State* _lua = nullptr;
     char       _err[120] = {0};
 
     static void* alloc(void* ud, void* ptr, size_t osize, size_t nsize);

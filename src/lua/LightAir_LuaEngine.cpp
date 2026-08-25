@@ -40,39 +40,39 @@ void* LightAir_LuaEngine::alloc(void*, void* ptr, size_t, size_t nsize) {
  * ========================================================= */
 
 bool LightAir_LuaEngine::begin() {
-    if (_L) return true;
+    if (_lua) return true;
     // Lua 5.5 takes a hash seed; derive one from the clock + this pointer.
     unsigned seed = (unsigned)((uintptr_t)this ^ (uintptr_t)&seed);
 #ifdef ESP32
     seed ^= (unsigned)millis();
 #endif
-    _L = lua_newstate(alloc, this, seed);
-    if (!_L) return false;
+    _lua = lua_newstate(alloc, this, seed);
+    if (!_lua) return false;
 
     // Sandboxed library set: base, table, string, math.  No io/os/package.
-    luaL_requiref(_L, LUA_GNAME,       luaopen_base,   1);
-    luaL_requiref(_L, LUA_TABLIBNAME,  luaopen_table,  1);
-    luaL_requiref(_L, LUA_STRLIBNAME,  luaopen_string, 1);
-    luaL_requiref(_L, LUA_MATHLIBNAME, luaopen_math,   1);
-    lua_settop(_L, 0);
+    luaL_requiref(_lua, LUA_GNAME,       luaopen_base,   1);
+    luaL_requiref(_lua, LUA_TABLIBNAME,  luaopen_table,  1);
+    luaL_requiref(_lua, LUA_STRLIBNAME,  luaopen_string, 1);
+    luaL_requiref(_lua, LUA_MATHLIBNAME, luaopen_math,   1);
+    lua_settop(_lua, 0);
 
     // Remove filesystem/code-loading escapes from the base library,
     // plus collectgarbage — GC pacing belongs to the firmware (gcStep).
     static const char* kRemoved[] = { "dofile", "loadfile", "load", "collectgarbage" };
     for (const char* name : kRemoved) {
-        lua_pushnil(_L);
-        lua_setglobal(_L, name);
+        lua_pushnil(_lua);
+        lua_setglobal(_lua, name);
     }
 
     // Incremental GC; stepped explicitly from the loop's slack window.
-    lua_gc(_L, LUA_GCINC);
+    lua_gc(_lua, LUA_GCINC);
     return true;
 }
 
 void LightAir_LuaEngine::end() {
-    if (_L) {
-        lua_close(_L);
-        _L = nullptr;
+    if (_lua) {
+        lua_close(_lua);
+        _lua = nullptr;
     }
 }
 
@@ -92,29 +92,29 @@ void LightAir_LuaEngine::budgetHook(lua_State* L, lua_Debug*) {
 
 bool LightAir_LuaEngine::pcall(int nargs, int nresults) {
     // Stack: ... func arg1..argN   (top = argN)
-    int funcIdx = lua_gettop(_L) - nargs;   // absolute index of the function
-    lua_pushcfunction(_L, traceback);
-    lua_insert(_L, funcIdx);                // traceback sits below the function
+    int funcIdx = lua_gettop(_lua) - nargs;   // absolute index of the function
+    lua_pushcfunction(_lua, traceback);
+    lua_insert(_lua, funcIdx);                // traceback sits below the function
 
-    lua_sethook(_L, budgetHook, LUA_MASKCOUNT, (int)LuaDefaults::INSTR_BUDGET);
-    int rc = lua_pcall(_L, nargs, nresults, funcIdx);
-    lua_sethook(_L, nullptr, 0, 0);
+    lua_sethook(_lua, budgetHook, LUA_MASKCOUNT, (int)LuaDefaults::INSTR_BUDGET);
+    int rc = lua_pcall(_lua, nargs, nresults, funcIdx);
+    lua_sethook(_lua, nullptr, 0, 0);
 
-    lua_remove(_L, funcIdx);                // drop the traceback handler
+    lua_remove(_lua, funcIdx);                // drop the traceback handler
     if (rc == LUA_OK) {
         _err[0] = 0;
         return true;
     }
-    const char* msg = lua_tostring(_L, -1);
+    const char* msg = lua_tostring(_lua, -1);
     if (!msg) msg = "(unknown Lua error)";
     strncpy(_err, msg, sizeof(_err) - 1);
     _err[sizeof(_err) - 1] = 0;
     LUA_LOG_ERR(msg);
-    lua_pop(_L, 1);                         // pop the error value
+    lua_pop(_lua, 1);                         // pop the error value
     return false;
 }
 
 void LightAir_LuaEngine::gcStep() {
     // LUA_GCSTEP takes a size_t vararg in Lua 5.5; 0 = one basic step.
-    if (_L) lua_gc(_L, LUA_GCSTEP, (size_t)0);
+    if (_lua) lua_gc(_lua, LUA_GCSTEP, (size_t)0);
 }
