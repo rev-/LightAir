@@ -20,15 +20,15 @@
 
 #include <Arduino.h>
 #include <ArduinoLog.h>
-#include <LightAir.h>
+#include "src/LightAir.h"
 #ifndef LOG_LEVEL
 #define LOG_LEVEL LOG_LEVEL_INFO
 #endif 
 
-#include <tools/EnlightCalibRoutine.h>
-#include <tools/EnlightTestMode.h>
-#include <tools/GameFileServer.h>
-#include <lua/LightAir_GameStore.h>
+#include "src/tools/EnlightCalibRoutine.h"
+#include "src/tools/EnlightTestMode.h"
+#include "src/tools/GameFileServer.h"
+#include "src/lua/LightAir_GameStore.h"
 
 // ----------------------------------------------------------------
 // Enlight global pointer
@@ -101,7 +101,7 @@ static DeviceHardware hw;
 
 
 #ifdef TEST_UNIT
-#include <test/LightAir_test.h>
+#include "src/test/LightAir_test.h"
 
 void _setup() {
     // write as needed  

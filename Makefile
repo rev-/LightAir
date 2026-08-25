@@ -1,4 +1,6 @@
-INCLUDES=-I{build.source.path}/src -I{build.source.path}/src/libs/lua-5.5.0/src
+# No -I flags: every in-tree #include is written relative to the file that
+# issues it, so the same sources also compile in the Arduino IDE, which
+# has no way to pass extra include paths.  Keep new includes relative.
 FLAGS=-Wall -Wextra
 DEFINES=-DLUA_32BITS
 ADDITIONAL_DEFINES?=
@@ -15,16 +17,16 @@ SRCS = $(wildcard *.ino) \
        $(wildcard src/*/*/*.cpp) $(wildcard src/*/*/*.h) \
        $(wildcard src/libs/lua-5.5.0/src/*.c) $(wildcard src/libs/lua-5.5.0/src/*.h)
 
-# The C core needs the same include path/defines as the C++ binding
+# The vendored C core needs the same defines as the C++ binding
 # (LUA_32BITS is additionally forced inside luaconf.h as a belt).
-CPROPS = --build-property "compiler.cpp.extra_flags=$(INCLUDES) $(FLAGS) $(DEFINES) $(ADDITIONAL_DEFINES)" \
-         --build-property "compiler.c.extra_flags=$(INCLUDES) $(DEFINES) $(ADDITIONAL_DEFINES)"
+CPROPS = --build-property "compiler.cpp.extra_flags=$(FLAGS) $(DEFINES) $(ADDITIONAL_DEFINES)" \
+         --build-property "compiler.c.extra_flags=$(DEFINES) $(ADDITIONAL_DEFINES)"
 
 build/debug/$(SKETCH_NAME).ino.bin: $(SRCS) src/lua/LightAir_GamesBundle.h
 	arduino-cli compile --optimize-for-debug --profile "$(PROFILE)" -v --jobs 0 --build-path ./build/debug . $(CPROPS)
 
-CPROPS_TEST = --build-property "compiler.cpp.extra_flags=$(INCLUDES) $(FLAGS) $(DEFINES) $(ADDITIONAL_DEFINES) -DTEST_UNIT" \
-              --build-property "compiler.c.extra_flags=$(INCLUDES) $(DEFINES) $(ADDITIONAL_DEFINES) -DTEST_UNIT"
+CPROPS_TEST = --build-property "compiler.cpp.extra_flags=$(FLAGS) $(DEFINES) $(ADDITIONAL_DEFINES) -DTEST_UNIT" \
+              --build-property "compiler.c.extra_flags=$(DEFINES) $(ADDITIONAL_DEFINES) -DTEST_UNIT"
 
 build/test/unit/$(SKETCH_NAME).ino.bin: $(SRCS) src/lua/LightAir_GamesBundle.h
 	arduino-cli compile --optimize-for-debug --profile "$(PROFILE)" -v --jobs 0 --build-path ./build/test/unit . $(CPROPS_TEST)

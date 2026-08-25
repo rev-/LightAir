@@ -3,9 +3,9 @@
 #include <stddef.h>
 
 extern "C" {
-#include "lua.h"
-#include "lauxlib.h"
-#include "lualib.h"
+#include "../libs/lua-5.5.0/src/lua.h"
+#include "../libs/lua-5.5.0/src/lauxlib.h"
+#include "../libs/lua-5.5.0/src/lualib.h"
 }
 
 // ----------------------------------------------------------------
