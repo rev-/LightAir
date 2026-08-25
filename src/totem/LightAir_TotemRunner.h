@@ -61,6 +61,8 @@ struct LightAir_TotemActivation {
     uint16_t gameTimeLeftSecs;   // 0xFFFF = unknown / no watchdog budget
     bool     hasConfigSecs;
     uint8_t  configSecs;        // valid only if hasConfigSecs
+    uint8_t  selfId;            // this totem's own logical id (= its beacon senderId);
+                                //   lets a runner match notifies addressed to it by id
 };
 
 class LightAir_TotemRunner {

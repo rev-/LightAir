@@ -73,9 +73,11 @@ public:
     ~Enlight();
 
     // One-time hardware init, waveform generation, classifier build.
+    // adcHandle: the spi_device_handle_t owned by SpiAdcBus — Enlight stores
+    // it and uses it for DMA transactions (bus init is done by SpiAdcBus::begin()).
     // Computes _periodsPerCycle = max full periods in one DMA transaction and
     // sizes all buffers accordingly. Logs cycle duration at INFO level.
-    bool begin();
+    bool begin(spi_device_handle_t adcHandle);
 
     float    actualFreqHz()    const { return _actualFreqHz;    }
     uint32_t goertzPeriod()    const { return _goertzPeriod;    }
