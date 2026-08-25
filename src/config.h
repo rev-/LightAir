@@ -562,26 +562,28 @@ namespace colorBox {
 // ---------------------------------------------------------------
 namespace SensorDefaults {
     // ADC channel-select commands — match to IC wiring.
-    static constexpr uint8_t  CMD_BATT_VOLT             = 0x30;
-    static constexpr uint8_t  CMD_LED_TEMP              = 0x38;
-    static constexpr uint8_t  CMD_PD_TEMP               = 0x40;
+    static constexpr uint8_t  CMD_BATT_VOLT             = 0x00;
+    static constexpr uint8_t  CMD_LED_TEMP              = 0x10;
+    static constexpr uint8_t  CMD_PD_TEMP               = 0x08;
 
     // ADC reference voltage.
     static constexpr float    ADC_VREF                  = 3.3f;
 
     // NTC parameters — LED board temperature sensor.
-    static constexpr float    LED_NTC_R_FIXED           = 10000.0f;
-    static constexpr float    LED_NTC_R0                = 10000.0f;
-    static constexpr float    LED_NTC_BETA              = 3950.0f;
+    // Reference part: NTCG104EF104FT1X
+    static constexpr float    LED_NTC_R_FIXED           = 100000.0f;
+    static constexpr float    LED_NTC_R0                = 100000.0f;
+    static constexpr float    LED_NTC_BETA              = 4308.0f;
 
     // NTC parameters — photodiode temperature sensor.
-    static constexpr float    PD_NTC_R_FIXED            = 10000.0f;
-    static constexpr float    PD_NTC_R0                 = 10000.0f;
-    static constexpr float    PD_NTC_BETA               = 3950.0f;
+    // Reference part: NCP15WF104F03RC
+    static constexpr float    PD_NTC_R_FIXED            = 22000.0f;
+    static constexpr float    PD_NTC_R0                 = 100000.0f;
+    static constexpr float    PD_NTC_BETA               = 4250.0f;
 
     // Battery voltage divider resistors.
     static constexpr float    BATT_R_TOP                = 100000.0f;
-    static constexpr float    BATT_R_BOTTOM             =  33000.0f;
+    static constexpr float    BATT_R_BOTTOM             = 100000.0f;
 
     // Scheduling cadence.
     static constexpr uint32_t ACTIVE_WINDOW_MS          =  30000;   // 30 s
