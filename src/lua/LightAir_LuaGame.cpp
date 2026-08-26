@@ -22,6 +22,8 @@
 
 #ifdef ESP32
 #include <nvs.h>
+#include <FS.h>
+#include <LittleFS.h>
 #endif
 
 /* =========================================================
@@ -869,6 +871,49 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
  *   LOAD / UNLOAD
  * ========================================================= */
 
+// ----------------------------------------------------------------
+// loadChunk — compile the file at `path` into a chunk left on the
+// Lua stack.  Returns LUA_OK, or an error code with the message on
+// the stack (same contract as luaL_loadfile).
+//
+// On the device this must NOT go through luaL_loadfile: that calls
+// plain fopen(), which resolves against the ESP-IDF VFS, while the
+// Arduino core mounts LittleFS under its own base path.  A LittleFS
+// path such as "/games/flag.lua" is invisible to fopen(), so every
+// game file failed to open and no game ever reached the menu.  Read
+// through the LittleFS object instead — exactly what la.lib() already
+// does for library modules — and compile from the buffer.
+// ----------------------------------------------------------------
+#ifdef ESP32
+static int loadChunk(lua_State* L, const char* path) {
+    File f = LittleFS.open(path, "r");
+    if (!f) {
+        lua_pushfstring(L, "cannot open %s", path);
+        return LUA_ERRFILE;
+    }
+    size_t size = f.size();
+    // Scratch buffer as a userdatum: GC-managed, so a load error cannot
+    // leak it, and it needs no heap fragmentation-prone malloc/free pair.
+    char*  buf  = (char*)lua_newuserdatauv(L, size ? size : 1, 0);
+    size_t got  = f.read((uint8_t*)buf, size);
+    f.close();
+    if (got != size) {
+        lua_pop(L, 1);                       // drop scratch buffer
+        lua_pushfstring(L, "read error on %s (%d/%d bytes)",
+                        path, (int)got, (int)size);
+        return LUA_ERRFILE;
+    }
+    int rc = luaL_loadbuffer(L, buf, size, path);
+    lua_remove(L, -2);                       // drop scratch buffer, keep result
+    return rc;
+}
+#else
+// Host builds (tests) read real files from the working directory.
+static int loadChunk(lua_State* L, const char* path) {
+    return luaL_loadfile(L, path);
+}
+#endif
+
 bool LightAir_LuaGame::load(const char* path) {
     unload();
 
@@ -902,7 +947,7 @@ bool LightAir_LuaGame::load(const char* path) {
     lua_State* L = _engine.L();
 
     // Compile + run the chunk (its top-level code executes here).
-    if (luaL_loadfile(L, path) != LUA_OK) {
+    if (loadChunk(L, path) != LUA_OK) {
         Log.errorln("LuaGame: %s: %s", path, lua_tostring(L, -1));
         lua_pop(L, 1);
         _engine.end();
@@ -947,8 +992,23 @@ bool LightAir_LuaGame::peekManifest(const char* path, char* nameOut,
 
     lua_State* L = _engine.L();
     bool ok = false;
-    if (luaL_loadfile(L, path) == LUA_OK && _engine.pcall(0, 1) &&
-        lua_istable(L, -1)) {
+
+    // Each failure mode reports itself: they all mean "no game here", but
+    // a missing file, a syntax error and a bad return value need different
+    // fixes, and only the first two leave a message on the Lua stack
+    // (pcall() pops its own error into lastError()).
+    int rc = loadChunk(L, path);
+    if (rc != LUA_OK) {
+        const char* err = lua_tostring(L, -1);
+        Log.errorln("LuaGame: cannot load %s: %s", path, err ? err : "(no message)");
+        lua_settop(L, 0);
+    } else if (!_engine.pcall(0, 1)) {
+        Log.errorln("LuaGame: %s failed to run: %s", path, _engine.lastError());
+        lua_settop(L, 0);
+    } else if (!lua_istable(L, -1)) {
+        Log.errorln("LuaGame: %s did not return a table", path);
+        lua_settop(L, 0);
+    } else {
         lua_getfield(L, -1, "api");
         bool apiOk = lua_isinteger(L, -1) &&
                      lua_tointeger(L, -1) == LuaDefaults::API_VERSION;
@@ -965,9 +1025,8 @@ bool LightAir_LuaGame::peekManifest(const char* path, char* nameOut,
         }
         lua_pop(L, 1);
         ok = apiOk && idOk && nameOk;
-    } else {
-        Log.errorln("LuaGame: manifest scan failed for %s", path);
-        lua_settop(L, 0);
+        if (!ok)
+            Log.errorln("LuaGame: %s has a bad manifest (api/type_id/name)", path);
     }
     _engine.end();
     return ok;

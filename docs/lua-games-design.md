@@ -323,6 +323,10 @@ Full model, semantics, wire encoding, versioning and failure modes:
 
 - **Filesystem**: LittleFS on the existing `default_8MB` partition scheme's
   SPIFFS partition. Games live in `/games/*.lua` (a few KB each; hundreds fit).
+  Paths are LittleFS-relative, so every read goes through the `LittleFS`
+  object — never `luaL_loadfile`/`fopen`, which resolve against the VFS
+  base path the Arduino core mounts LittleFS under and cannot see
+  `/games/...` at all.
 - **Game store** (`LightAir_GameStore`): mounts FS (seeding the embedded
   stock games byte-exact on first boot / firmware update), scans `/games`,
   and reads each file at boot *only far enough* to extract `api`, `type_id`,

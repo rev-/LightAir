@@ -103,6 +103,24 @@ int main() {
     CHECK(LightAir_LuaGame::instanceCount() == 1,
           "7 sequential loads used one registry slot");
 
+    // ---- 1b. Manifest rejection paths.  Each must report and return
+    // false; none may read past an empty Lua stack.  The device hits the
+    // first one for real whenever a game file cannot be opened, and a
+    // scan that rejects everything leaves the menu with zero games.
+    {
+        char name[16] = {0};
+        uint16_t tid = 0;
+        CHECK(!scanner.peekManifest("games/no_such_game.lua", name, sizeof(name), &tid),
+              "missing file rejected");
+        CHECK(!scanner.peekManifest("test/host/fixtures/notagame.lua",
+                                    name, sizeof(name), &tid),
+              "chunk that returns a non-table rejected");
+        CHECK(!scanner.peekManifest("test/host/fixtures/badmanifest.lua",
+                                    name, sizeof(name), &tid),
+              "wrong api version rejected");
+        CHECK(!scanner.loaded(), "rejected peeks leave the scanner unloaded");
+    }
+
     // Deep-test freeforall: realize it again on the same instance.
     if (!shared.load("games/freeforall.lua")) {
         printf("no FFA, aborting\n");
