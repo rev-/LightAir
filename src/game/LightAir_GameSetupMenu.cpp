@@ -178,7 +178,7 @@ MenuResult LightAir_GameSetupMenu::run() {
         _display.clear();
         _display.setColor(true);
         _display.print(0, 0,                              "Welcome to LightAir");
-        _display.print(0, DisplayDefaults::FONT_HEIGHT,    "V 1.0.0");
+        _display.print(0, DisplayDefaults::FONT_HEIGHT, VersionDefs::STR);
         _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, playerLine);
         printLegend("O:Play  X:Settings", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
