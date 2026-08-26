@@ -22,6 +22,7 @@
 #include "../tools/EnlightTestMode.h"
 #include "../tools/GameFileServer.h"
 #include "../nvs_config.h"
+#include "../version.h"
 #include "../totem/TotemRoleIds.h"
 #include <Arduino.h>
 #include <esp_log.h>
