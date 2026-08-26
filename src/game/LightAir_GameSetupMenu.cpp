@@ -167,10 +167,7 @@ LightAir_GameSetupMenu::LightAir_GameSetupMenu(LightAir_GameManager& mgr,
  *   PUBLIC API
  * ========================================================= */
 
-MenuResult LightAir_GameSetupMenu::run() {
-    _isDm = loadIsDm();
-
-    // ---- Home screen ----
+void LightAir_GameSetupMenu::runHomeScreen() {
     while (true) {
         const uint8_t pid = _radio.playerId();
         char playerLine[20];
@@ -191,30 +188,41 @@ MenuResult LightAir_GameSetupMenu::run() {
             _isDm = loadIsDm();   // refresh in case DM was toggled
             continue;
         }
-        if (ev.key == 'A') break;
+        if (ev.key == 'A') return;
     }
+}
 
-    // ---- Branch on DM ----
-    if (!_isDm) return runWaiter();
+MenuResult LightAir_GameSetupMenu::run() {
+    _isDm = loadIsDm();
 
-    // ---- S1: Restart last game? ----
-    bool restart = runRestartPrompt();
-
-    if (!restart) {
-        // ---- S2: Game list ----
-        runGameList();
-    }
-
-    // ---- S4 + S5: Setup → Pre-start (B in pre-start returns here) ----
+    // Home → play → (DM) game choice → setup → pre-start.  Every step that
+    // fails to leave a game selected drops back to Home rather than
+    // continuing: _game must be non-null from S2 onwards.
     while (true) {
-        if (!runSetupMenu()) {
-            // User pressed < to go back to game selection
-            runGameList();
-            continue;
+        // ---- Home screen ----
+        runHomeScreen();
+
+        // ---- Branch on DM ----
+        if (!_isDm) return runWaiter();
+
+        // ---- S1: Restart last game? ----
+        bool restart = runRestartPrompt();
+
+        // ---- S2: Game list ----
+        if (!restart && !runGameList()) continue;   // nothing to play → Home
+
+        // ---- S4 + S5: Setup → Pre-start (B in pre-start returns here) ----
+        bool confirmed = false;
+        while (true) {
+            if (!runSetupMenu()) {
+                // User pressed < to go back to game selection
+                if (!runGameList()) break;          // nothing to play → Home
+                continue;
+            }
+            if (runPreStart() == MenuResult::Confirmed) { confirmed = true; break; }
         }
-        if (runPreStart() == MenuResult::Confirmed) break;
+        if (confirmed) return MenuResult::Confirmed;
     }
-    return MenuResult::Confirmed;
 }
 
 /* =========================================================
@@ -544,15 +552,19 @@ void LightAir_GameSetupMenu::renderGameList(uint8_t sel) {
     _display.flush();
 }
 
-void LightAir_GameSetupMenu::runGameList() {
-    if (_mgr.count() == 0) {
-        // Fallback: no games registered.
-        _game    = &_mgr.game(0);
-        _gameIdx = 0;
-        return;
-    }
-
+bool LightAir_GameSetupMenu::runGameList() {
     resetKeyStates();  // Sync prevState with current reality to prevent carryover
+
+    if (_mgr.count() == 0) {
+        // No games on flash: LittleFS failed to mount at boot, /games is
+        // empty, or every file was rejected by the manifest scan (see the
+        // "GameStore:" lines on the serial log).  Leave _game null and send
+        // the caller back to Home — the setup screens dereference it.
+        showMessage2("No games found", "Add .lua games:",
+                     "Settings>Share", "O:Back");
+        waitForKey();
+        return false;
+    }
 
     uint8_t lastIdx = _mgr.loadLastPlayed();
     uint8_t sel = (lastIdx < _mgr.count()) ? lastIdx : 0;
@@ -583,7 +595,7 @@ void LightAir_GameSetupMenu::runGameList() {
                 _gameIdx = sel;
                 _mgr.saveLastPlayed(sel);
                 initTotemAssignment();
-                return;
+                return true;
             case 'B':
                 // Enter setup.
                 if (!_mgr.load(sel)) {
@@ -596,8 +608,7 @@ void LightAir_GameSetupMenu::runGameList() {
                 _gameIdx = sel;
                 _mgr.saveLastPlayed(sel);
                 initTotemAssignment();
-                runSetupMenu();
-                return;
+                return true;
         }
     }
 }
@@ -607,6 +618,7 @@ void LightAir_GameSetupMenu::runGameList() {
  * ========================================================= */
 
 bool LightAir_GameSetupMenu::runSetupMenu() {
+    if (!_game) return false;   // no game selected — caller returns to Home
     resetKeyStates();  // Sync prevState with current reality to prevent carryover
 
     // Build entry list: always Config + optional Teams + always Totems
@@ -955,6 +967,7 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
  * ========================================================= */
 
 MenuResult LightAir_GameSetupMenu::runPreStart() {
+    if (!_game) return MenuResult::Cancelled;   // no game selected
     resetKeyStates();  // Sync prevState with current reality to prevent carryover
 
     // Generate session token (1–255; 0 is UNSET sentinel, skip it).

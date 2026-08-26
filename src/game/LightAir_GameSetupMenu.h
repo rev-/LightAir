@@ -102,7 +102,7 @@ public:
     // upload new ones to it.  Must be called before run().
     void setShareTool(GameFileServer& t) { _shareTool = &t; }
 
-    // Valid after Confirmed return.
+    // Valid after Confirmed return (which guarantees a selected game).
     const LightAir_Game& selectedGame() const { return *_game; }
 
 private:
@@ -138,6 +138,7 @@ private:
     uint8_t _countdownSecs = GameDefaults::COUNTDOWN_DEFAULT_S;
 
     // ---- Home / Settings ----
+    void runHomeScreen();    // blocks until O:Play; O:Settings handled inline
     void runSettingsMenu();
     void runIdSettings();
     void runShareTool();     // Settings → Share games (reboots on exit)
@@ -149,7 +150,10 @@ private:
 
     // ---- S1 / S2 ----
     bool     runRestartPrompt();            // true → use last game, skip S2–S4
-    void     runGameList();                 // sets _game and _gameIdx
+    // Game picker.  true → _game / _gameIdx now hold the selection; false →
+    // nothing was selected (no games installed) and _game is still null, so
+    // the caller must go back Home instead of entering S4/S5.
+    bool     runGameList();
     void     renderGameList(uint8_t sel);
 
     // ---- S4 ----

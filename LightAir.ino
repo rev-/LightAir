@@ -211,8 +211,12 @@ void _setup() {
 
         // Games are .lua files on LittleFS (seeded from the embedded
         // bundle on first boot); there are no firmware-coded games.
-        if (gameStore.begin())
-            gameStore.registerLuaGames(manager);
+        // Zero registered games is survivable — the menu says so instead
+        // of starting a game — but it is always a fault worth logging.
+        if (!gameStore.begin())
+            Log.errorln("GameStore: LittleFS unavailable — no games installed");
+        else if (gameStore.registerLuaGames(manager) == 0)
+            Log.errorln("GameStore: no playable game files in %s", LuaDefaults::GAMES_DIR);
         LightAir_GameSetupMenu menu(manager, runner,
                                     rawDisplay, input,
                                     InputDefaults::KEYPAD_ID,

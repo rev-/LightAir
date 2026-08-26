@@ -19,7 +19,20 @@ bool LightAir_GameManager::registerGame(const LightAir_Game& game) {
     return true;
 }
 
+// Fallback descriptor handed out for an index that is not registered.
+// Empty and inert: no config vars, no rules, no totem requirements, and
+// winner election disabled — so a caller that ignores count() gets a
+// harmless game instead of dereferencing a null pointer.
+static LightAir_Game makeNoGame() {
+    LightAir_Game g = {};
+    g.name         = "(none)";
+    g.scoringState = 255;   // winner election disabled
+    return g;
+}
+
 const LightAir_Game& LightAir_GameManager::game(uint8_t idx) const {
+    static const LightAir_Game kNoGame = makeNoGame();
+    if (idx >= _count || !_games[idx]) return kNoGame;
     return *_games[idx];
 }
 
