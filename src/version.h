@@ -26,7 +26,7 @@
 // ================================================================
 
 #define LIGHTAIR_VERSION_MAJOR 1
-#define LIGHTAIR_VERSION_MINOR 0
+#define LIGHTAIR_VERSION_MINOR 1
 #define LIGHTAIR_VERSION_PATCH 0
 
 // Two-level expansion: the inner macro applies #, the outer one forces
