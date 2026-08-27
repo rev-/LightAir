@@ -83,6 +83,7 @@ int main() {
         { "games/upkeep.lua",     0x0005 },
         { "games/kingofhill.lua", 0x0006 },
         { "games/virus.lua",      0x0007 },
+        { "games/festasportsasso.lua", 0x0008 },
     };
     static LightAir_LuaGame shared;   // the one loaded-game instance
     static LightAir_LuaGame scanner;  // manifest-scan scratch instance
@@ -105,7 +106,7 @@ int main() {
         CHECK(shared.typeId() == kg.typeId, "typeId matches registry");
     }
     CHECK(LightAir_LuaGame::instanceCount() == 1,
-          "7 sequential loads used one registry slot");
+          "8 sequential loads used one registry slot");
 
     // ---- 1b. Manifest rejection paths.  Each must report and return
     // false; none may read past an empty Lua stack.  The device hits the
@@ -392,6 +393,127 @@ int main() {
         CHECK(*bg.currentState == bg.scoringState, "failed on_begin refuses to play");
         CHECK(fb->faultStats().perSite[(uint8_t)LightAir_LuaGame::FaultSite::Begin] == 1,
               "begin fault counted");
+    }
+
+    // ---- 12. FestaSportSasso: an endless match made of 500 s turns ----
+    // Drives one whole turn on the real binding: hand-over -> BASE start
+    // -> shone -> clock out -> stats screen -> the staff's A+B chord.
+    {
+        bool ok = shared.load("games/festasportsasso.lua");
+        CHECK(ok, "festasportsasso loads");
+        const LightAir_Game& fs = shared.descriptor();
+        // The two structural consequences of a game that never ends.
+        CHECK(fs.scoringState == 255, "no scoring state: score collection never arms");
+        CHECK(fs.gameTimeLeft == nullptr, "no time reported to totems: no self-revert");
+
+        *fs.currentState = fs.initialState;
+        fs.onBegin(disp, radio, &ui, runner);
+        CHECK(*fs.currentState == 0, "turn starts in PRE_START");
+
+        int* counter = slotOf(fs, "counter");
+        int* clock   = slotOf(fs, "time_left");
+        int* fLives  = slotOf(fs, "lives");
+        int* fPoints = slotOf(fs, "points");
+        const char* tally = nullptr;
+        for (uint8_t i = 0; i < fs.monitorCount; i++)
+            if (fs.monitorVars[i].type == VarType::CHARS &&
+                strcmp(fs.monitorVars[i].name, "tally") == 0)
+                tally = fs.monitorVars[i].asChars;
+        CHECK(counter && *counter == 2, "counter = 0 played before + projector digit 2");
+        CHECK(clock && *clock == 500, "turn clock loaded from SubTime");
+        CHECK(tally != nullptr, "tally text slot bound");
+
+        // Rule lookup by (from,to) — the turn's four transitions.
+        const StateRule *start = nullptr, *down = nullptr,
+                        *over = nullptr, *restart = nullptr;
+        for (uint8_t i = 0; i < fs.ruleCount; i++) {
+            const StateRule& r = fs.rules[i];
+            if (r.fromState == 0 && r.toState == 1) start   = &r;
+            if (r.fromState == 1 && r.toState == 2) down    = &r;
+            if (r.fromState == 2 && r.toState == 3) over    = &r;
+            if (r.fromState == 3 && r.toState == 0) restart = &r;
+        }
+        CHECK(start && down && over && restart, "turn transitions present");
+
+        // PRE_START: a lit costs nothing — the visitor is not playing yet.
+        const DirectRadioRule* preLit = nullptr;
+        const DirectRadioRule* preBase = nullptr;
+        for (uint8_t i = 0; i < fs.directRadioRuleCount; i++) {
+            const DirectRadioRule& r = fs.directRadioRules[i];
+            if (r.fromState != 0) continue;
+            if (r.msgType == RadioMsg::MSG_LIT)         preLit  = &r;
+            if (r.msgType == RadioMsg::MSG_BASE_BEACON) preBase = &r;
+        }
+        CHECK(preLit && preBase, "PRE_START handles lit and BASE beacons");
+        RadioPacket p = {};
+        p.senderId = 3; p.msgType = RadioMsg::MSG_LIT;
+        out = GameOutput();
+        if (preLit) preLit->onReceive(p, kNearRssi, disp, out);
+        CHECK(*fLives == 3, "PRE_START: no lives lost");
+        CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payload[0] == 3,
+              "PRE_START: reply sub-type DOWN");
+
+        // A teamless BASE hands the turn over to the visitor.
+        InputReport keys = {};
+        RadioReport nrr = {};
+        CHECK(start && !start->condition(keys, nrr), "no BASE yet: still PRE_START");
+        p = RadioPacket();
+        p.senderId = 200; p.msgType = RadioMsg::MSG_BASE_BEACON;
+        p.payloadLen = 1; p.payload[0] = 0xFF;              // teamless base
+        out = GameOutput();
+        if (preBase) preBase->onReceive(p, /*rssi*/ -80, disp, out);
+        CHECK(out.radio.replyCount == 0, "a base heard from across the field is ignored");
+        CHECK(start && !start->condition(keys, nrr), "distant base does not start a turn");
+        out = GameOutput();
+        if (preBase) preBase->onReceive(p, kNearRssi, disp, out);
+        CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payload[0] == 2,
+              "BASE reply carries slot+1 so it animates");
+        CHECK(start && start->condition(keys, nrr), "BASE respawn starts the turn");
+        out = GameOutput();
+        if (start) start->onTransition(disp, out);
+        *fs.currentState = 1;
+
+        // One confirmed lit on another player, then our own shone.
+        const ReplyRadioRule* shoneReply = nullptr;
+        for (uint8_t i = 0; i < fs.replyRadioRuleCount; i++)
+            if (fs.replyRadioRules[i].eventType == RadioEventType::ReplyReceived)
+                shoneReply = &fs.replyRadioRules[i];
+        CHECK(shoneReply, "lit reply rule present");
+        RadioPacket orig2 = {}; orig2.msgType = RadioMsg::MSG_LIT; orig2.senderId = 2;
+        RadioPacket rep2  = {}; rep2.msgType = RadioMsg::MSG_LIT + 1; rep2.senderId = 4;
+        rep2.payloadLen = 1; rep2.payload[0] = 2;           // SHONE
+        out = GameOutput();
+        if (shoneReply) shoneReply->onReply(rep2, orig2, kNearRssi, disp, out);
+
+        *fLives = 0;
+        CHECK(down && down->condition(keys, nrr), "0 lives sends the visitor down");
+        out = GameOutput();
+        if (down) down->onTransition(disp, out);
+        *fs.currentState = 2;
+        CHECK(fs.winnerVarCount == 2 && *fs.winnerVars[1].value == 1,
+              "shone_times counted");
+
+        // The turn clock runs out while down: stats screen, frozen.
+        *clock = 0;
+        CHECK(over && over->condition(keys, nrr), "clock out ends the turn");
+        out = GameOutput();
+        if (over) over->onTransition(disp, out);
+        *fs.currentState = 3;
+        CHECK(tally && strcmp(tally, "1/1") == 0, "stats screen shows lit/shone");
+
+        // Only the staff's A+B chord starts the next visitor.
+        keys.keyEventCount = 1;
+        keys.keyEvents[0] = { 0, 'A', KeyState::PRESSED };
+        CHECK(restart && !restart->condition(keys, nrr), "A alone does not restart");
+        keys.keyEventCount = 2;
+        keys.keyEvents[1] = { 0, 'B', KeyState::HELD };
+        CHECK(restart && restart->condition(keys, nrr), "A+B restarts the turn");
+        out = GameOutput();
+        if (restart) restart->onTransition(disp, out);
+        *fs.currentState = 0;
+        CHECK(*counter == 12, "counter's first part bumped, projector digit kept");
+        CHECK(*clock == 500 && *fLives == 3 && *fPoints == 0, "turn stats reset");
+        CHECK(*fs.winnerVars[1].value == 0, "shone_times reset with the turn");
     }
 
     printf(failures == 0 ? "\nLUAGAME HOST TESTS PASS\n" : "\n%d FAILURES\n", failures);

@@ -29,6 +29,7 @@ function la.player_short(id) return "P" .. tostring(id) end
 function la.team_short(t) return ({ [0] = "O", [1] = "X" })[t] or "?" end
 function la.totem_for_role(role, i) return i == 0 and 254 or 0 end
 function la.trigger_down(n) return false end
+function la.key_down(k) return false end
 function la.shine() return true end
 function la.shine_lit() return nil end
 function la.shine_ms() return 100 end
@@ -58,7 +59,8 @@ local function mk_pkt(fields)
   return p
 end
 
-local files = { "freeforall", "teams", "flag", "kingofhill", "outflow", "upkeep", "virus" }
+local files = { "freeforall", "teams", "flag", "kingofhill", "outflow", "upkeep",
+                "virus", "festasportsasso" }
 local failures = 0
 local totem_sizes = {}
 
@@ -85,7 +87,11 @@ for _, f in ipairs(files) do
   -- structural checks
   assert(type(game.name) == "string" and #game.name <= 15, f .. ": bad name")
   assert(type(game.type_id) == "number", f .. ": bad type_id")
-  assert(game.scoring_state ~= nil and game.initial_state ~= nil, f .. ": states")
+  assert(game.initial_state ~= nil, f .. ": no initial_state")
+  -- scoring_state is optional: a game with no ending (festasportsasso)
+  -- omits it and the binding then never enters score collection.
+  assert(game.scoring_state == nil or type(game.scoring_state) == "number",
+         f .. ": bad scoring_state")
   for _, m in ipairs(game.monitor) do
     local found, is_text = false, false
     for _, v in ipairs(game.vars) do

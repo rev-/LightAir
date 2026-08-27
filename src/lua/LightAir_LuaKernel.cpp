@@ -196,6 +196,25 @@ static int l_trigger_state(lua_State* L) {
     return 1;
 }
 
+// la.key_down("A") — is that keypad key held down right now?
+// Chord-friendly (the keypad scans every key each poll), which is
+// what an admin-only "A+B" gesture inside a ruleset needs; the
+// report lists only non-OFF keys, so an absent key reads as up.
+static int l_key_down(lua_State* L) {
+    size_t n = 0;
+    const char* s = luaL_checklstring(L, 1, &n);
+    if (n != 1 || !g_luaCtx.inputs) { lua_pushboolean(L, false); return 1; }
+    bool down = false;
+    for (uint8_t i = 0; i < g_luaCtx.inputs->keyEventCount; i++) {
+        const InputReport::KeyEntry& k = g_luaCtx.inputs->keyEvents[i];
+        if (k.key != s[0]) continue;
+        down = (k.state == KeyState::PRESSED || k.state == KeyState::HELD);
+        break;
+    }
+    lua_pushboolean(L, down);
+    return 1;
+}
+
 // ---- Enlight optics ----
 static int l_shine(lua_State* L) {
     lua_pushboolean(L, enlightPtr ? enlightPtr->run() : false);
@@ -382,6 +401,7 @@ void LightAir_LuaGame::registerKernel() {
         { "player_short", l_player_short }, { "team_short", l_team_short },
         { "totem_for_role", l_totem_for_role },
         { "trigger_down", l_trigger_down }, { "trigger_state", l_trigger_state },
+        { "key_down", l_key_down },
         { "shine", l_shine }, { "shine_lit", l_shine_lit },
         { "shine_ms", l_shine_ms }, { "shine_config", l_shine_config },
         { "send", l_send }, { "broadcast", l_broadcast },

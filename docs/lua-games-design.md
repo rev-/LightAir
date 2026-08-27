@@ -4,8 +4,8 @@ Move every game ruleset (FreeForAll, Teams, Flag, KingOfHill, Outflow, Upkeep)
 and the totem behaviours they use out of the firmware and into one `.lua` file
 per game, stored on flash and exchangeable as plain files over HTTP.
 
-All six rulesets are ported under `games/`, plus a new one (Virus) that only
-exists as Lua:
+All six rulesets are ported under `games/`, plus two that only exist as Lua
+(Virus and FestaSportSasso):
 
 | File | Notes |
 |---|---|
@@ -16,6 +16,7 @@ exists as Lua:
 | `games/outflow.lua` | energy-only, passive drain, custom Enlight config |
 | `games/upkeep.lua` | CP ownership, text monitor var ("myPts/enemyPts") |
 | `games/virus.lua` | new game: infection tag; uses a custom message id |
+| `games/festasportsasso.lua` | new game: a King of Hill that never ends — 500 s turns inside one endless match, restarted by an admin A+B chord |
 | `games/lib/std.lua` | pure-Lua standard library (see §"API layering") |
 
 Vocabulary rule: the API and the game files use the project's non-violent
@@ -151,7 +152,7 @@ return {
   name          = "Free for All",
 
   initial_state = S.IN_GAME,
-  scoring_state = S.GAME_END,
+  scoring_state = S.GAME_END,     -- optional; omit for a game with no end
   score_msg     = la.msg.SCORE_COLLECT,
 
   config  = { { id, name, min, max, step, default }, ... },
@@ -193,7 +194,7 @@ keeps the C++ diff small:
 | `teams` | `teamCount` + a firmware-owned `teamMap` |
 | `time_left_var` | `gameTimeLeft` pointer into the slot |
 
-Two spec details the ports rely on:
+The spec details the games rely on:
 
 - **Text vars** — a `vars` entry with `text = true, len = N` claims a char
   slot instead of an int slot; the LCD binds it via the existing
@@ -226,6 +227,16 @@ Two spec details the ports rely on:
   uses `0x16` for infection announcements).  `typeId` + session token already
   isolate games on the wire; the only rule is to stay out of the 0xA0
   infrastructure and 0xF0 totem-protocol blocks.
+- **A match with no end** — `scoring_state` and `time_left_var` are both
+  optional, and leaving them out is what makes an always-on ruleset like
+  FestaSportSasso possible.  No `scoring_state`: the runner never sees its
+  entry condition, so it never collects scores, never floods `MSG_END_GAME`,
+  never announces a winner and never arms its own end-screen A+B reboot —
+  which is what leaves that chord free for the ruleset's own use.  No
+  `time_left_var`: the 0xF1 activation reply reports `0xFFFF` instead of a
+  countdown, so a totem activated at any moment never arms its self-revert
+  watchdog.  A `countdown_in` var still ticks normally, so such a game can
+  run any number of internal timed rounds inside the one endless match.
 
 ### The `la` verb kernel
 
@@ -245,6 +256,8 @@ at load time.
 `la.totem_for_role(role, idx)`, `la.state()`, `la.now()` (millis).
 
 **Inputs (pull)** — `la.trigger_down(n)`, `la.trigger_state(n)`,
+`la.key_down("A")` (one keypad key, chord-friendly: every key is scanned
+each poll, so `la.key_down("A") and la.key_down("B")` is a valid gesture),
 `la.shine()` (start an Enlight burst if allowed → bool),
 `la.shine_lit()` (confirmed lit target → player id or nil),
 `la.shine_ms()` (burst duration for UI sync),
