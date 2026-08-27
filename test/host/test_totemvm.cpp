@@ -107,14 +107,16 @@ int main(int argc, char** argv) {
         vm.onPacket(empty, -40, out);
         CHECK(countAnim(out, TotemUIEvent::Respawn) == 0, "empty reply ignored");
 
-        // Intentional respawn reply (sub-type >= 1) triggers the anim in team colour.
+        // Intentional respawn reply (sub-type >= 1) triggers the anim.  A team
+        // base uses the respawning *player's* colour too — its own team is
+        // already on the idle ring, so the anim identifies who came back.
         out = LightAir_TotemOutput();
         RadioPacket resp = mkPkt(0x57, 3, 1, {2});
         vm.onPacket(resp, -40, out);
         CHECK(countAnim(out, TotemUIEvent::Respawn) == 1, "respawn anim");
         const TotemUICmd* r = lastAnim(out, TotemUIEvent::Respawn);
-        CHECK(r && r->r == TeamColors::kColors[1][0] &&
-                   r->g == TeamColors::kColors[1][1], "respawn in sender team colour");
+        CHECK(r && r->r == PlayerColors::kColors[3][0] &&
+                   r->g == PlayerColors::kColors[3][1], "respawn in sender player colour");
     }
 
     // ================= BASE (teamless) =================

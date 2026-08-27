@@ -6,14 +6,15 @@ the Arduino/ESP-IDF headers; everything else under test is the **real**
 firmware source compiled for the host.
 
 ```
-make -C test/host        # build + run all three suites
+make -C test/host        # build + run all four suites
 ```
 
 | Target | What it proves |
 |---|---|
 | `games` | every `games/*.lua` loads against a stubbed `la` kernel; all handlers, rules and totem tables execute; every TotemVM program encodes within the single-packet budget (`totemvm.lua` is the reference encoder — the executable spec of the wire format) |
 | `totemvm` | the real `LightAir_TotemVM` interpreter, fed reference-encoder programs, reproduces the five standard roles' behaviour (beacons, animations, ownership windows, scoring, cooldowns) and rejects malformed programs |
-| `luagame` | the real `LightAir_LuaGame` binding (with the vendored Lua 5.5 core) loads all seven game files, and a scripted Free-for-All session runs begin / messages / replies / rules / update ticks through the synthesized `LightAir_Game` descriptor exactly as `GameRunner` drives it on-device |
+| `radio` | `LightAir_Radio`'s reply bookkeeping: every reply to a broadcast reaches the sender (a totem beacon is answered by everyone in range, so closing on the first answer loses the rest), a unicast's slot still closes on its one answer, and timeouts fire only where a missing answer means something |
+| `luagame` | the real `LightAir_LuaGame` binding (with the vendored Lua 5.5 core) loads all seven game files, and a scripted Free-for-All session runs begin / messages / replies / rules / update ticks through the synthesized `LightAir_Game` descriptor exactly as `GameRunner` drives it on-device; a Teams section then covers the down-state screen (the respawn bar) and proves `pkt.rssi` reaches the Lua handlers, which is what makes the BASE proximity gate a gate at all |
 
 Requires `g++` and `lua5.4` (`apt install lua5.4`).  The `games` suite
 runs the pure-Lua game files under the system lua5.4 interpreter; only
@@ -24,8 +25,8 @@ runs the pure-Lua game files under the system lua5.4 interpreter; only
 - **games** stops at the first failed `assert` with a Lua traceback;
   the `file:line` points either at `test_games.lua` (the expectation
   that broke) or into the game file that misbehaved.
-- **totemvm** / **luagame** print one `FAIL: <what> (line N)` per
-  failed `CHECK` — the line number is in the corresponding test
+- **totemvm** / **radio** / **luagame** print one `FAIL: <what> (line N)`
+  per failed `CHECK` — the line number is in the corresponding test
   `.cpp` — and exit non-zero at the end of the run.
 - The loud `[E] LuaGame[Faulty] fault … stack traceback …` blocks in
   the `luagame` output are **expected**: the fault-policy tests inject

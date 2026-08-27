@@ -156,7 +156,7 @@ return {
 
   config  = { { id, name, min, max, step, default }, ... },
   vars    = { { id, default, countdown_in = {...}?, text = true?, len = N? }, ... },
-  monitor = { { var, icon, col, row, states = {...} }, ... },
+  monitor = { { var, icon, col, row, states = {...}, bar = true?, width = N? }, ... },
   winners = { { var, dir = "max"|"min" }, ... },
 
   totem_slots   = { { role = "BONUS", min = 0, max = 16, config_var = "..."? }, ... },
@@ -199,6 +199,12 @@ Two spec details the ports rely on:
   slot instead of an int slot; the LCD binds it via the existing
   `bindStringVariable`, and `vars.role = "VIRUS"` copies into the buffer.
   Used by Upkeep ("myPts/enemyPts") and Virus (the role display).
+- **Bar rows** — a `monitor` entry with `bar = true` draws its (integer) var
+  as a filled gauge instead of a number, reading the value as a percentage
+  0–100; `width = N` sets the bar's pixel width inside the 64 px cell
+  (default `LuaDefaults::DEFAULT_BAR_WIDTH`).  The game owns the progress —
+  the display only draws what the var says — so a bar suits anything the
+  ruleset already times, e.g. Teams' respawn wait while the player is down.
 - **`on_score_announce(scores)`** — replaces the C++ `ScoreTable` callback for
   team games.  `scores` is built once when all slots arrive (allocation is
   fine outside the tick path): an array of `{ id, team, vals = {v1, v2} }`
@@ -246,7 +252,12 @@ The `vars` proxy is passed to every handler as the first argument *and*
 installed as a global, so load-time closures (e.g. a friendly-fire predicate)
 can reference it.  `pkt:byte(i)` is 1-based over the payload
 (`pkt:byte(1)` = `payload[0]`); `pkt.len`, `pkt.sender`, `pkt.team`,
-`pkt.role`, `pkt.rssi`, `pkt.msg` are fields.
+`pkt.role`, `pkt.rssi`, `pkt.msg` are fields.  `pkt.rssi` is the
+receive-side signal strength in dBm — measured locally, never carried on the
+wire — and is the only distance information a ruleset has, so every
+proximity gate (BASE respawn, flag pickup, CP presence) is a comparison
+against it.  It is valid in `on_message` handlers and in `on_reply` for the
+`reply` packet; the `orig` packet is our own send and reports 0.
 
 ## API layering — verbs vs. easy games vs. future-proofness
 

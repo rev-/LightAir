@@ -119,19 +119,19 @@ struct LuaGameTramps {
         g_luaCtx.out    = &out;
         if (g_luaCtx.active) g_luaCtx.active->doBehavior();
     }
-    static void message(const RadioPacket& pkt, LightAir_DisplayCtrl& d,
-                        GameOutput& out) {
+    static void message(const RadioPacket& pkt, int8_t rssi,
+                        LightAir_DisplayCtrl& d, GameOutput& out) {
         g_luaCtx.disp = &d;
         g_luaCtx.out  = &out;
-        if (g_luaCtx.active) g_luaCtx.active->doMessage(pkt, out);
+        if (g_luaCtx.active) g_luaCtx.active->doMessage(pkt, rssi, out);
     }
-    static void reply(const RadioPacket& rep, const RadioPacket& orig,
+    static void reply(const RadioPacket& rep, const RadioPacket& orig, int8_t rssi,
                       LightAir_DisplayCtrl& d, GameOutput& out) {
         g_luaCtx.disp = &d;
         g_luaCtx.out  = &out;
-        if (g_luaCtx.active) g_luaCtx.active->doReply(rep, orig);
+        if (g_luaCtx.active) g_luaCtx.active->doReply(rep, orig, rssi);
     }
-    static void timeout(const RadioPacket&, const RadioPacket& orig,
+    static void timeout(const RadioPacket&, const RadioPacket& orig, int8_t,
                         LightAir_DisplayCtrl& d, GameOutput& out) {
         g_luaCtx.disp = &d;
         g_luaCtx.out  = &out;
@@ -309,7 +309,7 @@ void LightAir_LuaGame::doBehavior() {
     _engine.gcStep();                    // collect in the loop's slack window
 }
 
-void LightAir_LuaGame::doMessage(const RadioPacket& pkt, GameOutput& out) {
+void LightAir_LuaGame::doMessage(const RadioPacket& pkt, int8_t rssi, GameOutput& out) {
     uint8_t sub = 0;
     if (_state < LuaDefaults::MAX_STATES && _msgTabRef[_state] != LUA_NOREF) {
         lua_State* L = _engine.L();
@@ -318,7 +318,7 @@ void LightAir_LuaGame::doMessage(const RadioPacket& pkt, GameOutput& out) {
         lua_remove(L, -2);                                 // drop the table
         if (lua_isfunction(L, -1)) {
             pushVarsProxy();
-            pushPkt(0, &pkt, 0);
+            pushPkt(0, &pkt, rssi);
             if (!_engine.pcall(2, 1)) {
                 luaFault(FaultSite::Message);
             } else {
@@ -335,7 +335,8 @@ void LightAir_LuaGame::doMessage(const RadioPacket& pkt, GameOutput& out) {
     out.radio.reply(pkt, sub);
 }
 
-void LightAir_LuaGame::doReply(const RadioPacket& reply, const RadioPacket& orig) {
+void LightAir_LuaGame::doReply(const RadioPacket& reply, const RadioPacket& orig,
+                               int8_t rssi) {
     if (_replyTabRef == LUA_NOREF) return;
     lua_State* L = _engine.L();
     lua_rawgeti(L, LUA_REGISTRYINDEX, _replyTabRef);
@@ -347,8 +348,8 @@ void LightAir_LuaGame::doReply(const RadioPacket& reply, const RadioPacket& orig
     lua_remove(L, -2);
     if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
     pushVarsProxy();
-    pushPkt(1, &reply, 0);
-    pushPkt(2, &orig, 0);
+    pushPkt(1, &reply, rssi);
+    pushPkt(2, &orig, 0);          // our own sent packet: nothing was measured
     if (!_engine.pcall(3, 0)) luaFault(FaultSite::Reply);
     g_luaCtx.pkts[1] = g_luaCtx.pkts[2] = nullptr;
 }
@@ -618,12 +619,30 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
                 lua_pop(L, 1);
             }
             lua_pop(L, 1);                                 // states
-            if (_slots[slot].isText)
+            // bar = true draws the var (a 0-100 percentage) as a filled
+            // progress bar; width is in pixels inside the 64 px cell.
+            lua_getfield(L, e, "bar");
+            bool isBar = lua_toboolean(L, -1);
+            lua_pop(L, 1);
+            int barWidth = (int)fieldInt(L, e, "width",
+                                         LuaDefaults::DEFAULT_BAR_WIDTH, false);
+            // A bar lives inside one grid cell, to the right of the icon;
+            // a wider one would spill into the neighbouring column.
+            const int kMaxBar = DisplayDefaults::CELL_WIDTH - 10;
+            if (isBar && (barWidth < 1 || barWidth > kMaxBar))
+                luaL_error(L, "monitor bar '%s' width must be 1..%d", id, kMaxBar);
+            if (_slots[slot].isText) {
+                if (isBar) luaL_error(L, "monitor var '%s' cannot be a bar", id);
                 _monitorVars[monitorCount] = MonitorVar::Str(
                     _slots[slot].id, _slots[slot].text, mask, (IconType)icon, col, row);
-            else
+            } else if (isBar) {
+                _monitorVars[monitorCount] = MonitorVar::Bar(
+                    _slots[slot].id, &_slots[slot].val, mask, (IconType)icon,
+                    col, row, (uint8_t)barWidth);
+            } else {
                 _monitorVars[monitorCount] = MonitorVar::Int(
                     _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row);
+            }
             monitorCount++;
             lua_pop(L, 1);                                 // entry
         }

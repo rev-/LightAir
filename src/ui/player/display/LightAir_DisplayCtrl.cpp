@@ -92,6 +92,29 @@ bool LightAir_DisplayCtrl::bindCooldownVariable(
     return true;
 }
 
+bool LightAir_DisplayCtrl::bindBarVariable(
+    int* variable,
+    IconType icon,
+    uint8_t x,
+    uint8_t y,
+    uint8_t barWidth
+) {
+    if (y < DisplayDefaults::TRAY_HEIGHT) return false;
+
+    BindingSet& set = _sets[_selectedSet];
+    if (set.locked || set.count >= DisplayDefaults::MAX_BINDINGS) return false;
+
+    VariableBinding& b = set.bindings[set.count++];
+    b.variable  = variable;
+    b.icon      = icon;
+    b.type      = TYPE_BAR;
+    b.x         = x;
+    b.y         = y;
+    b.barWidth  = barWidth;
+    b.lastValue = INT32_MIN;
+    return true;
+}
+
 bool LightAir_DisplayCtrl::bindStringVariable(const char* str, IconType icon, uint8_t x, uint8_t y) {
     if (y < DisplayDefaults::TRAY_HEIGHT) return false;
 
@@ -175,6 +198,8 @@ void LightAir_DisplayCtrl::renderBinding(VariableBinding& b) {
         renderInt(b);
     else if (b.type == TYPE_COOLDOWN)
         renderCooldown(b);
+    else if (b.type == TYPE_BAR)
+        renderBar(b);
     else
         renderString(b);
 }
@@ -223,6 +248,23 @@ void LightAir_DisplayCtrl::renderCooldown(VariableBinding& b) {
 
     drawIcon(ICON_HOURGLASS, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
     drawBar(b.x + 10, b.y + 2, b.barWidth, 6, ratio);
+}
+
+void LightAir_DisplayCtrl::renderBar(VariableBinding& b) {
+    // The variable is a percentage; clamp so a game that overshoots
+    // (or reports a negative remainder) still draws a sane bar.
+    int value = *b.variable;
+    if (value < 0)   value = 0;
+    if (value > 100) value = 100;
+    if (value == b.lastValue) return;
+    b.lastValue = value;
+
+    _display.setColor(false);
+    _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
+    _display.setColor(true);
+
+    drawIcon(b.icon, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
+    drawBar(b.x + 10, b.y + 2, b.barWidth, 6, (float)value / 100.0f);
 }
 
 void LightAir_DisplayCtrl::renderString(VariableBinding& b) {

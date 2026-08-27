@@ -67,6 +67,10 @@ static int* slotOf(const LightAir_Game& g, const char* name) {
     return nullptr;
 }
 
+// Stand-in receive-side signal strength for the packets the scripted
+// session feeds in; well inside every proximity gate in the games.
+static constexpr int8_t kNearRssi = -40;
+
 int main() {
     // ---- 1. Every game file loads and validates — sequentially on ONE
     // shared instance, exactly like the device's lazy realize path
@@ -178,7 +182,7 @@ int main() {
     RadioPacket lit = {};
     lit.senderId = 3; lit.team = 1; lit.msgType = 0x10;
     GameOutput out;
-    litRule->onReceive(lit, disp, out);
+    litRule->onReceive(lit, kNearRssi, disp, out);
     CHECK(*lives == 4, "lit decremented lives");
     CHECK(out.radio.replyCount == 1, "reply queued by handler");
     CHECK(out.radio.replies[0].payloadLen == 1 &&
@@ -186,7 +190,7 @@ int main() {
 
     // Immunity: same sender again within 3s -> IMMUNE (4), no life lost.
     out = GameOutput();
-    litRule->onReceive(lit, disp, out);
+    litRule->onReceive(lit, kNearRssi, disp, out);
     CHECK(*lives == 4, "immunity blocked second lit");
     CHECK(out.radio.replies[0].payload[0] == 4, "reply sub-type IMMUNE");
 
@@ -197,7 +201,7 @@ int main() {
     RadioPacket rep  = {};  rep.msgType = 0x11; rep.senderId = 3;
     rep.payloadLen = 1; rep.payload[0] = 2;                // SHONE
     out = GameOutput();
-    game.replyRadioRules[0].onReply(rep, orig, disp, out);
+    game.replyRadioRules[0].onReply(rep, orig, kNearRssi, disp, out);
     CHECK(*points == 1, "SHONE reply scored a point");
 
     // ---- 6. Behaviour tick: trigger held -> shine, energy drops ----
@@ -251,7 +255,88 @@ int main() {
     const TotemProgramEntry* bonus = game.totemProgram(TotemRoleId_BONUS());
     CHECK(bonus && bonus->len > 0 && bonus->len <= 225, "bonus program provided");
 
-    // ---- 10. Fault policy: log, notify, continue ----
+    // ---- 10. Teams: the down-state screen and the BASE proximity gate ----
+    // Realized on the same shared instance; nothing above needs FFA any more.
+    {
+        CHECK(shared.load("games/teams.lua"), "teams realizes on the shared slot");
+        const LightAir_Game& tg = shared.descriptor();
+
+        // The respawn gauge: a BAR row, live only while the player is down.
+        const MonitorVar* bar = nullptr;
+        for (uint8_t i = 0; i < tg.monitorCount; i++)
+            if (tg.monitorVars[i].type == VarType::BAR) bar = &tg.monitorVars[i];
+        CHECK(bar, "teams has a bar monitor row");
+        CHECK(bar && bar->asInt, "bar row points at an int slot");
+        CHECK(bar && bar->stateMask == (1u << 1), "bar shows only in OUT_GAME");
+        CHECK(bar && bar->barWidth > 0 && bar->barWidth <= 54,
+              "bar width fits the 64px cell");
+
+        *tg.currentState = tg.initialState;
+        tg.onBegin(disp, radio, &ui, runner);
+
+        // Down the player so the OUT_GAME handlers are the live ones.
+        int* tlives = slotOf(tg, "lives");
+        CHECK(tlives, "teams lives slot");
+        *tlives = 0;
+        const StateRule* down = nullptr;
+        for (uint8_t i = 0; i < tg.ruleCount; i++)
+            if (tg.rules[i].fromState == 0 && tg.rules[i].toState == 1 &&
+                tg.rules[i].condition && tg.rules[i].condition(inputs, rr))
+                down = &tg.rules[i];
+        CHECK(down, "teams down rule fires at 0 lives");
+        if (down) {
+            *tg.currentState = 1;
+            out = GameOutput();
+            down->onTransition(disp, out);
+        }
+
+        // The respawn bar tracks the wait: 0% on entry, part-way later.
+        // (slotOf only sees INT rows; the gauge's slot is the BAR row's.)
+        int* pct = bar ? bar->asInt : nullptr;
+        CHECK(pct && *pct == 0, "respawn bar starts empty");
+        const StateBehavior* outTick = nullptr;
+        for (uint8_t i = 0; i < tg.behaviorCount; i++)
+            if (tg.behaviors[i].state == 1) outTick = &tg.behaviors[i];
+        CHECK(outTick && outTick->onUpdate, "OUT_GAME has an update tick");
+        if (outTick && outTick->onUpdate) {
+            g_millis += 15000;                     // half of the 30 s default wait
+            out = GameOutput();
+            outTick->onUpdate(inputs, rr, disp, out);
+            CHECK(pct && *pct >= 45 && *pct <= 55, "respawn bar ~half way at 15s");
+            g_millis += 20000;                     // past the end of the wait
+            out = GameOutput();
+            outTick->onUpdate(inputs, rr, disp, out);
+            CHECK(pct && *pct == 100, "respawn bar full once the wait elapses");
+        }
+
+        // RSSI reaches the Lua handler: the same beacon is accepted up close
+        // and ignored from across the hall.  Until this was plumbed through,
+        // handlers saw a constant 0 dBm and every proximity gate passed.
+        const DirectRadioRule* beacon = nullptr;
+        for (uint8_t i = 0; i < tg.directRadioRuleCount; i++)
+            if (tg.directRadioRules[i].fromState == 1 &&
+                tg.directRadioRules[i].msgType == RadioMsg::MSG_BASE_BEACON)
+                beacon = &tg.directRadioRules[i];
+        CHECK(beacon && beacon->onReceive, "teams handles BASE_BEACON while down");
+
+        RadioPacket bcn = {};
+        bcn.senderId = 254; bcn.msgType = RadioMsg::MSG_BASE_BEACON;
+        bcn.payloadLen = 1; bcn.payload[0] = 0;            // team-O base
+        if (beacon && beacon->onReceive) {
+            out = GameOutput();
+            beacon->onReceive(bcn, /*rssi*/ -80, disp, out);
+            CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payloadLen == 0,
+                  "distant base gets only the empty auto-reply");
+
+            out = GameOutput();
+            beacon->onReceive(bcn, /*rssi*/ -40, disp, out);
+            CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payloadLen == 1 &&
+                  out.radio.replies[0].payload[0] >= 1,
+                  "base in range gets the respawn sub-type that drives its anim");
+        }
+    }
+
+    // ---- 11. Fault policy: log, notify, continue ----
     {
         LightAir_LuaGame* faulty = new LightAir_LuaGame();
         if (!faulty->load("test/host/fixtures/faulty.lua")) {
@@ -284,7 +369,7 @@ int main() {
                 flives = fg.monitorVars[i].asInt;
         CHECK(flives && *flives == 3, "fixture lives start at 3");
         out = GameOutput();
-        fg.directRadioRules[0].onReceive(lit, disp, out);
+        fg.directRadioRules[0].onReceive(lit, kNearRssi, disp, out);
         CHECK(*flives == 2, "partial effect before the error stands");
         CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payloadLen == 0,
               "empty reply still sent after handler fault");

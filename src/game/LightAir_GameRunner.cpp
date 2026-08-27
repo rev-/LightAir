@@ -61,6 +61,8 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
                                + 3 * DisplayDefaults::FONT_HEIGHT;
             if (var.type == VarType::INT)
                 display.bindIntVariable(var.asInt, var.icon, px, py);
+            else if (var.type == VarType::BAR)
+                display.bindBarVariable(var.asInt, var.icon, px, py, var.barWidth);
             else
                 display.bindStringVariable(var.asChars, var.icon, px, py);
         }
@@ -242,7 +244,7 @@ void LightAir_GameRunner::update() {
             if (r.msgType   != ev.packet.msgType)    continue;
             if (r.condition && !r.condition(ev.packet)) continue;
 
-            if (r.onReceive) r.onReceive(ev.packet, *_display, output);
+            if (r.onReceive) r.onReceive(ev.packet, ev.rssi, *_display, output);
             // DYNAMIC_REPLY: the callback queued its own reply with a
             // runtime-decided sub-type (Lua handlers return it).
             if (r.replySubType != DirectRadioRule::DYNAMIC_REPLY)
@@ -270,7 +272,7 @@ void LightAir_GameRunner::update() {
                 (ev.packet.payloadLen == 0 || ev.packet.payload[0] != r.replySubType)) continue;
             if (r.condition && !r.condition(ev.packet, ev.original)) continue;
 
-            if (r.onReply) r.onReply(ev.packet, ev.original, *_display, output);
+            if (r.onReply) r.onReply(ev.packet, ev.original, ev.rssi, *_display, output);
             break;
         }
     }

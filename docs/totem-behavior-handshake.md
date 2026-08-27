@@ -70,7 +70,14 @@ actions*:
    remaining rules of the old state do not run for this event.
 3. **Auto-reply convention kept**: a request matched by a `msg` rule is
    auto-replied (sub-type 0 unless a `reply n` action overrides), so
-   player-side `on_reply` logic keeps today's contract.
+   player-side `on_reply` logic keeps today's contract.  The mirror of that
+   contract matters for a `reply` rule: a totem's broadcast is answered by
+   *every* player in range, most of them with the empty auto-reply, so
+   `LightAir_Radio` keeps a broadcast's reply window open for the whole
+   timeout and delivers all of them.  A rule that only cares about a
+   deliberate answer says so with a guard on the sub-type — as BASE's
+   respawn rule does with `{"p", 1, ">=", 1}` — rather than assuming it
+   will be the first reply back.
 4. **RSSI guard included** (one opcode) even though proximity gating stays
    player-side by doctrine — it enables future proximity-reactive roles
    (trap totems etc.) without a firmware change.

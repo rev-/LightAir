@@ -185,10 +185,17 @@ private:
     RadioConfig _config;
 
     // ---- pending sent messages awaiting replies ----
+    //
+    // A unicast expects exactly one answer, so its entry is released by the
+    // first matching reply.  A broadcast is answered by *every* receiver
+    // (totem beacons in particular), so its entry stays open for the whole
+    // reply window and every reply is delivered; it is then released
+    // silently, without the Timeout event a unanswered unicast raises.
     struct PendingMsg {
         RadioPacket pkt;
         uint32_t    sentAt;
         bool        active;
+        bool        isBroadcast;
     };
     PendingMsg _pending[RADIO_MAX_PENDING];
 
@@ -205,7 +212,7 @@ private:
     // ---- helpers ----
     void buildMac(uint8_t playerId, uint8_t mac[6]) const;
     bool sendRaw(const uint8_t mac[6], const RadioPacket& pkt);
-    bool storePending(const RadioPacket& pkt);
+    bool storePending(const RadioPacket& pkt, bool isBroadcast);
     int  findPending(uint8_t replyMsgType, uint32_t timestamp) const;
     bool isDuplicate(uint8_t senderId, uint32_t timestamp, uint8_t msgType) const;
     void recordDedup(uint8_t senderId, uint32_t timestamp, uint8_t msgType);

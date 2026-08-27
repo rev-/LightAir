@@ -49,15 +49,19 @@ class LightAir_GameRunner;
  * ================================================================ */
 
 // ----------------------------------------------------------------
-// VarType — discriminates the two kinds of monitored variable.
+// VarType — discriminates the kinds of monitored variable.
 //
 //   INT   : int* (32-bit signed on ESP32-S3).
 //           Compatible with DisplayCtrl::bindIntVariable.
 //
 //   CHARS : char* (mutable null-terminated buffer).
 //           Compatible with DisplayCtrl::bindStringVariable.
+//
+//   BAR   : int* holding a 0–100 percentage, drawn as a filled bar
+//           instead of a number (respawn progress, charge level, …).
+//           Compatible with DisplayCtrl::bindBarVariable.
 // ----------------------------------------------------------------
-enum class VarType : uint8_t { INT, CHARS };
+enum class VarType : uint8_t { INT, CHARS, BAR };
 
 // ----------------------------------------------------------------
 // ConfigVar — one variable shown and edited in the pre-game config menu.
@@ -90,11 +94,12 @@ struct ConfigVar {
 struct MonitorVar {
     const char* name;
     VarType     type;
-    int*        asInt;      // non-null when type == INT
+    int*        asInt;      // non-null when type == INT or BAR
     char*       asChars;    // non-null when type == CHARS
     uint32_t    stateMask;  // bit N → display in state N
     IconType    icon;
     uint8_t     col, row;
+    uint8_t     barWidth;   // BAR only: bar width in pixels
 
     // ---- factory helpers ----
 
@@ -109,6 +114,21 @@ struct MonitorVar {
         v.stateMask = stateMask;
         v.icon      = icon;
         v.col       = col;  v.row = row;
+        return v;
+    }
+
+    static MonitorVar Bar(const char* name, int* percent,
+                          uint32_t stateMask, IconType icon,
+                          uint8_t col, uint8_t row, uint8_t barWidth) {
+        MonitorVar v = {};
+        v.name      = name;
+        v.type      = VarType::BAR;
+        v.asInt     = percent;
+        v.asChars   = nullptr;
+        v.stateMask = stateMask;
+        v.icon      = icon;
+        v.col       = col;  v.row = row;
+        v.barWidth  = barWidth;
         return v;
     }
 
@@ -158,6 +178,11 @@ struct MonitorVar {
 //   onReceive    — optional side-effect (modify game state, queue
 //                  UI events, etc.).  Called before the reply is
 //                  queued.  nullptr = no effect.
+//                  `rssi` is the receive-side signal strength in dBm
+//                  for this packet — the only proximity information a
+//                  ruleset has, and the input to every NEAR_* gate.
+//                  It is not part of RadioPacket because it is measured
+//                  locally, not carried on the wire.
 // ----------------------------------------------------------------
 struct DirectRadioRule {
     // Sentinel for replySubType: the rule's onReceive callback queues its
@@ -174,7 +199,7 @@ struct DirectRadioRule {
     uint8_t replySubType; // payload[0] of reply; 0 = no payload
 
     // Called when the rule fires, before the reply is queued.
-    void (*onReceive)(const RadioPacket& pkt,
+    void (*onReceive)(const RadioPacket& pkt, int8_t rssi,
                       LightAir_DisplayCtrl&, GameOutput&); // nullptr = no effect
 };
 
@@ -206,7 +231,9 @@ struct DirectRadioRule {
 //                       nullptr = always matches.
 //
 //   onReply           — side-effect callback.  For ReplyReceived, both
-//                       packets are valid.  For Timeout, `reply` is zeroed.
+//                       packets are valid and `rssi` is the reply's
+//                       receive-side signal strength in dBm.  For Timeout,
+//                       `reply` is zeroed and `rssi` is 0.
 //                       nullptr = no effect.
 // ----------------------------------------------------------------
 struct ReplyRadioRule {
@@ -221,7 +248,7 @@ struct ReplyRadioRule {
 
     // For Timeout events, `reply` is zeroed; only `original` is valid.
     void (*onReply)(const RadioPacket& reply,
-                    const RadioPacket& original,
+                    const RadioPacket& original, int8_t rssi,
                     LightAir_DisplayCtrl&, GameOutput&); // nullptr = no effect
 };
 

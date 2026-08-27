@@ -53,13 +53,14 @@ bool LightAir_Radio::sendRaw(const uint8_t mac[6], const RadioPacket& pkt) {
 }
 
 // ----------------------------------------------------------------
-bool LightAir_Radio::storePending(const RadioPacket& pkt) {
+bool LightAir_Radio::storePending(const RadioPacket& pkt, bool isBroadcast) {
     if (pkt.msgType & 1) return true;  // odd = reply; no ACK expected
     for (int i = 0; i < RADIO_MAX_PENDING; i++) {
         if (!_pending[i].active) {
-            _pending[i].pkt    = pkt;
-            _pending[i].sentAt = millis();
-            _pending[i].active = true;
+            _pending[i].pkt         = pkt;
+            _pending[i].sentAt      = millis();
+            _pending[i].active      = true;
+            _pending[i].isBroadcast = isBroadcast;
             return true;
         }
     }
@@ -120,7 +121,7 @@ bool LightAir_Radio::sendTo(uint8_t targetId, uint8_t msgType,
         memcpy(pkt.payload, payload, payloadLen);
 
     if (!sendRaw(mac, pkt)) return false;
-    storePending(pkt);
+    storePending(pkt, /*isBroadcast*/ false);
     return true;
 }
 
@@ -141,7 +142,7 @@ bool LightAir_Radio::broadcast(uint8_t msgType,
         memcpy(pkt.payload, payload, payloadLen);
 
     if (!sendRaw(kBroadcastMac, pkt)) return false;
-    storePending(pkt);
+    storePending(pkt, /*isBroadcast*/ true);
     return true;
 }
 
@@ -205,7 +206,7 @@ bool LightAir_Radio::broadcastUniversal(uint8_t msgType,
         memcpy(pkt.payload, payload, payloadLen);
 
     if (!sendRaw(kBroadcastMac, pkt)) return false;
-    storePending(pkt);
+    storePending(pkt, /*isBroadcast*/ true);
     return true;
 }
 
@@ -258,12 +259,16 @@ void LightAir_Radio::processPacket(const RadioPacket& pkt, int8_t rssi) {
     if (pkt.msgType & 1) {
         int idx = findPending(pkt.msgType, pkt.timestamp);
         if (idx < 0) return;  // reply for someone else (relayed) — ignore
-        RadioEvent& evt      = _report.events[_report.count++];
-        evt.type             = RadioEventType::ReplyReceived;
-        evt.packet           = pkt;
-        evt.original         = _pending[idx].pkt;
-        evt.rssi             = rssi;
-        _pending[idx].active = false;
+        RadioEvent& evt = _report.events[_report.count++];
+        evt.type        = RadioEventType::ReplyReceived;
+        evt.packet      = pkt;
+        evt.original    = _pending[idx].pkt;
+        evt.rssi        = rssi;
+        // A broadcast keeps its slot until the window closes: every receiver
+        // answers it, and closing on the first reply would swallow all the
+        // others.  That is what hid a respawning player's BASE_BEACON reply
+        // behind the empty auto-replies of everyone still in the game.
+        if (!_pending[idx].isBroadcast) _pending[idx].active = false;
         return;
     }
 
@@ -298,11 +303,15 @@ const RadioReport& LightAir_Radio::poll() {
     for (int i = 0; i < RADIO_MAX_PENDING; i++) {
         if (!_pending[i].active) continue;
         if ((now - _pending[i].sentAt) < _config.replyTimeoutMs) continue;
+        // A broadcast has no single expected responder, so "nobody answered"
+        // is not an event — just close the reply window.
+        if (_pending[i].isBroadcast) { _pending[i].active = false; continue; }
         if (_report.count >= RADIO_MAX_PENDING) break;  // report buffer full
 
         RadioEvent& evt    = _report.events[_report.count++];
         evt.type           = RadioEventType::Timeout;
         evt.original       = _pending[i].pkt;
+        evt.rssi           = 0;            // nothing was received to measure
         _pending[i].active = false;
     }
 

@@ -16,7 +16,8 @@
 // ----------------------------------------------------------------
 enum class TotemUIEvent : uint8_t {
     // ---- One-shot events ----
-    Respawn,       // player respawned here; fast perimeter blink in player colour
+    Respawn,       // player respawned here; one LED runs the whole strip once
+                   //   (~2 s) in the respawning player's colour
     FlagTaken,     // flag picked up from this totem; frantic vertical scan
     FlagReturn,    // flag returned/scored; single fast vertical scan (button untouched)
     Bonus,         // bonus awarded; bright green sparkle burst

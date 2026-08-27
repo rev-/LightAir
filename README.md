@@ -27,8 +27,9 @@ arduino-cli upload --input-file ./build/debug/LightAir.ino.bin -p /dev/ttyACM0 -
 ```
 
 ### Host test suite (no hardware needed)
-The Lua game engine, the game files and the TotemVM are covered by a PC-side
-test suite that needs only `g++` and `lua5.4` — no ESP32 toolchain:
+The Lua game engine, the game files, the radio layer and the TotemVM are
+covered by a PC-side test suite that needs only `g++` and `lua5.4` — no
+ESP32 toolchain:
 
 ```sh
 make -C test/host
@@ -36,7 +37,7 @@ make -C test/host
 
 See `test/host/README.md` for what each suite proves and how to read a
 failure.  Run it before committing changes to `src/lua/`, `src/totem/`,
-`src/game/LightAir_GameRunner.cpp` or `games/`.
+`src/radio/`, `src/game/LightAir_GameRunner.cpp` or `games/`.
 
 ### Unit testing
 In the folder `src/test` there are several `.h` files, each one containing one or more unit test that can be run on the board. To add a test, define a new one using [AUnit](https://github.com/bxparks/AUnit) API, then include the corresponding file in the `src/test/LightAir_test.h` header.

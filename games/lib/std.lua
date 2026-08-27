@@ -82,7 +82,12 @@ end
 --       reply = { taken = R.TAKEN, shone = R.SHONE,
 --                 friend = R.FRIEND, immune = R.IMMUNE },
 --       friendly = function(pkt) ... end,   -- optional; true = reject
+--       on_shone = function(vars, pkt) ... end,  -- optional; last life lost
 --   } } }
+--
+-- on_shone runs on the hit that empties the lives counter, while the
+-- shooter's packet is still in hand — the only moment a game can learn
+-- who put it down (the state rule that follows sees no packet).
 --
 -- The returned reply sub-type drives the sender-side on_reply table.
 -- ----------------------------------------------------------------
@@ -96,6 +101,7 @@ function std.lit_target(cfg)
       la.ui("GotLit")
       return cfg.reply.taken
     end
+    if cfg.on_shone then cfg.on_shone(vars, pkt) end
     return cfg.reply.shone            -- a state rule handles the transition
   end
 end
@@ -200,11 +206,9 @@ end
 -- ---- BASE: respawn base.  team = 0, 1 or "any" (teamless). --------
 -- Beacons its team byte every second; an *intentional* respawn reply
 -- (sub-type >= 1 — empty auto-replies carry no proximity info) plays
--- the respawn animation in the player's colour (teamless base) or
--- the player's team colour.
+-- the respawn animation in the respawning player's colour.
 function std.totems.base(team)
   local tv = (team == "any") and 0xFF or team
-  local respawn_color = (tv == 0xFF) and {"sender_player"} or {"sender_team"}
   return { vm = 1, states = { {
     { enter = true,
       run = { {"anim", "BaseIdle", {"team", tv}, {"rhythm", tv}} } },
@@ -212,7 +216,10 @@ function std.totems.base(team)
       run = { {"bcast", la.msg.BASE_BEACON, tv} } },
     { reply = la.msg.BASE_BEACON,
       when = { {"len", ">=", 1}, {"p", 1, ">=", 1} },
-      run = { {"anim", "Respawn", respawn_color} } },
+      -- Always the *respawning player's* colour, on a team base too: the
+      -- base's own team is already on its idle ring, so what the animation
+      -- has to say is who just came back.
+      run = { {"anim", "Respawn", {"sender_player"}} } },
   } } }
 end
 

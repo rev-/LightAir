@@ -303,6 +303,8 @@ namespace LuaDefaults {
     constexpr uint8_t  MAX_RULES       = 16;     // state-transition rules per game
     constexpr uint8_t  MAX_MSG_RULES   = 24;     // (state, msgType) handler pairs
     constexpr uint8_t  MAX_MONITOR     = 16;     // monitor entries per game
+    constexpr uint8_t  DEFAULT_BAR_WIDTH = 46;   // px for a `bar = true` monitor row
+                                                 // (64 px cell - 10 px icon - margin)
     constexpr uint8_t  MAX_STATES      = 8;      // game states (mask fits uint32)
     constexpr uint8_t  MAX_COUNTDOWNS  = 4;      // vars with countdown_in per game
     constexpr uint8_t  MAX_GAME_NAME   = 16;     // display name buffer (15 + NUL)
@@ -461,14 +463,6 @@ static_assert((1u + GameDefaults::MAX_WINNER_VARS * 4u) * (PlayerDefs::MAX_PLAYE
 // Used by the totem UI layer (LightAir_TotemUICtrl) and any runner
 // that needs to map a team or player ID to a display colour.
 // ---------------------------------------------------------------
-// ---------------------------------------------------------------
-// Team names
-// ---------------------------------------------------------------
-namespace TeamNames {
-    constexpr const char* kTeamO = "O";
-    constexpr const char* kTeamX = "X";
-}
-
 namespace TeamColors {
     // [team][channel]  0=R, 1=G, 2=B  — up to 8 teams supported
     static constexpr uint8_t kCount = 8;
@@ -482,6 +476,27 @@ namespace TeamColors {
         {   0,   0, 255 },  // team 6 : blue
         { 128,   0, 255 },  // team 7 : purple
     };
+}
+
+// ---------------------------------------------------------------
+// Team names
+//
+// One short label per team index, in step with TeamColors::kColors:
+// team 0 is "O", team 1 is "X", and the extra slots keep going through
+// the alphabet.  Everything the player sees — the pre-game roster, the
+// team-assignment submenu, the start summary — names teams through
+// forTeam() so no screen ever falls back to printing a raw index.
+// ---------------------------------------------------------------
+namespace TeamNames {
+    constexpr const char* kTeamO = "O";
+    constexpr const char* kTeamX = "X";
+    constexpr const char* kNames[TeamColors::kCount] = {
+        kTeamO, kTeamX, "C", "D", "E", "F", "G", "H",
+    };
+    // Safe lookup: clamps out-of-range team indices to entry 0.
+    constexpr const char* forTeam(uint8_t team) {
+        return kNames[(team < TeamColors::kCount) ? team : 0];
+    }
 }
 
 // ---------------------------------------------------------------

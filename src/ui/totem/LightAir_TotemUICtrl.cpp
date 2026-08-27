@@ -13,6 +13,7 @@ constexpr uint16_t kMalusIdlePeriod =  400;
 constexpr uint16_t kFlagMissPeriod  = 1500;
 constexpr uint16_t kControlPeriod   = 1500;
 constexpr uint16_t kContestPeriod   =  600;
+constexpr uint16_t kRespawnPeriod   = 2000;   // one full lap of the strip
 
 inline uint16_t periodOr(const TotemUICmd& cmd, uint16_t fallback) {
     return cmd.periodMs ? cmd.periodMs : fallback;
@@ -204,12 +205,17 @@ void LightAir_TotemUICtrl::dispatchOneShot(const TotemUICmd& cmd) {
     // number of cycles to play before the background resumes.
     switch (cmd.event) {
         case TotemUIEvent::Respawn: {
-            // Fast, sharp perimeter blink in the respawned player's colour —
-            // contrasts with Base's smooth idle breathing.  4 blinks @200ms.
-            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Blink, 200,
-                                 0,0,0, StripZone::Perimeter, /*cycles*/ 4 };
+            // One lit LED runs the whole strip once, in the respawning
+            // player's colour: unmistakable across the room, and its single
+            // travelling dot reads nothing like Base's breathing perimeter
+            // idle.  One 2 s lap, matching how long a respawn feels.
+            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Chase,
+                                 kRespawnPeriod,
+                                 0,0,0, StripZone::All, /*cycles*/ 1 };
             _strip.play(a);
-            _rgb.set(cmd.r, cmd.g, cmd.b);
+            // RGB button untouched: it keeps showing whose base this is,
+            // which would otherwise stay stuck on the visitor's colour —
+            // the base only repaints it when its idle state is re-entered.
             break;
         }
 

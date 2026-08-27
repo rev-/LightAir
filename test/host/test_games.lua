@@ -86,10 +86,18 @@ for _, f in ipairs(files) do
   assert(type(game.type_id) == "number", f .. ": bad type_id")
   assert(game.scoring_state ~= nil and game.initial_state ~= nil, f .. ": states")
   for _, m in ipairs(game.monitor) do
-    local found = false
-    for _, v in ipairs(game.vars) do if v.id == m.var then found = true end end
+    local found, is_text = false, false
+    for _, v in ipairs(game.vars) do
+      if v.id == m.var then found = true; is_text = v.text or false end
+    end
     for _, c in ipairs(game.config) do if c.id == m.var then found = true end end
     assert(found, f .. ": monitor var '" .. m.var .. "' not declared")
+    -- A `bar` row is drawn as a filled 0-100 gauge, so it needs a number.
+    if m.bar then
+      assert(not is_text, f .. ": monitor bar '" .. m.var .. "' is a text var")
+      assert(m.width == nil or (m.width > 0 and m.width <= 54),
+             f .. ": monitor bar '" .. m.var .. "' width out of the 64px cell")
+    end
   end
   for _, w in ipairs(game.winners) do
     local found = false
@@ -150,6 +158,72 @@ for _, f in ipairs(files) do
 
   print(string.format("OK   %-12s  %2d config, %2d vars, %2d monitor, %2d rules, %2d checks",
         f, #game.config, #game.vars, #game.monitor, #game.rules, #steps))
+end
+
+-- ================================================================
+-- std library: the two helpers whose gates decide whether a player
+-- respawns at all, checked directly rather than through a game file.
+-- ================================================================
+do
+  local std = la.lib("std")
+
+  local ready
+  local respawn = std.base_respawn{
+    when     = function() return true end,
+    team     = function() return 0 end,
+    teamless = true,
+    rssi     = -57,
+    on_ready = function() ready = true end,
+  }
+
+  local function try(fields)
+    ready = false
+    local sub = respawn({}, mk_pkt(fields))
+    return ready, sub
+  end
+
+  local near_ok, sub = try{ payload = { 0 }, rssi = -40 }
+  if not (near_ok and sub == 1) then
+    failures = failures + 1
+    print("  FAIL std          base_respawn: own base in range must arm respawn")
+  end
+
+  -- The gate that was inert while pkt.rssi always read 0 dBm.
+  if try{ payload = { 0 }, rssi = -80 } then
+    failures = failures + 1
+    print("  FAIL std          base_respawn: out-of-range base must be ignored")
+  end
+
+  local teamless_ok = try{ payload = { 0xFF }, rssi = -40 }
+  if not teamless_ok then
+    failures = failures + 1
+    print("  FAIL std          base_respawn: teamless base must be accepted")
+  end
+
+  if try{ payload = { 1 }, rssi = -40 } then
+    failures = failures + 1
+    print("  FAIL std          base_respawn: enemy base must be ignored")
+  end
+
+  -- lit_target's on_shone fires only on the hit that empties the lives.
+  local shot_by = nil
+  local ladder = std.lit_target{
+    lives = "lives", immunity = std.immunity(0),
+    reply = { taken = 1, shone = 2, friend = 4, immune = 5 },
+    on_shone = function(_, pkt) shot_by = pkt.sender end,
+  }
+  local v = { lives = 2 }
+  ladder(v, mk_pkt{ sender = 7, payload = { 1 } })
+  if shot_by ~= nil then
+    failures = failures + 1
+    print("  FAIL std          lit_target: on_shone fired while lives remained")
+  end
+  ladder(v, mk_pkt{ sender = 7, payload = { 1 } })
+  if shot_by ~= 7 then
+    failures = failures + 1
+    print("  FAIL std          lit_target: on_shone did not name the shooter")
+  end
+  print("OK   std           base_respawn gates, lit_target on_shone")
 end
 
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")

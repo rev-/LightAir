@@ -798,7 +798,7 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
 
         uint8_t pid = (uint8_t)(idx + 1);  // player IDs 1–15
         char buf[20];
-        const char* teamName = (_teams[pid] == 0) ? TeamNames::kTeamO : TeamNames::kTeamX;
+        const char* teamName = TeamNames::forTeam(_teams[pid]);
         snprintf(buf, sizeof(buf), "%s%-3s  T%s",
                  (delta == 0) ? ">" : " ",
                  PlayerDefs::playerShort[pid],
@@ -1081,8 +1081,11 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll) {
         char buf[24];
         if (_game->teamCount > 0) {
             uint8_t off = (uint8_t)snprintf(buf, sizeof(buf), "P:%u(", nPlayers);
-            for (uint8_t t = 0; t < _game->teamCount && off + 4 < sizeof(buf); t++)
-                off += (uint8_t)snprintf(buf + off, sizeof(buf) - off, "%u:%u ", t, counts[t]);
+            // Teams are named ("O", "X", …), never numbered — the index is
+            // an internal id and means nothing to the player holding the DM.
+            for (uint8_t t = 0; t < _game->teamCount && off + 4u < sizeof(buf); t++)
+                off += (uint8_t)snprintf(buf + off, sizeof(buf) - off, "%s:%u ",
+                                         TeamNames::forTeam(t), counts[t]);
             if (off > 0 && buf[off - 1] == ' ') buf[off - 1] = ')';
         } else {
             snprintf(buf, sizeof(buf), "Players: %u", nPlayers);
@@ -1120,7 +1123,8 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll) {
             case TotemRoleId::BASE_X: case TotemRoleId::FLAG_X: team = 1; break;
         }
         if (team != 0xFF)
-            off += snprintf(full + off, sizeof(full) - off, " T%u", team);
+            off += snprintf(full + off, sizeof(full) - off, " T%s",
+                            TeamNames::forTeam(team));
 
         char rowBuf[20];
         snprintf(rowBuf, sizeof(rowBuf), "%s", full);

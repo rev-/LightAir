@@ -179,8 +179,8 @@ private:
     bool doRuleWhen(uint8_t idx);
     void doRuleAct(uint8_t idx);
     void doBehavior();
-    void doMessage(const RadioPacket& pkt, GameOutput& out);
-    void doReply(const RadioPacket& reply, const RadioPacket& orig);
+    void doMessage(const RadioPacket& pkt, int8_t rssi, GameOutput& out);
+    void doReply(const RadioPacket& reply, const RadioPacket& orig, int8_t rssi);
     void doTimeout(const RadioPacket& orig);
     void doScoreAnnounce(const ScoreTable& t);
     void doEnd();

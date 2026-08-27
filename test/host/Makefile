@@ -10,6 +10,9 @@
 #                every TotemVM program with the reference encoder.
 #   totemvm    — feeds reference-encoder programs into the real C++
 #                LightAir_TotemVM and asserts the five roles' behaviour.
+#   radio      — LightAir_Radio's reply bookkeeping: every reply to a
+#                broadcast is delivered, a unicast's slot closes on the
+#                first answer, timeouts fire only where they mean something.
 #   luagame    — loads every real game file through the real
 #                LightAir_LuaGame binding (real Lua 5.5 core) and drives
 #                a scripted FFA session through the synthesized
@@ -42,8 +45,8 @@ FW_SRC := $(ROOT)/src/lua/LightAir_LuaGame.cpp \
 
 PROGS := $(BUILD)/prog_base0.bin
 
-.PHONY: all games totemvm luagame clean
-all: games totemvm luagame
+.PHONY: all games totemvm radio luagame clean
+all: games totemvm radio luagame
 	@echo "ALL HOST TESTS PASS"
 
 games:
@@ -63,6 +66,13 @@ $(BUILD)/test_totemvm: test_totemvm.cpp $(ROOT)/src/totem/LightAir_TotemVM.cpp
 
 totemvm: $(BUILD)/test_totemvm $(PROGS)
 	$(BUILD)/test_totemvm $(BUILD)
+
+$(BUILD)/test_radio: test_radio.cpp $(ROOT)/src/radio/LightAir_Radio.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+radio: $(BUILD)/test_radio
+	$(BUILD)/test_radio
 
 $(BUILD)/test_luagame: test_luagame.cpp $(FW_SRC) $(LUA_OBJ)
 	@mkdir -p $(BUILD)

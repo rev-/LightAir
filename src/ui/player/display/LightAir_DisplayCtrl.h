@@ -41,6 +41,18 @@ public:
         uint8_t barWidth = 16
     );
 
+    // Draws *variable* (a 0–100 percentage) as a filled progress bar
+    // instead of a number.  Unlike bindCooldownVariable the bar is driven
+    // by the variable itself, so the game owns the progress and the
+    // display just draws it.
+    bool bindBarVariable(
+        int* variable,
+        IconType icon,
+        uint8_t x,
+        uint8_t y,
+        uint8_t barWidth = 46
+    );
+
     bool bindStringVariable(
         const char* str,
         IconType icon,
@@ -70,6 +82,7 @@ private:
     enum BindingType {
         TYPE_INT,
         TYPE_COOLDOWN,
+        TYPE_BAR,
         TYPE_STRING
     };
 
@@ -104,6 +117,7 @@ private:
     void renderBinding(VariableBinding& b);
     void renderInt(VariableBinding& b);
     void renderCooldown(VariableBinding& b);
+    void renderBar(VariableBinding& b);
     void renderString(VariableBinding& b);
     void renderTray();
 
