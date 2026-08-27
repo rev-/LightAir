@@ -243,6 +243,17 @@ The spec details the games rely on:
 Registered by the firmware before the chunk runs. Deliberately small; §"API
 layering" below is the policy for what may be added here.
 
+The input verbs read the current READ-phase `InputReport`, so they belong in
+rule conditions and `update` bodies — the two crossings the runner hands it
+to.  Between them they cover the whole report: the registered buttons by
+index, and the keypad both by key (`key_down` / `key_state`) and by
+enumeration (`key_at`), so a ruleset can act on keys it never named and no
+layout knowledge lives on either side of the boundary.  A key the report
+does not list is up: it lists only what is not OFF this poll, and it lists
+every such key, which is what makes a chord like
+`la.key_down("A") and la.key_down("B")` (FestaSportSasso's turn restart)
+work at all.
+
 **Constant tables (data, not calls; pushed once at load)** — `la.msg.*`
 (RadioMsg registry), `la.flag_event.*`, `la.colors.team[0..7]`,
 `la.colors.player[0..16]` (each `{r,g,b}`), `la.rhythm[0..7]`
@@ -256,8 +267,12 @@ at load time.
 `la.totem_for_role(role, idx)`, `la.state()`, `la.now()` (millis).
 
 **Inputs (pull)** — `la.trigger_down(n)`, `la.trigger_state(n)`,
-`la.key_down("A")` (one keypad key, chord-friendly: every key is scanned
-each poll, so `la.key_down("A") and la.key_down("B")` is a valid gesture),
+`la.key_down(key [, keypad])`, `la.key_state(key [, keypad])` (`"off"` /
+`"pressed"` / `"held"` / `"released"` / `"released_held"` — the same ladder
+as a trigger; the two released states appear in exactly one poll, so a rule
+condition catches a key-up edge with no bookkeeping),
+`la.key_at(i)` → `key, state, keypad` (1-based over the keys the report
+holds this poll, nil past the last one),
 `la.shine()` (start an Enlight burst if allowed → bool),
 `la.shine_lit()` (confirmed lit target → player id or nil),
 `la.shine_ms()` (burst duration for UI sync),

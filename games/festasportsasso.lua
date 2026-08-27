@@ -13,9 +13,12 @@
 -- rules — shine the others, hold the CP totems, respawn at a BASE.
 -- A turn walks through four phases:
 --
---   PRE_START  the projector is being handed over: nothing works
---              until a BASE totem respawns its holder, which is how
---              the staff starts the turn.  The turn clock is still.
+--   PRE_START  the welcome screen — "Welcome player <counter>" — while
+--              the projector is handed over.  Nothing else works until
+--              a BASE totem respawns its holder, which is both the
+--              visitor's way in and how the staff starts the turn: the
+--              BASE plays its respawn animation, the King of Hill
+--              screen comes up and the turn clock starts at sub_time.
 --   ACTIVE     the King of Hill sub-game, turn clock running.
 --   DOWN       shone: the clock keeps running, a BASE brings you back
 --              after respawn_secs — exactly as in King of Hill.
@@ -134,9 +137,13 @@ local function sub_end(vars)
   la.ui("EndGame")
 end
 
--- Everything a turn owns, back to zero.  The player counter is NOT
--- reset here: it belongs to the stand, not to the turn.
-local function reset_turn(vars)
+-- Hand-over: every turn stat back to zero and the welcome screen up.
+-- The player counter is NOT reset here — it belongs to the stand, not
+-- to the turn, and it is what the welcome line names the visitor by.
+local function welcome(vars)
+  -- The playing numbers are loaded here as well, so the welcome screen
+  -- shows a fresh turn instead of the last visitor's leftovers; the
+  -- ones that matter are loaded again, for real, in start_turn.
   vars.lives        = vars.start_lives
   vars.energy       = vars.start_energy
   vars.time_left    = vars.sub_time
@@ -151,6 +158,25 @@ local function reset_turn(vars)
   shiner.reset()
   la.clear_tray()
   la.show("Go to a BASE!", 0)
+  la.show(string.format("Welcome player %d", vars.counter), 0)
+end
+
+-- A BASE let the visitor in: this is where the turn actually begins.
+-- The clock is loaded here rather than at hand-over, so a projector
+-- can wait on the welcome screen as long as the queue needs and every
+-- visitor still gets the full sub_time.  The BASE totem answers for
+-- itself: std.base_respawn replied with slot+1, which is what makes it
+-- play its respawn animation in this player's colour.
+local function start_turn(vars)
+  vars.lives     = vars.start_lives
+  vars.energy    = vars.start_energy
+  vars.time_left = vars.sub_time
+  can_respawn = false
+  imm.reset()
+  shiner.reset()
+  la.clear_tray()
+  la.show("Play!", 2000)
+  la.ui("Up")
 end
 
 return {
@@ -226,7 +252,7 @@ return {
     -- units, the visitor count everything above it.  Ids 10-16 fold
     -- onto their last digit, so give a stand's projectors ids 1-9.
     vars.counter = vars.played_before * 10 + (la.my_id() % 10)
-    reset_turn(vars)
+    welcome(vars)
     cp_ids, cp_owner = {}, {}
     for i = 0, 5 do
       local id = la.totem_for_role("CP", i)
@@ -238,8 +264,9 @@ return {
   end,
 
   on_message = {
-    -- Waiting to be handed over: no lives to lose, no CP to hold.
-    -- The only thing that reaches us is the BASE that starts the turn.
+    -- On the welcome screen: no lives to lose, no CP to hold.  The one
+    -- thing that reaches us is the BASE that starts the turn, and the
+    -- slot+1 answer std.base_respawn returns is what lights it up.
     [S.PRE_START] = {
       [MSG.LIT]         = function() return R.DOWN end,
       [MSG.BASE_BEACON] = std.base_respawn{
@@ -290,13 +317,7 @@ return {
   rules = {
     { from = S.PRE_START, to = S.ACTIVE,
       when   = function() return can_respawn end,
-      action = function(vars)
-        can_respawn = false
-        imm.reset()
-        la.clear_tray()
-        la.show("Play!", 2000)
-        la.ui("Up")
-      end },
+      action = start_turn },
 
     { from = S.ACTIVE, to = S.SUB_END,
       when   = function(vars) return vars.time_left <= 0 end,
@@ -327,7 +348,7 @@ return {
         -- One more visitor served: bump the counter's first part and
         -- leave its last digit (this projector) alone.
         vars.counter = vars.counter + 10
-        reset_turn(vars)
+        welcome(vars)
         la.ui("GameStart")
       end },
   },

@@ -29,7 +29,9 @@ function la.player_short(id) return "P" .. tostring(id) end
 function la.team_short(t) return ({ [0] = "O", [1] = "X" })[t] or "?" end
 function la.totem_for_role(role, i) return i == 0 and 254 or 0 end
 function la.trigger_down(n) return false end
-function la.key_down(k) return false end
+function la.key_down(k, pad) return false end
+function la.key_state(k, pad) return "off" end
+function la.key_at(i) return nil end
 function la.shine() return true end
 function la.shine_lit() return nil end
 function la.shine_ms() return 100 end

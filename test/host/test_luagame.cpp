@@ -395,9 +395,70 @@ int main() {
               "begin fault counted");
     }
 
-    // ---- 12. FestaSportSasso: an endless match made of 500 s turns ----
-    // Drives one whole turn on the real binding: hand-over -> BASE start
-    // -> shone -> clock out -> stats screen -> the staff's A+B chord.
+    // ---- 12. The keypad half of the input stack, through a fixture ----
+    // A ruleset can name a key, ask its state, or walk what the report
+    // holds without knowing how the keypad is built.  Nothing here
+    // depends on the six-key matrix this firmware happens to register.
+    {
+        LightAir_LuaGame* kg = new LightAir_LuaGame();
+        CHECK(kg->load("test/host/fixtures/keys.lua"), "keys fixture loads");
+        const LightAir_Game& kd = kg->descriptor();
+        *kd.currentState = kd.initialState;
+        kd.onBegin(disp, radio, &ui, runner);
+
+        int* active = slotOf(kd, "active");
+        int* aDown  = slotOf(kd, "a_down");
+        const char* first   = nullptr;
+        const char* bState  = nullptr;
+        for (uint8_t i = 0; i < kd.monitorCount; i++) {
+            if (kd.monitorVars[i].type != VarType::CHARS) continue;
+            if (!strcmp(kd.monitorVars[i].name, "first"))   first  = kd.monitorVars[i].asChars;
+            if (!strcmp(kd.monitorVars[i].name, "b_state")) bState = kd.monitorVars[i].asChars;
+        }
+        CHECK(active && aDown && first && bState, "fixture slots bound");
+
+        RadioReport krr = {};
+        InputReport keys = {};
+
+        // Nothing pressed: an empty report reads as every key up.
+        out = GameOutput();
+        kd.behaviors[0].onUpdate(keys, krr, disp, out);
+        CHECK(*active == 0 && *aDown == 0, "empty report: no keys");
+        CHECK(!strcmp(bState, "off"), "a key the report omits is off");
+        CHECK(!strcmp(first, "-"), "key_at past the end is nil");
+
+        // Three keys at once, each in a different state — including the
+        // one-poll release edge a ruleset would trigger on.
+        keys.keyEventCount = 3;
+        keys.keyEvents[0] = { 0, 'A', KeyState::HELD };
+        keys.keyEvents[1] = { 0, 'B', KeyState::RELEASED_HELD };
+        keys.keyEvents[2] = { 0, 'V', KeyState::PRESSED };
+        out = GameOutput();
+        kd.behaviors[0].onUpdate(keys, krr, disp, out);
+        CHECK(*active == 3, "every active key is walkable");
+        CHECK(*aDown == 1, "held counts as down");
+        CHECK(!strcmp(first, "A:held"), "key_at reports key and state");
+        CHECK(!strcmp(bState, "released_held"), "the release edge is visible");
+        CHECK(slotOf(kd, "pad") && *slotOf(kd, "pad") == 0, "key_at reports the keypad id");
+
+        // A released key is not down, and a chord needs both halves.
+        keys.keyEventCount = 1;
+        keys.keyEvents[0] = { 0, 'B', KeyState::RELEASED };
+        out = GameOutput();
+        kd.behaviors[0].onUpdate(keys, krr, disp, out);
+        CHECK(*aDown == 0, "a key that stopped being listed is up");
+        CHECK(!kd.rules[0].condition(keys, krr), "no chord: rule holds");
+        keys.keyEventCount = 2;
+        keys.keyEvents[0] = { 0, '<', KeyState::PRESSED };
+        keys.keyEvents[1] = { 0, '>', KeyState::PRESSED };
+        CHECK(kd.rules[0].condition(keys, krr), "both halves down: chord fires");
+        delete kg;
+    }
+
+    // ---- 13. FestaSportSasso: an endless match made of 500 s turns ----
+    // Drives one whole turn on the real binding: welcome screen -> BASE
+    // start -> shone -> clock out -> stats screen -> the staff's A+B
+    // chord, which hands the projector on and welcomes the next visitor.
     {
         bool ok = shared.load("games/festasportsasso.lua");
         CHECK(ok, "festasportsasso loads");
@@ -469,9 +530,14 @@ int main() {
         CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payload[0] == 2,
               "BASE reply carries slot+1 so it animates");
         CHECK(start && start->condition(keys, nrr), "BASE respawn starts the turn");
+        // The clock belongs to the turn, not to the hand-over: however
+        // long the projector waited on the welcome screen, the visitor
+        // starts on a full sub_time.
+        *clock = 7;
         out = GameOutput();
         if (start) start->onTransition(disp, out);
         *fs.currentState = 1;
+        CHECK(*clock == 500 && *fLives == 3, "the BASE starts a full turn");
 
         // One confirmed lit on another player, then our own shone.
         const ReplyRadioRule* shoneReply = nullptr;

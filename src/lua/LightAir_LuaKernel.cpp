@@ -181,6 +181,12 @@ static const InputReport::ButtonEntry* findButton(uint8_t id) {
         if (g_luaCtx.inputs->buttons[i].id == id) return &g_luaCtx.inputs->buttons[i];
     return nullptr;
 }
+// ButtonState and KeyState share this ladder, so both report through
+// the same names (see LightAir_InputTypes.h).
+static const char* const kInputStateNames[] = {
+    "off", "pressed", "held", "released", "released_held",
+};
+
 static int l_trigger_down(lua_State* L) {
     uint8_t id = (uint8_t)(luaL_optinteger(L, 1, 1) - 1);   // la counts from 1
     const InputReport::ButtonEntry* b = findButton(id);
@@ -191,28 +197,63 @@ static int l_trigger_down(lua_State* L) {
 static int l_trigger_state(lua_State* L) {
     uint8_t id = (uint8_t)(luaL_optinteger(L, 1, 1) - 1);
     const InputReport::ButtonEntry* b = findButton(id);
-    static const char* const kNames[] = { "off", "pressed", "held", "released", "released_held" };
-    lua_pushstring(L, b ? kNames[(uint8_t)b->state] : "off");
+    lua_pushstring(L, b ? kInputStateNames[(uint8_t)b->state] : "off");
     return 1;
 }
 
-// la.key_down("A") — is that keypad key held down right now?
-// Chord-friendly (the keypad scans every key each poll), which is
-// what an admin-only "A+B" gesture inside a ruleset needs; the
-// report lists only non-OFF keys, so an absent key reads as up.
-static int l_key_down(lua_State* L) {
-    size_t n = 0;
-    const char* s = luaL_checklstring(L, 1, &n);
-    if (n != 1 || !g_luaCtx.inputs) { lua_pushboolean(L, false); return 1; }
-    bool down = false;
+// ---- keypad ----
+// The whole keypad half of the InputReport, with no layout knowledge on
+// either side: a ruleset names the key its device is labelled with, or
+// walks whatever the report holds with la.key_at().  The report lists
+// only the keys that are not OFF this poll, so a key it does not
+// mention is up — which is also what makes chords work, since every key
+// is scanned on every poll and several can be listed at once.
+static const InputReport::KeyEntry* findKey(const char* key, int keypad) {
+    if (!g_luaCtx.inputs) return nullptr;
     for (uint8_t i = 0; i < g_luaCtx.inputs->keyEventCount; i++) {
         const InputReport::KeyEntry& k = g_luaCtx.inputs->keyEvents[i];
-        if (k.key != s[0]) continue;
-        down = (k.state == KeyState::PRESSED || k.state == KeyState::HELD);
-        break;
+        if (k.key != key[0]) continue;
+        if (keypad >= 0 && k.keypadId != (uint8_t)keypad) continue;
+        return &k;
     }
-    lua_pushboolean(L, down);
+    return nullptr;
+}
+// la.key_down("A" [, keypad]) -> is that key down (pressed or held)?
+static int l_key_down(lua_State* L) {
+    size_t n = 0;
+    const char* key = luaL_checklstring(L, 1, &n);
+    const InputReport::KeyEntry* k = (n == 1)
+        ? findKey(key, (int)luaL_optinteger(L, 2, -1)) : nullptr;
+    lua_pushboolean(L, k && (k->state == KeyState::PRESSED ||
+                             k->state == KeyState::HELD));
     return 1;
+}
+// la.key_state("A" [, keypad]) -> "off"|"pressed"|"held"|"released"|
+// "released_held".  The two released states appear in exactly one poll,
+// so a rule condition sees a key-up edge without any bookkeeping.
+static int l_key_state(lua_State* L) {
+    size_t n = 0;
+    const char* key = luaL_checklstring(L, 1, &n);
+    const InputReport::KeyEntry* k = (n == 1)
+        ? findKey(key, (int)luaL_optinteger(L, 2, -1)) : nullptr;
+    lua_pushstring(L, k ? kInputStateNames[(uint8_t)k->state] : "off");
+    return 1;
+}
+// la.key_at(i) -> key, state, keypad — 1-based over the keys the report
+// holds this poll, nil past the last one.  Lets a ruleset react to keys
+// it never named (and to a keypad this firmware learns about later)
+// without allocating a table per tick.
+static int l_key_at(lua_State* L) {
+    lua_Integer i = luaL_checkinteger(L, 1);
+    if (!g_luaCtx.inputs || i < 1 || i > g_luaCtx.inputs->keyEventCount) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const InputReport::KeyEntry& k = g_luaCtx.inputs->keyEvents[i - 1];
+    lua_pushlstring(L, &k.key, 1);
+    lua_pushstring(L, kInputStateNames[(uint8_t)k.state]);
+    lua_pushinteger(L, k.keypadId);
+    return 3;
 }
 
 // ---- Enlight optics ----
@@ -401,7 +442,8 @@ void LightAir_LuaGame::registerKernel() {
         { "player_short", l_player_short }, { "team_short", l_team_short },
         { "totem_for_role", l_totem_for_role },
         { "trigger_down", l_trigger_down }, { "trigger_state", l_trigger_state },
-        { "key_down", l_key_down },
+        { "key_down", l_key_down }, { "key_state", l_key_state },
+        { "key_at", l_key_at },
         { "shine", l_shine }, { "shine_lit", l_shine_lit },
         { "shine_ms", l_shine_ms }, { "shine_config", l_shine_config },
         { "send", l_send }, { "broadcast", l_broadcast },
