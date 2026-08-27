@@ -27,6 +27,7 @@ local PICKUP_RSSI = -57         -- ~2 m: BONUS/MALUS claim gate
 
 -- ---- Private state ------------------------------------------------
 local pending_shone    = false   -- fatal lit received this cycle
+local shone_by         = nil     -- short name of whoever put us down
 local pending_depleted = false   -- drain zeroed energy this cycle
 local respawn_at       = 0
 local last_drain       = 0
@@ -94,6 +95,7 @@ return {
     vars.depletions   = 0
     vars.energy_spent = 0
     pending_shone    = false
+    shone_by         = nil
     pending_depleted = false
     respawn_at       = 0
     last_drain       = la.now()
@@ -117,8 +119,9 @@ return {
         end
         vars.energy   = 0
         pending_shone = true
-        la.show("Shone by " .. la.player_short(pkt.sender), 2000)
-        la.ui("Down")
+        -- The packet is the only place the shiner's id is in hand; the
+        -- transition below puts it on the tray for the whole wait.
+        shone_by      = la.player_short(pkt.sender)
         return R.SHONE
       end,
     },
@@ -153,6 +156,13 @@ return {
         vars.shone_times = vars.shone_times + 1
         pending_shone = false
         respawn_at    = la.now() + vars.respawn_secs * 1000
+        -- Two persistent lines for the whole wait, credit on top: who put
+        -- us down, and what to do about it.  The "Down" cue is the moment
+        -- feedback, so no transient line competes for the tray.  Here the way back is the clock,
+        -- not a base, so the instruction says so.
+        la.show("Wait to respawn", 0)
+        la.show("LIT by " .. (shone_by or "?"), 0)
+        la.ui("Down")
       end },
     { from = S.IN_GAME, to = S.OUT_GAME,
       when   = function() return pending_depleted end,
@@ -161,7 +171,9 @@ return {
         vars.points     = vars.points - 1
         pending_depleted = false
         respawn_at       = la.now() + vars.respawn_secs * 1000
-        la.show("Drained out!", 2000)
+        -- Nobody to credit: the drain did it.
+        la.show("Wait to respawn", 0)
+        la.show("Drained out!", 0)
         la.ui("Down")
       end },
     { from = S.OUT_GAME, to = S.GAME_END,
@@ -172,6 +184,8 @@ return {
       action = function(vars)
         vars.energy = vars.start_energy
         last_drain  = la.now()
+        shone_by    = nil
+        la.clear_tray()             -- drop the credit and the instruction
         la.show("Back in game!", 1000)
         la.ui("Up")
       end },

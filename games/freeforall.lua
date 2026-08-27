@@ -36,6 +36,7 @@ local PICKUP_RSSI = -57     -- ~2 m: BONUS/MALUS claim gate
 -- Anything that is NOT shown on the LCD, NOT edited in the menu and
 -- NOT part of winner election can live as plain Lua locals.
 local respawn_at         = 0      -- la.now() when respawn fires
+local shone_by           = nil    -- short name of whoever put us down
 local lit_at             = {}     -- [senderId] = la.now() of last accepted lit
 local trigger_was_active = false
 local release_at         = 0
@@ -119,6 +120,7 @@ return {
     vars.energy_spent  = 0
     vars.shone_times   = 0
     respawn_at         = 0
+    shone_by           = nil
     lit_at             = {}
     trigger_was_active = false
     release_at         = 0
@@ -156,6 +158,10 @@ return {
           la.ui("GotLit")
           return R.TAKEN
         end
+        -- Last life: this packet is the only place the shiner's id is in
+        -- hand — the state rule that follows sees no packet — so the
+        -- name for the tray is taken here.
+        shone_by = la.player_short(pkt.sender)
         return R.SHONE          -- state rule below moves us to OUT_GAME
       end,
     },
@@ -196,7 +202,12 @@ return {
       action = function(vars)
         vars.shone_times = vars.shone_times + 1
         respawn_at = la.now() + vars.respawn_secs * 1000
-        la.show("Shone!", 2000)
+        -- Two persistent lines for the whole wait, credit on top: who put
+        -- us down, and what to do about it.  The "Down" cue is the moment
+        -- feedback, so no transient line competes for the tray.  Here the way back is the clock,
+        -- not a base, so the instruction says so.
+        la.show("Wait to respawn", 0)
+        la.show("LIT by " .. (shone_by or "?"), 0)
         la.ui("Down")
       end },
 
@@ -212,7 +223,9 @@ return {
       action = function(vars)
         vars.lives  = vars.start_lives
         vars.energy = vars.start_energy
-        lit_at = {}
+        lit_at   = {}
+        shone_by = nil
+        la.clear_tray()             -- drop the credit and the instruction
         la.show("Back in game!", 1000)
         la.ui("Up")
       end },

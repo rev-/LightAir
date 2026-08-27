@@ -175,9 +175,10 @@ return {
         vars.shone_times = vars.shone_times + 1
         respawn_at  = la.now() + vars.respawn_secs * 1000
         can_respawn = false
-        -- "Shone!" first, so the persistent credit line lands above it and
-        -- stays on the top row for the whole wait.
-        la.show("Shone!", 2000)
+        -- Two persistent lines for the whole wait, credit on top: who put
+        -- us down, and what to do about it.  The "Down" cue is the moment
+        -- feedback, so no transient line competes for the tray.
+        la.show("Go to base", 0)
         la.show("LIT by " .. (shone_by or "?"), 0)
         la.ui("Down")
       end },

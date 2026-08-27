@@ -64,6 +64,7 @@ local cp_ids      = {}          -- [i] = device id of the i-th CP totem
 local cp_owner    = {}          -- [i] = last announced owner slot or CP_NONE
 local respawn_at  = 0
 local can_respawn = false
+local shone_by    = nil         -- short name of whoever put us down
 local imm         = std.immunity(3000)
 local shiner      = std.shiner{ energy = "energy", spent = "energy_spent",
                                 max = "start_energy", recharge = "recharge_secs" }
@@ -100,10 +101,14 @@ local function cp_beacon_handler(send_presence)
 end
 
 local function cp_score_handler(vars, pkt)
-  if not cp_index(pkt.sender) then return end
-  if pkt.len < 1 then return end
+  local idx = cp_index(pkt.sender)
+  if not idx or pkt.len < 1 then return end
   if pkt:byte(1) == my_slot then
     vars.points = vars.points + 1
+    -- A point is what the visitor is here for: cue it and name the hill
+    -- that paid it, instead of letting the score cell tick by unnoticed.
+    la.show(string.format("CP %d +1", idx), 2000)
+    la.ui("ControlGain")
   end
 end
 
@@ -122,12 +127,15 @@ local function counted_lit(ui_event, announce)
 end
 
 -- Shone: out until a BASE picks us up again.  The turn clock keeps
--- running, so a long wait costs the visitor playing time.
+-- running, so a long wait costs the visitor playing time.  Two
+-- persistent lines say who put them down and what to do about it; the
+-- "Down" cue is the moment feedback, so no transient line competes.
 local function go_down(vars)
   vars.shone_times = vars.shone_times + 1
   respawn_at  = la.now() + vars.respawn_secs * 1000
   can_respawn = false
-  la.show("Shone!", 2000)
+  la.show("Go to base", 0)
+  la.show("LIT by " .. (shone_by or "?"), 0)
   la.ui("Down")
 end
 
@@ -159,6 +167,7 @@ local function welcome(vars)
   vars.tally        = "0/0"
   respawn_at  = 0
   can_respawn = false
+  shone_by    = nil
   imm.reset()
   shiner.reset()
   la.clear_tray()
@@ -177,6 +186,7 @@ local function start_turn(vars)
   vars.energy    = vars.start_energy
   vars.time_left = vars.sub_time
   can_respawn = false
+  shone_by    = nil
   imm.reset()
   shiner.reset()
   la.clear_tray()
@@ -288,6 +298,7 @@ return {
       [MSG.LIT] = std.lit_target{
         lives = "lives", immunity = imm,
         reply = { taken = R.TAKEN, shone = R.SHONE, immune = R.IMMUNE },
+        on_shone = function(_, pkt) shone_by = la.player_short(pkt.sender) end,
       },
       [MSG.CP_BEACON] = cp_beacon_handler(true),
       [MSG.CP_SCORE]  = cp_score_handler,
@@ -340,7 +351,9 @@ return {
         vars.lives  = vars.start_lives
         vars.energy = vars.start_energy
         can_respawn = false
+        shone_by    = nil
         imm.reset()
+        la.clear_tray()             -- drop the credit and the instruction
         la.show("Back in game!", 1000)
         la.ui("Up")
       end },

@@ -362,7 +362,7 @@ interpreter in the totem firmware ("TotemVM").  The projector validates the
 table at game load and serializes it into the **single 0xF1 activation
 reply** — activating a totem costs one packet, cold or warm, for standard
 and custom roles alike.  Measured sizes: BASE 41 B, BONUS/MALUS 53 B, FLAG
-91 B, CP 145 B against a 225 B budget.
+91 B, CP 150 B against a 225 B budget.
 
 `games/lib/std.lua` provides factories (`std.totems.base(0)`, `.cp()`, …)
 returning these tables, so most games write one-liners;

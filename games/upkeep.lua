@@ -30,6 +30,7 @@ local cp_ids        = {}
 local cp_owner      = {}
 local respawn_at    = 0
 local can_respawn   = false
+local shone_by      = nil       -- short name of whoever put us down
 local imm           = std.immunity(3000)
 local shiner        = std.shiner{ energy = "energy", spent = "energy_spent",
                                   max = "start_energy", recharge = "recharge_secs" }
@@ -75,13 +76,23 @@ local function cp_beacon_handler(send_presence)
 end
 
 local function cp_score_handler(vars, pkt)
-  if not cp_index(pkt.sender) then return end
-  if pkt.len < 1 then return end
+  local idx = cp_index(pkt.sender)
+  if not idx or pkt.len < 1 then return end
   local team = pkt:byte(1)
   if team == 0 then     team_o_points = team_o_points + 1
   elseif team == 1 then team_x_points = team_x_points + 1
   else return end
   refresh_score_str(vars)
+  if team == my_team then
+    -- The point IS the game here, so it gets its own cue and names the
+    -- hill that paid it: the score cell alone ticks by unnoticed.
+    la.show(string.format("CP %d +1", idx), 2000)
+    la.ui("ControlGain")
+  else
+    -- Worth knowing, not worth a cue every emission period: the tray
+    -- line and the score cell carry the other side's points.
+    la.show(string.format("CP %d -> %s", idx, la.team_short(team)), 2000)
+  end
 end
 
 local function game_over()
@@ -167,6 +178,7 @@ return {
     team_x_points = 0
     respawn_at    = 0
     can_respawn   = false
+    shone_by      = nil
     imm.reset()
     shiner.reset()
     cp_ids, cp_owner = {}, {}
@@ -190,6 +202,7 @@ return {
         lives = "lives", immunity = imm, friendly = friendly,
         reply = { taken = R.TAKEN, shone = R.SHONE,
                   friend = R.FRIEND, immune = R.IMMUNE },
+        on_shone = function(_, pkt) shone_by = la.player_short(pkt.sender) end,
       },
       [MSG.CP_BEACON] = cp_beacon_handler(true),
       [MSG.CP_SCORE]  = cp_score_handler,
@@ -233,7 +246,11 @@ return {
         vars.shone_times = vars.shone_times + 1
         respawn_at  = la.now() + vars.respawn_secs * 1000
         can_respawn = false
-        la.show("Shone!", 2000)
+        -- Two persistent lines for the whole wait, credit on top: who put
+        -- us down, and what to do about it.  The "Down" cue is the moment
+        -- feedback, so no transient line competes for the tray.
+        la.show("Go to base", 0)
+        la.show("LIT by " .. (shone_by or "?"), 0)
         la.ui("Down")
       end },
     { from = S.OUT_GAME, to = S.GAME_END,
@@ -248,7 +265,9 @@ return {
         vars.lives  = vars.start_lives
         vars.energy = vars.start_energy
         can_respawn = false
+        shone_by    = nil
         imm.reset()
+        la.clear_tray()             -- drop the credit and the instruction
         la.show("Back in game!", 1000)
         la.ui("Up")
       end },

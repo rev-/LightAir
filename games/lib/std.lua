@@ -322,6 +322,7 @@ end
 -- beacons the owner.  T0 times unchallenged control (10 s = point).
 function std.totems.cp()
   local MSG = la.msg
+  local POINT_MS = 10000        -- one point per emission period
   return { vm = 1, states = { {
     { enter = true,
       run = { {"set", 0, 0xFF}, {"start", 0},
@@ -330,15 +331,21 @@ function std.totems.cp()
     { reply = MSG.CP_BEACON, cont = true,
       when = { {"len", ">=", 1}, {"p", 1, ">=", 1}, {"p", 1, "<=", 16} },
       run = { {"accbit", {"p", 1}} } },
-    -- single occupant, different from owner: attach, restart countdown
+    -- single occupant, different from owner: attach, pay for the
+    -- capture at once and start the emission period from this moment.
+    -- Taking a hill is the achievement; making the new owner wait a
+    -- whole period before anything happens reads as "nothing happened".
+    -- Actions run in order, so {"r",0} here is the owner just set.
     { every = 2000, cont = true,
       when = { {"acc", "single"}, {"low", "~=", {"r", 0}} },
       run = { {"set", 0, {"low"}}, {"start", 0},
+              {"bcast", MSG.CP_SCORE, {"r", 0}},
               {"anim", "Control", {"args", 0xFE, {"r", 0}}} } },
-    -- same lone owner for 10 s: award a point, restart countdown
+    -- still the same lone owner one period later: another point, and
+    -- the next period starts here.
     { every = 2000, cont = true,
       when = { {"acc", "single"}, {"low", "==", {"r", 0}},
-               {"r", 0, "~=", 0xFF}, {"elapsed", 0, ">=", 10000} },
+               {"r", 0, "~=", 0xFF}, {"elapsed", 0, ">=", POINT_MS} },
       run = { {"bcast", MSG.CP_SCORE, {"r", 0}}, {"start", 0},
               {"anim", "Bonus"} } },
     -- contested: hold the current owner, show the contest

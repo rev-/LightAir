@@ -42,6 +42,7 @@ local enemy_carrier   = nil      -- nil = enemy flag at its totem
 local my_flag_carrier = nil      -- nil = our flag at home
 local respawn_at      = 0
 local can_respawn     = false
+local shone_by        = nil      -- short name of whoever put us down
 local imm             = std.immunity(3000)
 local shiner          = std.shiner{ energy = "energy", spent = "energy_spent",
                                     max = "start_energy", recharge = "recharge_secs" }
@@ -175,6 +176,7 @@ return {
     my_flag_carrier = nil
     respawn_at      = 0
     can_respawn     = false
+    shone_by        = nil
     imm.reset()
     shiner.reset()
     la.ui("GameStart")
@@ -190,6 +192,7 @@ return {
         lives = "lives", immunity = imm, friendly = friendly,
         reply = { taken = R.TAKEN, shone = R.SHONE,
                   friend = R.FRIEND, immune = R.IMMUNE },
+        on_shone = function(_, pkt) shone_by = la.player_short(pkt.sender) end,
       },
 
       [MSG.FLAG_EVENT] = on_flag_event,
@@ -272,7 +275,11 @@ return {
         vars.shone_times = vars.shone_times + 1
         respawn_at  = la.now() + vars.respawn_secs * 1000
         can_respawn = false
-        la.show("Shone!", 2000)
+        -- Two persistent lines for the whole wait, credit on top: who put
+        -- us down, and what to do about it.  The "Down" cue is the moment
+        -- feedback, so no transient line competes for the tray.
+        la.show("Go to base", 0)
+        la.show("LIT by " .. (shone_by or "?"), 0)
         la.ui("Down")
       end },
     { from = S.OUT_GAME, to = S.GAME_END,
@@ -287,7 +294,9 @@ return {
         vars.lives  = vars.start_lives
         vars.energy = vars.start_energy
         can_respawn = false
+        shone_by    = nil
         imm.reset()
+        la.clear_tray()             -- drop the credit and the instruction
         la.show("Back in game!", 1000)
         la.ui("Up")
       end },

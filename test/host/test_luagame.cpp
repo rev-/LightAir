@@ -71,6 +71,7 @@ struct FakeRGB : LightAir_RGB {
 };
 
 uint8_t TotemRoleId_BONUS();
+uint8_t TotemRoleId_CP();
 static int failures = 0;
 #define CHECK(cond, msg) do { \
     if (!(cond)) { printf("  FAIL: %s (line %d)\n", msg, __LINE__); failures++; } \
@@ -422,7 +423,47 @@ int main() {
               "begin fault counted");
     }
 
-    // ---- 12. The keypad half of the input stack, through a fixture ----
+    // ---- 12. A CP point is announced, not just counted ----------------
+    // King of Hill's whole score comes from CP_SCORE broadcasts; before
+    // this the only sign one had landed was a digit changing on the LCD.
+    {
+        runner.clearTotems();
+        runner.addTotem(200, TotemRoleId_CP());        // one hill, id 200
+        CHECK(shared.load("games/kingofhill.lua"), "kingofhill loads");
+        const LightAir_Game& kh = shared.descriptor();
+        *kh.currentState = kh.initialState;
+        kh.onBegin(disp, radio, &ui, runner);
+
+        const DirectRadioRule* score = nullptr;
+        for (uint8_t i = 0; i < kh.directRadioRuleCount; i++)
+            if (kh.directRadioRules[i].fromState == 0 &&
+                kh.directRadioRules[i].msgType == RadioMsg::MSG_CP_SCORE)
+                score = &kh.directRadioRules[i];
+        CHECK(score && score->onReceive, "CP_SCORE handled in play");
+
+        int* khPoints = slotOf(kh, "points");
+        RadioPacket sc = {};
+        sc.senderId = 200; sc.msgType = RadioMsg::MSG_CP_SCORE;
+        sc.payloadLen = 1; sc.payload[0] = (uint8_t)(radio.playerId() - 1);  // our slot
+        out = GameOutput();
+        if (score) score->onReceive(sc, kNearRssi, disp, out);
+        disp.update();
+        CHECK(khPoints && *khPoints == 1, "CP point counted");
+        CHECK(!strcmp(rawDisp.tray[0], "CP 1 +1"), "CP point named its hill on the tray");
+        CHECK(out.ui.count == 1, "CP point rang a cue");
+
+        // Another player's point is silent here: no cue, no line, no score.
+        sc.payload[0] = (uint8_t)(radio.playerId() + 3);
+        out = GameOutput();
+        rawDisp.tray[0][0] = '\0';
+        if (score) score->onReceive(sc, kNearRssi, disp, out);
+        disp.update();
+        CHECK(*khPoints == 1, "someone else's CP point is not ours");
+        CHECK(rawDisp.tray[0][0] == '\0' && out.ui.count == 0, "and says nothing");
+        runner.clearTotems();
+    }
+
+    // ---- 13. The keypad half of the input stack, through a fixture ----
     // A ruleset can name a key, ask its state, or walk what the report
     // holds without knowing how the keypad is built.  Nothing here
     // depends on the six-key matrix this firmware happens to register.
@@ -482,7 +523,7 @@ int main() {
         delete kg;
     }
 
-    // ---- 13. FestaSportSasso: an endless match made of 500 s turns ----
+    // ---- 14. FestaSportSasso: an endless match made of 500 s turns ----
     // Drives one whole turn on the real binding: welcome screen -> BASE
     // start -> shone -> clock out -> stats screen -> the staff's A+B
     // chord, which hands the projector on and welcomes the next visitor.
@@ -616,3 +657,4 @@ int main() {
 // avoid dragging TotemRoleIds include ordering issues into the test
 #include "totem/TotemRoleIds.h"
 uint8_t TotemRoleId_BONUS() { return TotemRoleId::BONUS; }
+uint8_t TotemRoleId_CP()    { return TotemRoleId::CP; }

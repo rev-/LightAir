@@ -283,7 +283,9 @@ int main(int argc, char** argv) {
         const RadioOutMsg* b = lastBcast(out, 0x52);
         CHECK(b && b->payload[0] == 0xFF, "neutral beacon");
 
-        // One team-1 player present (sub-type 2) -> owner = slot 1.
+        // One team-1 player present (sub-type 2) -> owner = slot 1, and
+        // the capture pays a point at once: waiting a whole emission
+        // period before anything happens reads as "nothing happened".
         out = LightAir_TotemOutput();
         RadioPacket pres = mkPkt(0x53, 4, 1, {2});
         vm.onPacket(pres, -40, out);
@@ -292,21 +294,27 @@ int main(int argc, char** argv) {
         CHECK(c && c->r == 0xFE && c->g == 1, "control anim slot form");
         b = lastBcast(out, 0x52);
         CHECK(b && b->payload[0] == 1, "owner beacon slot 1");
+        const RadioOutMsg* cap = lastBcast(out, 0x54);
+        CHECK(countBcast(out, 0x54) == 1, "capture scores immediately");
+        CHECK(cap && cap->payload[0] == 1, "capture point goes to the new owner");
 
-        // Held alone for 10s (presence in every window) -> score for slot 1.
+        // Held alone from there: the period runs from the capture, so the
+        // next point lands 10 s later and no sooner.
         // Fresh output per window: the driver flushes every tick.
-        int scores = 0, scoreSlot = -1;
+        int scores = 0, scoreSlot = -1, firstScoreWindow = -1;
         for (int w = 0; w < 6; w++) {
             out = LightAir_TotemOutput();
             RadioPacket p2 = mkPkt(0x53, 4, 1, {2});
             vm.onPacket(p2, -40, out);
             runFor(vm, 2000, out);
             if (countBcast(out, 0x54)) {
+                if (firstScoreWindow < 0) firstScoreWindow = w;
                 scores += countBcast(out, 0x54);
                 scoreSlot = lastBcast(out, 0x54)->payload[0];
             }
         }
-        CHECK(scores == 1, "cp score broadcast exactly once in 12s");
+        CHECK(scores == 1, "cp score broadcast exactly once in the 12s after");
+        CHECK(firstScoreWindow == 4, "one emission period after the capture");
         CHECK(scoreSlot == 1, "score for slot 1");
 
         // Contested window: both sub-types -> contest anim, owner held.
