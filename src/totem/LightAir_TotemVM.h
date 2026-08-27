@@ -70,7 +70,10 @@ private:
 
     // ---- Runtime state ----
     uint8_t  _state = 0;                       // current state index (0-based)
-    uint8_t  _regs[TotemVMDefs::MAX_REGS] = {0};
+    // Signed and 16-bit wide on purpose: a register has to hold both the
+    // 0xFF "neutral owner" sentinel the CP role uses and a negative RSSI
+    // reading, which 8 bits cannot represent distinctly either way round.
+    int16_t  _regs[TotemVMDefs::MAX_REGS] = {0};
     uint16_t _acc = 0;
     uint32_t _timers[TotemVMDefs::MAX_TIMERS] = {0};
 

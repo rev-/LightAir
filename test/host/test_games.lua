@@ -26,6 +26,7 @@ function la.my_team() return 0 end
 function la.team_of(id) return id % 2 end
 function la.player_count() return 4 end
 function la.player_short(id) return "P" .. tostring(id) end
+function la.team_short(t) return ({ [0] = "O", [1] = "X" })[t] or "?" end
 function la.totem_for_role(role, i) return i == 0 and 254 or 0 end
 function la.trigger_down(n) return false end
 function la.shine() return true end
@@ -99,6 +100,22 @@ for _, f in ipairs(files) do
              f .. ": monitor bar '" .. m.var .. "' width out of the 64px cell")
     end
   end
+  -- A totem that hands itself to whoever answers its beacon needs the
+  -- ruleset to answer deliberately: nothing replies on a game's behalf any
+  -- more, so a declared BONUS/MALUS slot with no handler is unclaimable.
+  do
+    local answered = {}
+    for _, handlers in pairs(game.on_message or {}) do
+      for msg in pairs(handlers) do answered[msg] = true end
+    end
+    for _, slot in ipairs(game.totem_slots or {}) do
+      local beacon = ({ BONUS = la.msg.BONUS_BEACON,
+                        MALUS = la.msg.MALUS_BEACON })[slot.role]
+      assert(beacon == nil or answered[beacon],
+             f .. ": declares a " .. slot.role .. " totem but never answers its beacon")
+    end
+  end
+
   for _, w in ipairs(game.winners) do
     local found = false
     for _, v in ipairs(game.vars) do if v.id == w.var then found = true end end
@@ -205,6 +222,32 @@ do
     print("  FAIL std          base_respawn: enemy base must be ignored")
   end
 
+  -- The gate belongs to the ruleset: the library refuses to invent a range.
+  if pcall(std.base_respawn, { team = function() return 0 end,
+                               on_ready = function() end }) then
+    failures = failures + 1
+    print("  FAIL std          base_respawn accepted a missing rssi gate")
+  end
+  if pcall(std.pickup_claim, {}) then
+    failures = failures + 1
+    print("  FAIL std          pickup_claim accepted a missing rssi gate")
+  end
+
+  -- pickup_claim answers only from inside its gate, and only a ready totem.
+  local claim = std.pickup_claim{ rssi = -57 }
+  if claim({}, mk_pkt{ payload = { 0 }, rssi = -80 }) ~= nil then
+    failures = failures + 1
+    print("  FAIL std          pickup_claim answered an out-of-range totem")
+  end
+  if claim({}, mk_pkt{ payload = { 1 }, rssi = -40 }) ~= nil then
+    failures = failures + 1
+    print("  FAIL std          pickup_claim answered a totem on cooldown")
+  end
+  if claim({}, mk_pkt{ payload = { 0 }, rssi = -40 }) ~= la.my_id() then
+    failures = failures + 1
+    print("  FAIL std          pickup_claim did not claim in range")
+  end
+
   -- lit_target's on_shone fires only on the hit that empties the lives.
   local shot_by = nil
   local ladder = std.lit_target{
@@ -223,7 +266,7 @@ do
     failures = failures + 1
     print("  FAIL std          lit_target: on_shone did not name the shooter")
   end
-  print("OK   std           base_respawn gates, lit_target on_shone")
+  print("OK   std           proximity gates, pickup claim, lit_target on_shone")
 end
 
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")

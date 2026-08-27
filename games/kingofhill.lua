@@ -19,6 +19,7 @@ local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
 
 local NEAR_CP_RSSI   = -65      -- ~3 m: CP presence gate
 local NEAR_BASE_RSSI = -57      -- ~2 m: BASE respawn gate
+local PICKUP_RSSI    = -57      -- ~2 m: BONUS/MALUS claim gate
 local CP_NONE        = 0xFF
 
 -- ---- Private state ------------------------------------------------
@@ -151,6 +152,10 @@ return {
 
   on_message = {
     [S.IN_GAME] = {
+      -- A pickup totem gives itself to whoever answers, so only answer
+      -- from arm's length: the claim has to mean "I am standing at it".
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
       [MSG.LIT] = std.lit_target{
         lives = "lives", immunity = imm,
         reply = { taken = R.TAKEN, shone = R.SHONE, immune = R.IMMUNE },

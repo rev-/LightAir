@@ -49,7 +49,7 @@ class LightAir_GameRunner;
  * ================================================================ */
 
 // ----------------------------------------------------------------
-// VarType — discriminates the kinds of monitored variable.
+// VarType — discriminates the two kinds of monitored variable.
 //
 //   INT   : int* (32-bit signed on ESP32-S3).
 //           Compatible with DisplayCtrl::bindIntVariable.
@@ -57,11 +57,12 @@ class LightAir_GameRunner;
 //   CHARS : char* (mutable null-terminated buffer).
 //           Compatible with DisplayCtrl::bindStringVariable.
 //
-//   BAR   : int* holding a 0–100 percentage, drawn as a filled bar
-//           instead of a number (respawn progress, charge level, …).
-//           Compatible with DisplayCtrl::bindBarVariable.
+// DisplayCtrl also offers bindBarVariable (a value that turns into a
+// filling bar at a trigger value — energy during recharge, the respawn
+// wait).  No descriptor row reaches it yet: that binding is driven by the
+// projector object, not by a monitor row, and is wired up with it.
 // ----------------------------------------------------------------
-enum class VarType : uint8_t { INT, CHARS, BAR };
+enum class VarType : uint8_t { INT, CHARS };
 
 // ----------------------------------------------------------------
 // ConfigVar — one variable shown and edited in the pre-game config menu.
@@ -94,12 +95,11 @@ struct ConfigVar {
 struct MonitorVar {
     const char* name;
     VarType     type;
-    int*        asInt;      // non-null when type == INT or BAR
+    int*        asInt;      // non-null when type == INT
     char*       asChars;    // non-null when type == CHARS
     uint32_t    stateMask;  // bit N → display in state N
     IconType    icon;
     uint8_t     col, row;
-    uint8_t     barWidth;   // BAR only: bar width in pixels
 
     // ---- factory helpers ----
 
@@ -114,21 +114,6 @@ struct MonitorVar {
         v.stateMask = stateMask;
         v.icon      = icon;
         v.col       = col;  v.row = row;
-        return v;
-    }
-
-    static MonitorVar Bar(const char* name, int* percent,
-                          uint32_t stateMask, IconType icon,
-                          uint8_t col, uint8_t row, uint8_t barWidth) {
-        MonitorVar v = {};
-        v.name      = name;
-        v.type      = VarType::BAR;
-        v.asInt     = percent;
-        v.asChars   = nullptr;
-        v.stateMask = stateMask;
-        v.icon      = icon;
-        v.col       = col;  v.row = row;
-        v.barWidth  = barWidth;
         return v;
     }
 

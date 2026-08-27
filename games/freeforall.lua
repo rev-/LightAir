@@ -30,6 +30,7 @@ local MSG = la.msg          -- MSG.LIT, MSG.SCORE_COLLECT, MSG.BONUS_BEACON, ...
 local R = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
 
 local IMMUNITY_MS = 3000
+local PICKUP_RSSI = -57     -- ~2 m: BONUS/MALUS claim gate
 
 -- ---- Private game state -----------------------------------------
 -- Anything that is NOT shown on the LCD, NOT edited in the menu and
@@ -125,11 +126,25 @@ return {
   end,
 
   -- ---- Incoming requests, per state (DirectRadioRules) --------------
-  -- Handler returns the reply sub-type (payload[0] of the auto-reply);
-  -- nil/0 = plain empty reply.  Unhandled messages still get the
-  -- standard empty reply from the runner, exactly as today.
+  -- The handler's return value IS the reply: an integer answers with that
+  -- sub-type, returning nothing answers nothing at all.  Beacons a game
+  -- ignores stay unanswered, so a totem that waits for a deliberate answer
+  -- (BASE, BONUS, MALUS) hears only the players that acted on it.
   on_message = {
     [S.IN_GAME] = {
+      -- A pickup totem gives itself to whoever answers, so only answer from
+      -- arm's length.  std.pickup_claim does exactly this; spelled out here
+      -- to stay in this file's style.
+      [MSG.BONUS_BEACON] = function(vars, pkt)
+        if pkt.len < 1 or pkt:byte(1) ~= 0 then return end   -- 0 = ready
+        if pkt.rssi < PICKUP_RSSI then return end
+        return la.my_id()
+      end,
+      [MSG.MALUS_BEACON] = function(vars, pkt)
+        if pkt.len < 1 or pkt:byte(1) ~= 0 then return end
+        if pkt.rssi < PICKUP_RSSI then return end
+        return la.my_id()
+      end,
       [MSG.LIT] = function(vars, pkt)
         local t = lit_at[pkt.sender]
         if t and la.now() - t < IMMUNITY_MS then

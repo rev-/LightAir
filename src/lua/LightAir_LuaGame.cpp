@@ -310,7 +310,8 @@ void LightAir_LuaGame::doBehavior() {
 }
 
 void LightAir_LuaGame::doMessage(const RadioPacket& pkt, int8_t rssi, GameOutput& out) {
-    uint8_t sub = 0;
+    uint8_t sub     = 0;
+    bool    answers = false;
     if (_state < LuaDefaults::MAX_STATES && _msgTabRef[_state] != LUA_NOREF) {
         lua_State* L = _engine.L();
         lua_rawgeti(L, LUA_REGISTRYINDEX, _msgTabRef[_state]);
@@ -322,7 +323,10 @@ void LightAir_LuaGame::doMessage(const RadioPacket& pkt, int8_t rssi, GameOutput
             if (!_engine.pcall(2, 1)) {
                 luaFault(FaultSite::Message);
             } else {
-                if (lua_isinteger(L, -1)) sub = (uint8_t)lua_tointeger(L, -1);
+                if (lua_isinteger(L, -1)) {
+                    sub     = (uint8_t)lua_tointeger(L, -1);
+                    answers = true;
+                }
                 lua_pop(L, 1);
             }
             g_luaCtx.pkts[0] = nullptr;
@@ -330,9 +334,12 @@ void LightAir_LuaGame::doMessage(const RadioPacket& pkt, int8_t rssi, GameOutput
             lua_pop(L, 1);                                 // non-function entry
         }
     }
-    // The synthesized rule uses DYNAMIC_REPLY, so the runner skips its
-    // auto-reply; sending it here preserves the wire contract.
-    out.radio.reply(pkt, sub);
+    // The handler's return value IS the reply: an integer answers with that
+    // sub-type, no return answers nothing.  A handler that only observes a
+    // beacon (tracking a CP owner, ignoring an out-of-range base) stays
+    // silent, so a totem waiting on a deliberate answer hears only the
+    // players that actually acted on it.
+    if (answers) out.radio.reply(pkt, sub);
 }
 
 void LightAir_LuaGame::doReply(const RadioPacket& reply, const RadioPacket& orig,
@@ -619,30 +626,12 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
                 lua_pop(L, 1);
             }
             lua_pop(L, 1);                                 // states
-            // bar = true draws the var (a 0-100 percentage) as a filled
-            // progress bar; width is in pixels inside the 64 px cell.
-            lua_getfield(L, e, "bar");
-            bool isBar = lua_toboolean(L, -1);
-            lua_pop(L, 1);
-            int barWidth = (int)fieldInt(L, e, "width",
-                                         LuaDefaults::DEFAULT_BAR_WIDTH, false);
-            // A bar lives inside one grid cell, to the right of the icon;
-            // a wider one would spill into the neighbouring column.
-            const int kMaxBar = DisplayDefaults::CELL_WIDTH - 10;
-            if (isBar && (barWidth < 1 || barWidth > kMaxBar))
-                luaL_error(L, "monitor bar '%s' width must be 1..%d", id, kMaxBar);
-            if (_slots[slot].isText) {
-                if (isBar) luaL_error(L, "monitor var '%s' cannot be a bar", id);
+            if (_slots[slot].isText)
                 _monitorVars[monitorCount] = MonitorVar::Str(
                     _slots[slot].id, _slots[slot].text, mask, (IconType)icon, col, row);
-            } else if (isBar) {
-                _monitorVars[monitorCount] = MonitorVar::Bar(
-                    _slots[slot].id, &_slots[slot].val, mask, (IconType)icon,
-                    col, row, (uint8_t)barWidth);
-            } else {
+            else
                 _monitorVars[monitorCount] = MonitorVar::Int(
                     _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row);
-            }
             monitorCount++;
             lua_pop(L, 1);                                 // entry
         }

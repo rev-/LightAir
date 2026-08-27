@@ -26,7 +26,7 @@
 namespace enc {
     constexpr uint8_t T_ENTER = 0, T_EVERY = 1, T_MSG = 2, T_REPLY = 3;
     constexpr uint8_t V_IMM8 = 0, V_IMM16 = 1, V_REG = 2, V_PAYLOAD = 3,
-                      V_ACCLOW = 4, V_SENDER = 5, V_SENDERTEAM = 6;
+                      V_ACCLOW = 4, V_SENDER = 5, V_SENDERTEAM = 6, V_RSSI = 7;
     constexpr uint8_t G_PAYLOAD = 1, G_LEN = 2, G_REG = 3, G_ACCCLASS = 4,
                       G_LOW = 5, G_ELAPSED = 6, G_RSSI = 7;
     constexpr uint8_t A_GOTO = 1, A_SET = 2, A_ACCBIT = 3, A_ACCCLR = 4,
@@ -116,6 +116,11 @@ static void encValue(ProgWriter& w, int idx) {
         w.put(enc::V_SENDER); lua_pop(L, 1);
     } else if (strcmp(tag, "team") == 0) {
         w.put(enc::V_SENDERTEAM); lua_pop(L, 1);
+    } else if (strcmp(tag, "rssi") == 0) {
+        // Value form {"rssi"} — the signal strength of the packet in hand,
+        // storable in a register.  Distinct from the {"rssi", op, dbm}
+        // *guard*, which only tests it against a literal.
+        w.put(enc::V_RSSI); lua_pop(L, 1);
     } else if (strcmp(tag, "cfg") == 0) {
         // Resolved at reply time: emit an imm16 (deciseconds) patch site.
         w.put(enc::V_IMM16);

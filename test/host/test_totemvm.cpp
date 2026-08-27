@@ -181,6 +181,48 @@ int main(int argc, char** argv) {
         CHECK(beacons >= 1, "beacons resumed");
     }
 
+    // ========= RSSI value operand + signed registers =========
+    {
+        printf("rssi/registers:\n");
+        LightAir_TotemVM vm;
+        auto prog = readFile(dir + "/prog_rssi.bin");
+        CHECK(vm.load(prog.data(), prog.size()), "load rssi probe");
+        LightAir_TotemOutput out;
+        vm.onActivate(kAct, out);
+
+        // Latch a far reading into R0 and a near one into R1, then ask which
+        // was closer.  Nothing here is representable in a uint8_t register.
+        RadioPacket toR0 = mkPkt(0x56, 3, 0, {1});
+        RadioPacket toR1 = mkPkt(0x56, 4, 0, {2});
+        RadioPacket ask  = mkPkt(0x56, 5, 0, {3});
+
+        out = LightAir_TotemOutput();
+        vm.onPacket(toR0, -80, out);          // R0 = -80 (far)
+        vm.onPacket(toR1, -40, out);          // R1 = -40 (near)
+        vm.onPacket(ask,  -50, out);
+        CHECK(countAnim(out, TotemUIEvent::Bonus) == 1,
+              "stronger RSSI in R1 compares greater than R0");
+
+        // Reverse it: the near reading now lands in R0, so R1 > R0 is false.
+        out = LightAir_TotemOutput();
+        vm.onActivate(kAct, out);             // re-enter: R0 = R1 = 0
+        out = LightAir_TotemOutput();
+        vm.onPacket(toR0, -40, out);          // R0 = -40 (near)
+        vm.onPacket(toR1, -80, out);          // R1 = -80 (far)
+        vm.onPacket(ask,  -50, out);
+        CHECK(countAnim(out, TotemUIEvent::Bonus) == 0,
+              "weaker RSSI in R1 does not compare greater");
+
+        // The part 8-bit registers cannot do: keep the sign.  Truncated to
+        // uint8_t, -80 reads as 176 and this rule never fires.
+        RadioPacket isNeg = mkPkt(0x56, 6, 0, {4});
+        out = LightAir_TotemOutput();
+        vm.onPacket(toR0, -80, out);
+        vm.onPacket(isNeg, -50, out);
+        CHECK(countAnim(out, TotemUIEvent::Malus) == 1,
+              "a stored RSSI keeps its sign in an int16 register");
+    }
+
     // ================= FLAG (team 0) =================
     {
         printf("FLAG(0):\n");

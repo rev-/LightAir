@@ -11,13 +11,15 @@
 // just happened".  The concrete (zone, effect, timing) binding for each
 // event lives in LightAir_TotemUICtrl.
 //
-// One-shot events play once then return to the background.
+// One-shot events play once then return to the background.  Several in the
+// same tick queue up and play in order (see LightAir_LEDStrip::MAX_ONESHOTS)
+// rather than overwriting one another.
 // Background states loop until replaced by another loop() call.
 // ----------------------------------------------------------------
 enum class TotemUIEvent : uint8_t {
     // ---- One-shot events ----
     Respawn,       // player respawned here; one LED runs the whole strip once
-                   //   (~2 s) in the respawning player's colour
+                   //   (~1 s) in the respawning player's colour
     FlagTaken,     // flag picked up from this totem; frantic vertical scan
     FlagReturn,    // flag returned/scored; single fast vertical scan (button untouched)
     Bonus,         // bonus awarded; bright green sparkle burst

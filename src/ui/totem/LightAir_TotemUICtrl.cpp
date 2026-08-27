@@ -13,7 +13,7 @@ constexpr uint16_t kMalusIdlePeriod =  400;
 constexpr uint16_t kFlagMissPeriod  = 1500;
 constexpr uint16_t kControlPeriod   = 1500;
 constexpr uint16_t kContestPeriod   =  600;
-constexpr uint16_t kRespawnPeriod   = 2000;   // one full lap of the strip
+constexpr uint16_t kRespawnPeriod   = 1000;   // one full lap of the strip
 
 inline uint16_t periodOr(const TotemUICmd& cmd, uint16_t fallback) {
     return cmd.periodMs ? cmd.periodMs : fallback;
@@ -208,7 +208,8 @@ void LightAir_TotemUICtrl::dispatchOneShot(const TotemUICmd& cmd) {
             // One lit LED runs the whole strip once, in the respawning
             // player's colour: unmistakable across the room, and its single
             // travelling dot reads nothing like Base's breathing perimeter
-            // idle.  One 2 s lap, matching how long a respawn feels.
+            // idle.  One 1 s lap — short enough that two players respawning
+            // together are both shown without the base lagging behind them.
             StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Chase,
                                  kRespawnPeriod,
                                  0,0,0, StripZone::All, /*cycles*/ 1 };

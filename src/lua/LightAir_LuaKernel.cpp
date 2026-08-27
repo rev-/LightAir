@@ -153,6 +153,14 @@ static int l_player_short(lua_State* L) {
     lua_pushstring(L, PlayerDefs::playerShort[id]);
     return 1;
 }
+// Team label ("O", "X", …) from the one table in config.h, so a game file
+// never spells the names out for itself.  Out-of-range clamps to team 0.
+static int l_team_short(lua_State* L) {
+    lua_Integer t = luaL_checkinteger(L, 1);
+    if (t < 0 || t >= TeamColors::kCount) t = 0;
+    lua_pushstring(L, TeamNames::forTeam((uint8_t)t));
+    return 1;
+}
 static int l_totem_for_role(lua_State* L) {
     int roleId;
     if (lua_type(L, 1) == LUA_TSTRING) {
@@ -371,7 +379,8 @@ void LightAir_LuaGame::registerKernel() {
     static const Verb kVerbs[] = {
         { "now", l_now }, { "my_id", l_my_id }, { "my_team", l_my_team },
         { "team_of", l_team_of }, { "player_count", l_player_count },
-        { "player_short", l_player_short }, { "totem_for_role", l_totem_for_role },
+        { "player_short", l_player_short }, { "team_short", l_team_short },
+        { "totem_for_role", l_totem_for_role },
         { "trigger_down", l_trigger_down }, { "trigger_state", l_trigger_state },
         { "shine", l_shine }, { "shine_lit", l_shine_lit },
         { "shine_ms", l_shine_ms }, { "shine_config", l_shine_config },

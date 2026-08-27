@@ -70,18 +70,24 @@ actions*:
    remaining rules of the old state do not run for this event.
 3. **Auto-reply convention kept**: a request matched by a `msg` rule is
    auto-replied (sub-type 0 unless a `reply n` action overrides), so
-   player-side `on_reply` logic keeps today's contract.  The mirror of that
-   contract matters for a `reply` rule: a totem's broadcast is answered by
-   *every* player in range, most of them with the empty auto-reply, so
-   `LightAir_Radio` keeps a broadcast's reply window open for the whole
-   timeout and delivers all of them.  A rule that only cares about a
-   deliberate answer says so with a guard on the sub-type — as BASE's
-   respawn rule does with `{"p", 1, ">=", 1}` — rather than assuming it
-   will be the first reply back.
-4. **RSSI guard included** (one opcode) even though proximity gating stays
-   player-side by doctrine — it enables future proximity-reactive roles
-   (trap totems etc.) without a firmware change.
-5. **Animation vocabulary is firmware-fixed**: `anim` references the
+   player-side `on_reply` logic keeps today's contract.  The mirror of it
+   matters for a `reply` rule.  A totem's beacon is a broadcast, and two
+   things now make its answers trustworthy: players answer only when their
+   ruleset acted on the beacon (a handler that returns nothing sends
+   nothing — see `docs/lua-games-design.md`, "Answering is the signal"), and
+   `LightAir_Radio` keeps a broadcast's reply window open for its whole
+   timeout instead of closing it on the first reply, so a role that wants
+   *every* answer — CP counting who is standing on it — gets them all.
+4. **RSSI is readable, not policy**: the guard and the value operand both
+   exist so a future proximity-reactive role (trap totems, "serve the
+   closest") needs no firmware change, but no standard role uses either —
+   proximity gating stays player-side by doctrine.
+5. **One-shot animations queue** rather than replace one another: two
+   players respawning at one base in the same cycle each get their own run
+   of the strip, and a rule that fires two `anim` actions shows both.  Depth
+   is `LightAir_LEDStrip::MAX_ONESHOTS`; overflow is dropped, because a base
+   still animating for a player who has left is worse than a missed frame.
+6. **Animation vocabulary is firmware-fixed**: `anim` references the
    existing `TotemUIEvent` set by id, with a color *source* (constant RGB,
    team-of-value, player-of-sender, team-of-sender, or raw args) and an
    optional team rhythm.  New visuals need firmware (they are hardware
@@ -91,9 +97,18 @@ actions*:
 
 Value operands anywhere a value is accepted: literal, `R n`,
 `PAYLOAD[i]` (1-based, like `pkt:byte(i)` in game files), `ACC.LOW`,
-`SENDER`, `SENDER_TEAM`, and `CFG` — the role's config seconds, resolved by
+`SENDER`, `SENDER_TEAM`, `RSSI` — the receive-side signal strength of the
+packet in hand, in dBm — and `CFG`, the role's config seconds, resolved by
 the projector at serialization time from the game's `totem_slots`
 `config_var` (or the program's `cfg_default`).
+
+Registers are **signed and 16-bit** (`int16_t`).  They have to hold both the
+0xFF "neutral owner" sentinel the CP role uses and a negative RSSI reading,
+which eight bits cannot represent distinctly either way round.  Note the two
+forms of RSSI: `{"rssi"}` is the *value* — storable in a register, so two
+readings can be compared against each other — while `{"rssi", op, dbm}` is
+the *guard*, which only tests it against a literal.  Proximity gating stays
+player-side by doctrine; both forms exist for proximity-reactive roles.
 
 ---
 

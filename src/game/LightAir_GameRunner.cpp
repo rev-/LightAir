@@ -61,8 +61,6 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
                                + 3 * DisplayDefaults::FONT_HEIGHT;
             if (var.type == VarType::INT)
                 display.bindIntVariable(var.asInt, var.icon, px, py);
-            else if (var.type == VarType::BAR)
-                display.bindBarVariable(var.asInt, var.icon, px, py, var.barWidth);
             else
                 display.bindStringVariable(var.asChars, var.icon, px, py);
         }
@@ -237,7 +235,6 @@ void LightAir_GameRunner::update() {
         if (ev.type != RadioEventType::MessageReceived) continue;
         if (infraHandled[e]) continue;
 
-        bool matched = false;
         for (uint8_t i = 0; i < _game->directRadioRuleCount; i++) {
             const DirectRadioRule& r = _game->directRadioRules[i];
             if (r.fromState != *_game->currentState) continue;
@@ -249,11 +246,13 @@ void LightAir_GameRunner::update() {
             // runtime-decided sub-type (Lua handlers return it).
             if (r.replySubType != DirectRadioRule::DYNAMIC_REPLY)
                 output.radio.reply(ev.packet, r.replySubType);
-            matched = true;
             break;
         }
-        if (!matched)
-            output.radio.reply(ev.packet);  // standard empty reply — prevents sender timeout
+        // No blanket reply for an unmatched message.  Totem beacons are
+        // broadcasts every player in range hears; answering all of them was
+        // pure airtime, and it let an uninterested player's empty reply stand
+        // in for the deliberate one a BASE or BONUS was waiting for.  A reply
+        // now means "this ruleset acted on your beacon", nothing else.
     }
 
     // Step 2c: ReplyRadioRules — handle all ReplyReceived and Timeout events.

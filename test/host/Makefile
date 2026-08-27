@@ -13,6 +13,9 @@
 #   radio      — LightAir_Radio's reply bookkeeping: every reply to a
 #                broadcast is delivered, a unicast's slot closes on the
 #                first answer, timeouts fire only where they mean something.
+#   strip      — the totem LED strip's one-shot queue: several animations
+#                triggered together play in order instead of replacing
+#                one another.
 #   luagame    — loads every real game file through the real
 #                LightAir_LuaGame binding (real Lua 5.5 core) and drives
 #                a scripted FFA session through the synthesized
@@ -45,8 +48,8 @@ FW_SRC := $(ROOT)/src/lua/LightAir_LuaGame.cpp \
 
 PROGS := $(BUILD)/prog_base0.bin
 
-.PHONY: all games totemvm radio luagame clean
-all: games totemvm radio luagame
+.PHONY: all games totemvm radio strip luagame clean
+all: games totemvm radio strip luagame
 	@echo "ALL HOST TESTS PASS"
 
 games:
@@ -73,6 +76,13 @@ $(BUILD)/test_radio: test_radio.cpp $(ROOT)/src/radio/LightAir_Radio.cpp
 
 radio: $(BUILD)/test_radio
 	$(BUILD)/test_radio
+
+$(BUILD)/test_strip: test_strip.cpp $(ROOT)/src/ui/totem/strip/LightAir_LEDStrip_HW.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+strip: $(BUILD)/test_strip
+	$(BUILD)/test_strip
 
 $(BUILD)/test_luagame: test_luagame.cpp $(FW_SRC) $(LUA_OBJ)
 	@mkdir -p $(BUILD)

@@ -156,7 +156,7 @@ return {
 
   config  = { { id, name, min, max, step, default }, ... },
   vars    = { { id, default, countdown_in = {...}?, text = true?, len = N? }, ... },
-  monitor = { { var, icon, col, row, states = {...}, bar = true?, width = N? }, ... },
+  monitor = { { var, icon, col, row, states = {...} }, ... },
   winners = { { var, dir = "max"|"min" }, ... },
 
   totem_slots   = { { role = "BONUS", min = 0, max = 16, config_var = "..."? }, ... },
@@ -185,7 +185,7 @@ keeps the C++ diff small:
 | `config` | `ConfigVar[]` → slots |
 | `vars` + `monitor` | `MonitorVar[]` → slots (stateMask from `states`) |
 | `winners` | `WinnerVar[]` → slots |
-| `on_message` | `DirectRadioRule[]` (fromState, msgType, trampoline; returned integer becomes `replySubType` — the condition/receive split of the C++ table collapses into one handler that both decides and acts) |
+| `on_message` | `DirectRadioRule[]` (fromState, msgType, trampoline; returned integer becomes `replySubType` — the condition/receive split of the C++ table collapses into one handler that both decides and acts).  **Returning nothing sends nothing**: see "Answering is the signal" below |
 | `on_reply` | `ReplyRadioRule[]` (default state mask = all states except `scoring_state`) |
 | `rules` | `StateRule[]` trampolines |
 | `update` | `StateBehavior[]` trampolines |
@@ -199,17 +199,29 @@ Two spec details the ports rely on:
   slot instead of an int slot; the LCD binds it via the existing
   `bindStringVariable`, and `vars.role = "VIRUS"` copies into the buffer.
   Used by Upkeep ("myPts/enemyPts") and Virus (the role display).
-- **Bar rows** — a `monitor` entry with `bar = true` draws its (integer) var
-  as a filled gauge instead of a number, reading the value as a percentage
-  0–100; `width = N` sets the bar's pixel width inside the 64 px cell
-  (default `LuaDefaults::DEFAULT_BAR_WIDTH`).  The game owns the progress —
-  the display only draws what the var says — so a bar suits anything the
-  ruleset already times, e.g. Teams' respawn wait while the player is down.
+- **Bars are not a monitor row.**  `DisplayCtrl::bindBarVariable` turns a
+  slot into a filling gauge while its variable sits at a trigger value
+  (energy during recharge, the respawn wait), but no descriptor row reaches
+  it: that binding belongs to the projector object, which owns the reload
+  timing, and is wired up with it.
 - **`on_score_announce(scores)`** — replaces the C++ `ScoreTable` callback for
   team games.  `scores` is built once when all slots arrive (allocation is
   fine outside the tick path): an array of `{ id, team, vals = {v1, v2} }`
   in winner-var order.  `games/lib/std.lua` provides the two-team
   aggregation used by Teams, Flag and Upkeep.
+- **Answering is the signal** — a handler's return value *is* the reply: an
+  integer answers with that sub-type, returning nothing answers nothing at
+  all, and a message no handler matches goes unanswered.  This matters
+  because a totem's beacon is a broadcast every player in range hears.  A
+  BASE, BONUS or MALUS hands itself to whoever answers, so an answer has to
+  mean "this ruleset acted on your beacon" — when every player auto-answered
+  every beacon, an uninterested player's empty reply stood in for the
+  deliberate one, and the pickup went to whoever was merely nearest the
+  radio.  Handlers that only observe a beacon (tracking a CP owner, ignoring
+  an out-of-range base) therefore return nothing, and the ones that act
+  return a sub-type.  A totem that wants *every* answer, like CP counting who
+  is standing on it, gets them: `LightAir_Radio` keeps a broadcast's reply
+  window open for its whole timeout instead of closing it on the first reply.
 - **Custom message ids** — a game may declare its own even msgType (Virus
   uses `0x16` for infection announcements).  `typeId` + session token already
   isolate games on the wire; the only rule is to stay out of the 0xA0
@@ -228,6 +240,8 @@ at load time.
 
 **Identity / queries** — `la.my_id()`, `la.my_team()`, `la.team_of(id)`,
 `la.player_count()` (roster size), `la.player_short(id)`,
+`la.team_short(team)` (the team's label, "O"/"X"/… from the one table in
+`config.h` — a game file never spells the names out for itself),
 `la.totem_for_role(role, idx)`, `la.state()`, `la.now()` (millis).
 
 **Inputs (pull)** — `la.trigger_down(n)`, `la.trigger_state(n)`,
@@ -256,7 +270,10 @@ can reference it.  `pkt:byte(i)` is 1-based over the payload
 receive-side signal strength in dBm — measured locally, never carried on the
 wire — and is the only distance information a ruleset has, so every
 proximity gate (BASE respawn, flag pickup, CP presence) is a comparison
-against it.  It is valid in `on_message` handlers and in `on_reply` for the
+against it.  Choosing the range is the **ruleset's** job, not the library's:
+the same BASE role is a 2 m respawn pad in Teams and the capture point in
+Flag, so `std.base_respawn` and `std.pickup_claim` require an explicit
+`rssi` and error without one rather than defaulting to a number.  It is valid in `on_message` handlers and in `on_reply` for the
 `reply` packet; the `orig` packet is our own send and reports 0.
 
 ## API layering — verbs vs. easy games vs. future-proofness

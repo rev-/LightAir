@@ -9,7 +9,7 @@ namespace {
     constexpr uint8_t T_ENTER = 0, T_EVERY = 1, T_MSG = 2, T_REPLY = 3;
     // value tags
     constexpr uint8_t V_IMM8 = 0, V_IMM16 = 1, V_REG = 2, V_PAYLOAD = 3,
-                      V_ACCLOW = 4, V_SENDER = 5, V_SENDERTEAM = 6;
+                      V_ACCLOW = 4, V_SENDER = 5, V_SENDERTEAM = 6, V_RSSI = 7;
     // guards
     constexpr uint8_t G_PAYLOAD = 1, G_LEN = 2, G_REG = 3, G_ACCCLASS = 4,
                       G_LOW = 5, G_ELAPSED = 6, G_RSSI = 7;
@@ -47,7 +47,8 @@ bool LightAir_TotemVM::skipValue(uint16_t& off) const {
             off += 1;  return true;
         case V_ACCLOW:
         case V_SENDER:
-        case V_SENDERTEAM: return true;
+        case V_SENDERTEAM:
+        case V_RSSI:       return true;
         default:           return false;
     }
 }
@@ -221,6 +222,10 @@ int32_t LightAir_TotemVM::readValue(uint16_t& off) const {
         }
         case V_SENDER:     return _pkt ? _pkt->senderId : -1;
         case V_SENDERTEAM: return _pkt ? _pkt->team : -1;
+        // Receive-side signal strength of the packet being handled, in dBm
+        // (negative).  Registers are int16_t so a program can store and
+        // compare these, not merely test one against a literal.
+        case V_RSSI:       return _pkt ? _rssi : 0;
         default:           return -1;                       // unreachable after load()
     }
 }
@@ -381,7 +386,7 @@ bool LightAir_TotemVM::runActions(const Rule& r, LightAir_TotemOutput& out, uint
             }
             case A_SET: {
                 uint8_t reg = _prog[off++];
-                _regs[reg] = (uint8_t)readValue(off);
+                _regs[reg] = (int16_t)readValue(off);
                 break;
             }
             case A_ACCBIT: {

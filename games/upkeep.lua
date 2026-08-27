@@ -19,6 +19,7 @@ local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
 
 local NEAR_CP_RSSI   = -65
 local NEAR_BASE_RSSI = -57
+local PICKUP_RSSI    = -57      -- ~2 m: BONUS/MALUS claim gate
 local CP_NONE        = 0xFF
 
 -- ---- Private state ------------------------------------------------
@@ -62,7 +63,7 @@ local function cp_beacon_handler(send_presence)
       if owner == CP_NONE then
         la.show(string.format("CP %d neutral", idx), 3000)
       else
-        la.show(string.format("CP %d->Team %s!", idx, owner == 0 and "O" or "X"), 3000)
+        la.show(string.format("CP %d->Team %s!", idx, la.team_short(owner)), 3000)
         la.ui(owner == my_team and "FlagReturn" or "FlagTaken")
       end
     end
@@ -181,6 +182,10 @@ return {
 
   on_message = {
     [S.IN_GAME] = {
+      -- A pickup totem gives itself to whoever answers, so only answer
+      -- from arm's length: the claim has to mean "I am standing at it".
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
       [MSG.LIT] = std.lit_target{
         lives = "lives", immunity = imm, friendly = friendly,
         reply = { taken = R.TAKEN, shone = R.SHONE,

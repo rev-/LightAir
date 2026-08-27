@@ -6,15 +6,16 @@ the Arduino/ESP-IDF headers; everything else under test is the **real**
 firmware source compiled for the host.
 
 ```
-make -C test/host        # build + run all four suites
+make -C test/host        # build + run all five suites
 ```
 
 | Target | What it proves |
 |---|---|
 | `games` | every `games/*.lua` loads against a stubbed `la` kernel; all handlers, rules and totem tables execute; every TotemVM program encodes within the single-packet budget (`totemvm.lua` is the reference encoder — the executable spec of the wire format) |
-| `totemvm` | the real `LightAir_TotemVM` interpreter, fed reference-encoder programs, reproduces the five standard roles' behaviour (beacons, animations, ownership windows, scoring, cooldowns) and rejects malformed programs |
+| `totemvm` | the real `LightAir_TotemVM` interpreter, fed reference-encoder programs, reproduces the five standard roles' behaviour (beacons, animations, ownership windows, scoring, cooldowns), keeps a stored RSSI signed in its `int16_t` registers, and rejects malformed programs |
 | `radio` | `LightAir_Radio`'s reply bookkeeping: every reply to a broadcast reaches the sender (a totem beacon is answered by everyone in range, so closing on the first answer loses the rest), a unicast's slot still closes on its one answer, and timeouts fire only where a missing answer means something |
-| `luagame` | the real `LightAir_LuaGame` binding (with the vendored Lua 5.5 core) loads all seven game files, and a scripted Free-for-All session runs begin / messages / replies / rules / update ticks through the synthesized `LightAir_Game` descriptor exactly as `GameRunner` drives it on-device; a Teams section then covers the down-state screen (the respawn bar) and proves `pkt.rssi` reaches the Lua handlers, which is what makes the BASE proximity gate a gate at all |
+| `strip` | the totem LED strip's one-shot queue: animations triggered together play in arrival order instead of replacing one another (two players respawning at one base), the queue is bounded, and a late arrival waits its turn |
+| `luagame` | the real `LightAir_LuaGame` binding (with the vendored Lua 5.5 core) loads all seven game files, and a scripted Free-for-All session runs begin / messages / replies / rules / update ticks through the synthesized `LightAir_Game` descriptor exactly as `GameRunner` drives it on-device; a Teams section then proves `pkt.rssi` reaches the Lua handlers (what makes a proximity gate a gate at all) and that a beacon outside the gate draws no reply |
 
 Requires `g++` and `lua5.4` (`apt install lua5.4`).  The `games` suite
 runs the pure-Lua game files under the system lua5.4 interpreter; only
@@ -25,7 +26,7 @@ runs the pure-Lua game files under the system lua5.4 interpreter; only
 - **games** stops at the first failed `assert` with a Lua traceback;
   the `file:line` points either at `test_games.lua` (the expectation
   that broke) or into the game file that misbehaved.
-- **totemvm** / **radio** / **luagame** print one `FAIL: <what> (line N)`
+- **totemvm** / **radio** / **strip** / **luagame** print one `FAIL: <what> (line N)`
   per failed `CHECK` — the line number is in the corresponding test
   `.cpp` — and exit non-zero at the end of the run.
 - The loud `[E] LuaGame[Faulty] fault … stack traceback …` blocks in

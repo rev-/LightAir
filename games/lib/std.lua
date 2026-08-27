@@ -115,11 +115,17 @@ end
 --       when     = function(vars) return la.now() >= respawn_at end,
 --       team     = function() return my_team end,  -- accepted team; nil = teamless only
 --       teamless = true,                           -- also accept 0xFF bases
---       rssi     = -57,
+--       rssi     = -57,                            -- REQUIRED, see below
 --       on_ready = function(vars) can_respawn = true end,
 --   }
+--
+-- cfg.rssi has no default on purpose.  How close "at the base" means is a
+-- ruleset decision — the same BASE role is a 2 m respawn pad in Teams and
+-- also the capture point in Flag — so the library refuses to pick a number
+-- on a game's behalf and errors if one is missing.
 -- ----------------------------------------------------------------
 function std.base_respawn(cfg)
+  assert(cfg.rssi, "std.base_respawn: cfg.rssi is required")
   return function(vars, pkt)
     if cfg.when and not cfg.when(vars) then return end
     if pkt.len < 1 then return end
@@ -128,11 +134,35 @@ function std.base_respawn(cfg)
     local ok        = (mine ~= nil and base_team == mine)
                    or (cfg.teamless and base_team == 0xFF)
     if not ok then return end
-    if pkt.rssi < (cfg.rssi or -57) then return end
+    if pkt.rssi < cfg.rssi then return end
     cfg.on_ready(vars)
-    -- Intentional reply: sub-type = slot+1 so the BASE shows a
-    -- respawn animation (empty auto-replies are ignored by bases).
+    -- Answering IS the signal: the sub-type (slot+1, always >= 1) tells the
+    -- BASE to play its respawn animation.  A handler that returns nothing
+    -- sends nothing, so a base hears only the players actually respawning.
     return (mine or (la.my_id() - 1)) + 1
+  end
+end
+
+-- ----------------------------------------------------------------
+-- BONUS / MALUS claim handler.
+--
+--   [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = -57 },
+--
+-- The pickup totem hands itself to whoever answers its beacon, so the
+-- answer has to mean "I am standing at it": this gates on proximity and
+-- returns the claiming player's id, which the totem's `reply` rule turns
+-- into the claim animation and its cooldown.  cfg.on_claim(vars, pkt) is
+-- optional and is where a ruleset attaches the actual reward.
+--
+-- cfg.rssi is required, for the same reason as base_respawn.
+-- ----------------------------------------------------------------
+function std.pickup_claim(cfg)
+  assert(cfg.rssi, "std.pickup_claim: cfg.rssi is required")
+  return function(vars, pkt)
+    if pkt.len < 1 or pkt:byte(1) ~= 0 then return end   -- 0 = totem is ready
+    if pkt.rssi < cfg.rssi then return end
+    if cfg.on_claim then cfg.on_claim(vars, pkt) end
+    return la.my_id()
   end
 end
 
@@ -167,9 +197,8 @@ function std.team_announce(cfg)
     if w < 0 then                 la.show("Your team tied!", 0)
     elseif w == la.my_team() then la.show("Your team won!", 0)
     else                          la.show("Your team lost!", 0) end
-    if w < 0 then      la.show("TIE!", 0)
-    elseif w == 0 then la.show("TEAM O WINS!", 0)
-    else               la.show("TEAM X WINS!", 0) end
+    if w < 0 then la.show("TIE!", 0)
+    else          la.show("TEAM " .. la.team_short(w) .. " WINS!", 0) end
   end
 end
 

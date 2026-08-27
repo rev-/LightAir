@@ -18,18 +18,13 @@ local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
 local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
 
--- BASE respawn proximity gate.  -57 dBm is the field-calibrated "~2 m
--- indoors" figure; until the RSSI plumbing was fixed the Lua handlers
--- saw a constant 0 dBm here, so this gate passed at any distance and a
--- base respawned players from across the hall.  Tighten (towards 0) if
--- 2 m still reads long on your hardware.
-local NEAR_BASE_RSSI = -57
+local NEAR_BASE_RSSI = -57      -- ~2 m: BASE respawn gate
+local PICKUP_RSSI    = -57      -- ~2 m: BONUS/MALUS claim gate
 
 -- ---- Private state ------------------------------------------------
 local my_team      = 0          -- read from the runner in on_begin
 local team_points  = 0          -- aggregate team points known locally
 local respawn_at   = 0          -- la.now() before which BASE beacons are ignored
-local respawn_for  = 0          -- ms the current respawn wait was armed for
 local can_respawn  = false
 local shone_by     = nil        -- short name of whoever put us down
 local imm          = std.immunity(3000)
@@ -69,7 +64,6 @@ return {
     { id = "points",       default = 0  },
     { id = "energy_spent", default = 0  },
     { id = "shone_times",  default = 0  },
-    { id = "respawn_pct",  default = 0  },
   },
 
   monitor = {
@@ -77,9 +71,6 @@ return {
     { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME } },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
     { var = "points",       icon = "SCORE",  col = 1, row = 1, states = { S.IN_GAME } },
-    -- Down: how far through the respawn wait we are, as a filling bar.
-    { var = "respawn_pct",  icon = "HOURGLASS", col = 0, row = 0,
-      states = { S.OUT_GAME }, bar = true },
     { var = "game_time",    icon = "TIME",   col = 0, row = 0, states = { S.GAME_END } },
     { var = "points",       icon = "SCORE",  col = 1, row = 0, states = { S.GAME_END } },
     { var = "energy_spent", icon = "ENERGY", col = 0, row = 1, states = { S.GAME_END } },
@@ -111,11 +102,9 @@ return {
     vars.points       = 0
     vars.energy_spent = 0
     vars.shone_times  = 0
-    vars.respawn_pct  = 0
     my_team      = la.my_team()
     team_points  = 0
     respawn_at   = 0
-    respawn_for  = 0
     can_respawn  = false
     shone_by     = nil
     imm.reset()
@@ -125,6 +114,10 @@ return {
 
   on_message = {
     [S.IN_GAME] = {
+      -- A pickup totem gives itself to whoever answers, so only answer
+      -- from arm's length: the claim has to mean "I am standing at it".
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
       [MSG.LIT] = std.lit_target{
         lives = "lives", immunity = imm, friendly = friendly,
         reply = { taken = R.TAKEN, shone = R.SHONE,
@@ -179,10 +172,8 @@ return {
       when   = function(vars) return vars.lives <= 0 end,
       action = function(vars)
         vars.shone_times = vars.shone_times + 1
-        respawn_for = vars.respawn_secs * 1000
-        respawn_at  = la.now() + respawn_for
+        respawn_at  = la.now() + vars.respawn_secs * 1000
         can_respawn = false
-        vars.respawn_pct = 0
         -- "Shone!" first, so the persistent credit line lands above it and
         -- stays on the top row for the whole wait.
         la.show("Shone!", 2000)
@@ -217,15 +208,8 @@ return {
       end
       shiner.tick(vars)
     end,
-    -- OUT_GAME: respawn gating happens in on_message[BASE_BEACON]; the
-    -- game-time countdown is declarative.  All this does is keep the
-    -- respawn bar in step with the wait.
-    [S.OUT_GAME] = function(vars)
-      if respawn_for <= 0 then vars.respawn_pct = 100; return end
-      local left = respawn_at - la.now()
-      if left < 0 then left = 0 end
-      vars.respawn_pct = ((respawn_for - left) * 100) // respawn_for
-    end,
+    -- OUT_GAME: respawn gating happens in on_message[BASE_BEACON];
+    -- the countdown is declarative.  Nothing to do per tick.
   },
 
   totems = {

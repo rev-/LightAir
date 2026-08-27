@@ -82,7 +82,8 @@ constexpr uint8_t MSG_BASE_BEACON   = 0x56;
 
 // FLAG totem beacon (new role-based architecture).
 // payload[0] = state (0=FLAG_IN, 1=FLAG_OUT); payload[1] = team (0=O, 1=X).
-// Reply (0x59): enemy-team player picking up the flag.
+// Unanswered: a pickup is announced to everyone with MSG_FLAG_EVENT, which
+// is what the FLAG totem itself listens on.
 constexpr uint8_t MSG_FLAG_BEACON   = 0x58;
 
 // Reserved (retired): flag drop/score is now carried by MSG_FLAG_EVENT
@@ -99,20 +100,14 @@ constexpr uint8_t MSG_BONUS_BEACON  = 0x5E;
 // Reply (0x61): player claims malus.
 constexpr uint8_t MSG_MALUS_BEACON  = 0x60;
 
-// Player → BASE totem unicast: "I am respawning at you" (even; no relay).
-// payload[0] = myTeam+1 (non-zero sanity marker). senderId = the player and
-// team = the player's team (both auto-stamped by sendTo). Replaces the old
-// odd-reply respawn signal, which processPacket() silently dropped because the
-// base's beacon (broadcast) never stored a pending entry to match it against.
+// Reserved (retired): player → totem unicasts that once carried respawn and
+// CP presence.  They existed because a broadcast beacon's replies were being
+// dropped — the radio released a broadcast's pending slot on the first reply,
+// so only one of the many answers to a beacon ever arrived.  That is fixed in
+// LightAir_Radio (a broadcast keeps its slot for the whole reply window), so
+// the odd-reply signal carries both again and there is one mechanism instead
+// of two.  Do not reuse these byte values.
 constexpr uint8_t MSG_RESPAWN_NOTIFY = 0x62;
-
-// Player → CP totem unicast: "I am present at you" (even; no relay).
-// Presence is RSSI-gated at the CP, so the player is in direct range — a
-// unicast addressed to the CP suffices (no hops). payload[0] = myTeam+1
-// (1..16; 0 reserved/ignored). Replaces the old odd-reply presence signal,
-// which processPacket() silently dropped (same bug as base respawn),
-// breaking CP ownership detection. CPTotem folds payload[0] into its
-// presence mask exactly as it did the old reply subType.
 constexpr uint8_t MSG_CP_NOTIFY      = 0x64;
 
 // Next available in 0x50 block: 0x66
@@ -262,6 +257,11 @@ namespace DisplayDefaults {
     constexpr uint8_t CELL_HEIGHT       = FONT_HEIGHT + 2;
     // Y coordinate of the last text row — always pinned to the screen bottom.
     constexpr uint8_t BOTTOM_LINE_Y     = SCREEN_HEIGHT - FONT_HEIGHT - FONT_TOP_PADDING;
+    // A bar binding draws to the right of its 8 px icon (+2 px gap) and must
+    // stay inside its own cell, so this is also the widest a bar may be.
+    constexpr uint8_t ICON_GUTTER       = 10;
+    constexpr uint8_t BAR_WIDTH         = CELL_WIDTH - ICON_GUTTER - 4;
+    constexpr uint8_t BAR_HEIGHT        = 6;
 }
 
 // ---------------------------------------------------------------
@@ -303,8 +303,6 @@ namespace LuaDefaults {
     constexpr uint8_t  MAX_RULES       = 16;     // state-transition rules per game
     constexpr uint8_t  MAX_MSG_RULES   = 24;     // (state, msgType) handler pairs
     constexpr uint8_t  MAX_MONITOR     = 16;     // monitor entries per game
-    constexpr uint8_t  DEFAULT_BAR_WIDTH = 46;   // px for a `bar = true` monitor row
-                                                 // (64 px cell - 10 px icon - margin)
     constexpr uint8_t  MAX_STATES      = 8;      // game states (mask fits uint32)
     constexpr uint8_t  MAX_COUNTDOWNS  = 4;      // vars with countdown_in per game
     constexpr uint8_t  MAX_GAME_NAME   = 16;     // display name buffer (15 + NUL)
@@ -485,13 +483,12 @@ namespace TeamColors {
 // team 0 is "O", team 1 is "X", and the extra slots keep going through
 // the alphabet.  Everything the player sees — the pre-game roster, the
 // team-assignment submenu, the start summary — names teams through
-// forTeam() so no screen ever falls back to printing a raw index.
+// forTeam(), and game files reach the same table through the la.team_short()
+// kernel verb, so nothing anywhere spells "O"/"X" out for itself.
 // ---------------------------------------------------------------
 namespace TeamNames {
-    constexpr const char* kTeamO = "O";
-    constexpr const char* kTeamX = "X";
     constexpr const char* kNames[TeamColors::kCount] = {
-        kTeamO, kTeamX, "C", "D", "E", "F", "G", "H",
+        "O", "X", "C", "D", "E", "F", "G", "H",
     };
     // Safe lookup: clamps out-of-range team indices to entry 0.
     constexpr const char* forTeam(uint8_t team) {

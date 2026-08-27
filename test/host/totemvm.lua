@@ -22,6 +22,7 @@ local function val(b, v, cfg_secs)
   elseif v[1] == "low" then b[#b+1]=4
   elseif v[1] == "sender" then b[#b+1]=5
   elseif v[1] == "team" then b[#b+1]=6
+  elseif v[1] == "rssi" then b[#b+1]=7   -- signal strength of the packet in hand
   elseif v[1] == "cfg" then b[#b+1]=1; u16(b, (cfg_secs or 30)*10)  -- resolved: imm16 deciseconds
   else error("bad value spec: "..tostring(v[1])) end
 end

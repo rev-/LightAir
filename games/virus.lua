@@ -35,6 +35,8 @@ local MSG_INFECTED = 0x16
 -- Reply sub-types for MSG.LIT.
 local R = { NOEFFECT = 1, INFECTED = 2, VIRUS = 3 }
 
+local PICKUP_RSSI = -57         -- ~2 m: BONUS/MALUS claim gate
+
 -- Continuous red pulse + soft vibration on the infected device.
 local virus_bg = {
   priority = 1,
@@ -191,6 +193,10 @@ return {
 
   on_message = {
     [S.CLEAN] = {
+      -- A pickup totem gives itself to whoever answers, so only answer
+      -- from arm's length: the claim has to mean "I am standing at it".
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
       [MSG.LIT] = function(vars, pkt)
         -- Only a viral lit infects; a clean player's lit has no effect.
         if pkt.len >= 1 and pkt:byte(1) == 1 then
@@ -206,6 +212,10 @@ return {
       end,
     },
     [S.VIRUS] = {
+      -- A pickup totem gives itself to whoever answers, so only answer
+      -- from arm's length: the claim has to mean "I am standing at it".
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
       [MSG.LIT] = function() return R.VIRUS end,   -- already infected
       [MSG_INFECTED] = function(vars, pkt)
         note_infected(vars, pkt.sender)

@@ -137,7 +137,8 @@ int main() {
     CHECK(game.monitorCount == 8, "ffa monitor count");
     CHECK(game.ruleCount == 4, "ffa rule count");
     CHECK(game.behaviorCount == 3, "ffa behaviour rows (states 0..2)");
-    CHECK(game.directRadioRuleCount == 2, "ffa direct rules (LIT in 2 states)");
+    CHECK(game.directRadioRuleCount == 4,
+          "ffa direct rules (LIT in 2 states + the 2 pickup beacons)");
     CHECK(game.replyRadioRuleCount == 2, "ffa reply rules (any + timeout)");
     CHECK(game.winnerVarCount == 2, "ffa winner vars");
     CHECK(game.totemRequirementCount == 2, "ffa totem slots");
@@ -255,21 +256,11 @@ int main() {
     const TotemProgramEntry* bonus = game.totemProgram(TotemRoleId_BONUS());
     CHECK(bonus && bonus->len > 0 && bonus->len <= 225, "bonus program provided");
 
-    // ---- 10. Teams: the down-state screen and the BASE proximity gate ----
+    // ---- 10. Teams: who a beacon gets answered by, and from how far ----
     // Realized on the same shared instance; nothing above needs FFA any more.
     {
         CHECK(shared.load("games/teams.lua"), "teams realizes on the shared slot");
         const LightAir_Game& tg = shared.descriptor();
-
-        // The respawn gauge: a BAR row, live only while the player is down.
-        const MonitorVar* bar = nullptr;
-        for (uint8_t i = 0; i < tg.monitorCount; i++)
-            if (tg.monitorVars[i].type == VarType::BAR) bar = &tg.monitorVars[i];
-        CHECK(bar, "teams has a bar monitor row");
-        CHECK(bar && bar->asInt, "bar row points at an int slot");
-        CHECK(bar && bar->stateMask == (1u << 1), "bar shows only in OUT_GAME");
-        CHECK(bar && bar->barWidth > 0 && bar->barWidth <= 54,
-              "bar width fits the 64px cell");
 
         *tg.currentState = tg.initialState;
         tg.onBegin(disp, radio, &ui, runner);
@@ -289,29 +280,13 @@ int main() {
             out = GameOutput();
             down->onTransition(disp, out);
         }
+        g_millis += 31000;      // past the 30 s default respawn wait
 
-        // The respawn bar tracks the wait: 0% on entry, part-way later.
-        // (slotOf only sees INT rows; the gauge's slot is the BAR row's.)
-        int* pct = bar ? bar->asInt : nullptr;
-        CHECK(pct && *pct == 0, "respawn bar starts empty");
-        const StateBehavior* outTick = nullptr;
-        for (uint8_t i = 0; i < tg.behaviorCount; i++)
-            if (tg.behaviors[i].state == 1) outTick = &tg.behaviors[i];
-        CHECK(outTick && outTick->onUpdate, "OUT_GAME has an update tick");
-        if (outTick && outTick->onUpdate) {
-            g_millis += 15000;                     // half of the 30 s default wait
-            out = GameOutput();
-            outTick->onUpdate(inputs, rr, disp, out);
-            CHECK(pct && *pct >= 45 && *pct <= 55, "respawn bar ~half way at 15s");
-            g_millis += 20000;                     // past the end of the wait
-            out = GameOutput();
-            outTick->onUpdate(inputs, rr, disp, out);
-            CHECK(pct && *pct == 100, "respawn bar full once the wait elapses");
-        }
-
-        // RSSI reaches the Lua handler: the same beacon is accepted up close
-        // and ignored from across the hall.  Until this was plumbed through,
-        // handlers saw a constant 0 dBm and every proximity gate passed.
+        // RSSI reaches the Lua handler, and the answer is the whole signal:
+        // a base out of range is not answered at all, so the only reply a
+        // BASE ever hears is from a player actually respawning at it.
+        // Until RSSI was plumbed through, handlers saw a constant 0 dBm and
+        // every proximity gate passed.
         const DirectRadioRule* beacon = nullptr;
         for (uint8_t i = 0; i < tg.directRadioRuleCount; i++)
             if (tg.directRadioRules[i].fromState == 1 &&
@@ -325,14 +300,37 @@ int main() {
         if (beacon && beacon->onReceive) {
             out = GameOutput();
             beacon->onReceive(bcn, /*rssi*/ -80, disp, out);
-            CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payloadLen == 0,
-                  "distant base gets only the empty auto-reply");
+            CHECK(out.radio.replyCount == 0, "distant base is not answered at all");
 
             out = GameOutput();
             beacon->onReceive(bcn, /*rssi*/ -40, disp, out);
             CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payloadLen == 1 &&
                   out.radio.replies[0].payload[0] >= 1,
                   "base in range gets the respawn sub-type that drives its anim");
+        }
+
+        // A pickup beacon is claimed only from arm's length, for the same
+        // reason: the totem hands itself to whoever answers.
+        const DirectRadioRule* bonus = nullptr;
+        for (uint8_t i = 0; i < tg.directRadioRuleCount; i++)
+            if (tg.directRadioRules[i].fromState == 0 &&
+                tg.directRadioRules[i].msgType == RadioMsg::MSG_BONUS_BEACON)
+                bonus = &tg.directRadioRules[i];
+        CHECK(bonus && bonus->onReceive, "teams handles BONUS_BEACON in play");
+
+        *tg.currentState = 0;
+        RadioPacket bon = {};
+        bon.senderId = 253; bon.msgType = RadioMsg::MSG_BONUS_BEACON;
+        bon.payloadLen = 1; bon.payload[0] = 0;            // 0 = ready
+        if (bonus && bonus->onReceive) {
+            out = GameOutput();
+            bonus->onReceive(bon, /*rssi*/ -80, disp, out);
+            CHECK(out.radio.replyCount == 0, "distant pickup is not claimed");
+
+            out = GameOutput();
+            bonus->onReceive(bon, /*rssi*/ -40, disp, out);
+            CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payloadLen == 1,
+                  "pickup in range is claimed by this player");
         }
     }
 
@@ -371,8 +369,10 @@ int main() {
         out = GameOutput();
         fg.directRadioRules[0].onReceive(lit, kNearRssi, disp, out);
         CHECK(*flives == 2, "partial effect before the error stands");
-        CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payloadLen == 0,
-              "empty reply still sent after handler fault");
+        // The handler's return value is the reply, and a handler that threw
+        // produced none — so the fault is silent on the wire too, rather than
+        // inventing an answer nobody can act on.
+        CHECK(out.radio.replyCount == 0, "no reply invented after a handler fault");
         CHECK(faulty->faultStats().perSite[(uint8_t)LightAir_LuaGame::FaultSite::Message] == 1,
               "message fault counted");
 

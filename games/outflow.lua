@@ -23,6 +23,8 @@ local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
 local R   = { TAKEN = 1, SHONE = 2, DOWN = 3 }
 
+local PICKUP_RSSI = -57         -- ~2 m: BONUS/MALUS claim gate
+
 -- ---- Private state ------------------------------------------------
 local pending_shone    = false   -- fatal lit received this cycle
 local pending_depleted = false   -- drain zeroed energy this cycle
@@ -102,6 +104,10 @@ return {
 
   on_message = {
     [S.IN_GAME] = {
+      -- A pickup totem gives itself to whoever answers, so only answer
+      -- from arm's length: the claim has to mean "I am standing at it".
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
       [MSG.LIT] = function(vars, pkt)
         if vars.energy > vars.lit_cost then
           vars.energy = vars.energy - vars.lit_cost

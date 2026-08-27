@@ -30,9 +30,19 @@ void LightAir_LEDStrip_HW::begin(int dataPin, uint8_t numLeds) {
 }
 
 void LightAir_LEDStrip_HW::play(const StripAnimation& anim) {
-    _fg        = anim;
-    _fgActive  = true;
-    _fgStartMs = millis();
+    if (_fgCount >= MAX_ONESHOTS) return;          // queue full — drop
+    uint8_t tail = (uint8_t)((_fgHead + _fgCount) % MAX_ONESHOTS);
+    _fg[tail] = anim;
+    if (_fgCount == 0) _fgStartMs = millis();      // nothing playing: start now
+    _fgCount++;
+}
+
+// durationMs is one motion cycle; a one-shot plays pulseCount of them (or a
+// single cycle when pulseCount == 0).  Off is instant.
+uint32_t LightAir_LEDStrip_HW::oneShotTotal(const StripAnimation& a) {
+    if (a.effect == StripEffect::Off) return 0;
+    uint16_t period = a.durationMs ? a.durationMs : 1000;
+    return (a.pulseCount > 0) ? (uint32_t)a.pulseCount * period : period;
 }
 
 void LightAir_LEDStrip_HW::loop(const StripAnimation& anim) {
@@ -43,7 +53,7 @@ void LightAir_LEDStrip_HW::loop(const StripAnimation& anim) {
 
 void LightAir_LEDStrip_HW::stopLoop() {
     _bgActive = false;
-    if (!_fgActive) {
+    if (_fgCount == 0) {
         setAll(0, 0, 0);
         FastLED.show();
     }
@@ -53,23 +63,18 @@ void LightAir_LEDStrip_HW::stopLoop() {
 void LightAir_LEDStrip_HW::update() {
     uint32_t now = millis();
 
-    if (_fgActive) {
-        uint32_t elapsed = now - _fgStartMs;
-        renderAnim(_fg, elapsed);
-        FastLED.show();
+    // Drain any finished one-shots first, so a zero-length or already-elapsed
+    // entry hands over within the same tick instead of costing a frame.
+    while (_fgCount > 0 && (now - _fgStartMs) >= oneShotTotal(_fg[_fgHead])) {
+        _fgHead = (uint8_t)((_fgHead + 1) % MAX_ONESHOTS);
+        _fgCount--;
+        _fgStartMs = now;      // the next one starts here; background too
+        _bgStartMs = now;
+    }
 
-        // One-shot completion.  durationMs is one motion cycle; a one-shot
-        // plays pulseCount cycles (or a single cycle when pulseCount == 0),
-        // then yields back to the background.  Off is instant.
-        uint16_t period = _fg.durationMs ? _fg.durationMs : 1000;
-        uint32_t total  = (_fg.pulseCount > 0)
-                              ? (uint32_t)_fg.pulseCount * period
-                              : period;
-        bool done = (_fg.effect == StripEffect::Off) || (elapsed >= total);
-        if (done) {
-            _fgActive  = false;
-            _bgStartMs = now;  // restart the background cleanly
-        }
+    if (_fgCount > 0) {
+        renderAnim(_fg[_fgHead], now - _fgStartMs);
+        FastLED.show();
         return;
     }
 
