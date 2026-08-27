@@ -327,6 +327,50 @@ int main(int argc, char** argv) {
         CHECK(countAnim(out, TotemUIEvent::ControlContest) == 1, "contest anim");
         b = lastBcast(out, 0x52);
         CHECK(b && b->payload[0] == 1, "owner held while contested");
+
+        // A contested hill left to one player: the other one's game ended,
+        // so their device stopped answering the beacon.  The hill must
+        // attach to whoever is still standing on it.
+        out = LightAir_TotemOutput();
+        RadioPacket alone = mkPkt(0x53, 5, 0, {1});      // slot 0 only
+        vm.onPacket(alone, -40, out);
+        runFor(vm, 2000, out);
+        b = lastBcast(out, 0x52);
+        CHECK(b && b->payload[0] == 0, "contest resolved to the last player present");
+        CHECK(countBcast(out, 0x54) == 1, "and the takeover pays its point");
+
+        // The same thing where the hill ends up back with the player who
+        // already owned it.  No owner change, so nothing re-attaches —
+        // but the ring still has to stop showing the contest pattern.
+        // Backgrounds are sticky on the strip: whatever was applied last
+        // keeps playing until something replaces it.
+        out = LightAir_TotemOutput();
+        RadioPacket own = mkPkt(0x53, 5, 0, {1});     // owner, slot 0
+        RadioPacket rival = mkPkt(0x53, 4, 1, {2});   // challenger, slot 1
+        vm.onPacket(own, -40, out);
+        vm.onPacket(rival, -40, out);
+        runFor(vm, 2000, out);
+        CHECK(countAnim(out, TotemUIEvent::ControlContest) == 1, "contested again");
+
+        out = LightAir_TotemOutput();
+        RadioPacket left = mkPkt(0x53, 5, 0, {1});    // the rival's game ended
+        vm.onPacket(left, -40, out);
+        runFor(vm, 2000, out);
+        const TotemUICmd* back = lastAnim(out, TotemUIEvent::Control);
+        CHECK(back && back->r == 0xFE && back->g == 0,
+              "contest over: the ring goes back to the owner's colour");
+        CHECK(countAnim(out, TotemUIEvent::ControlContest) == 0, "and stops contesting");
+
+        // Everyone walks off a hill that was contested: it is still owned,
+        // so the ring shows its owner rather than staying in the contest.
+        out = LightAir_TotemOutput();
+        vm.onPacket(own, -40, out);
+        vm.onPacket(rival, -40, out);
+        runFor(vm, 2000, out);
+        out = LightAir_TotemOutput();
+        runFor(vm, 2000, out);                        // nobody present
+        back = lastAnim(out, TotemUIEvent::Control);
+        CHECK(back && back->g == 0, "abandoned contest falls back to the owner");
     }
 
     // ================= malformed programs =================

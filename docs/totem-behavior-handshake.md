@@ -18,7 +18,7 @@ Measured encoded sizes of the five standard roles (reference encoder):
 | Role | bytes | | Role | bytes |
 |---|---|---|---|---|
 | BASE (any team) | 41 | | FLAG | 91 |
-| BONUS / MALUS | 53 | | CP (the worst case) | 150 |
+| BONUS / MALUS | 53 | | CP (the worst case) | 191 |
 
 Budget: 225 bytes of program in the 237-byte 0xF1 payload.  Programs are
 data, so the projector validates (and can even simulate) them at
@@ -139,11 +139,15 @@ totems = {
 `std.totems.base(team)`, `.bonus()`, `.malus()`, `.flag(team)`, `.cp()` —
 so most games write one-liners; `games/freeforall.lua` spells the tables
 out in full as the tutorial.  The CP program in `std.lua` is the acid test:
-the hardest existing role is seven rules / 150 bytes, using ordered `cont`
-rules over one 2 s window (collect presence → attach/score/contest/idle →
-epilogue: clear ACC, beacon owner).  Attaching pays a point immediately
-and starts the emission period, so a capture is felt at once and each
-further period of unchallenged control pays another.
+the hardest existing role is eight rules / 191 bytes, using ordered `cont`
+rules over one 2 s window (collect presence → attach/score/settle/contest/
+idle → epilogue: clear ACC, beacon owner).  Attaching pays a point
+immediately and starts the emission period, so a capture is felt at once
+and each further period of unchallenged control pays another.  The
+"settle" rule exists because strip backgrounds are sticky: a contest that
+ends without changing the owner is not an event the ring would otherwise
+hear about, so R1 remembers that the contest pattern is up and the rule
+puts the owner's colour back.
 
 Rule shape (authoring):
 

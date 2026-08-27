@@ -323,9 +323,16 @@ end
 function std.totems.cp()
   local MSG = la.msg
   local POINT_MS = 10000        -- one point per emission period
+  -- R1 = 1 while the ring is showing the contest pattern.  Strip
+  -- backgrounds are sticky — whatever was applied last keeps playing —
+  -- so a hill that stops being contested has to be told, or it goes on
+  -- alternating team colours as if it were still being fought over.
+  -- Only a *change* of owner re-attaches on its own, and the common
+  -- ending of a contest (the challenger leaves, the owner stays) is not
+  -- a change of owner.
   return { vm = 1, states = { {
-    { enter = true,
-      run = { {"set", 0, 0xFF}, {"start", 0},
+    { enter = true,                       -- registers start at zero, so
+      run = { {"set", 0, 0xFF}, {"start", 0},   -- only R0 needs setting
               {"anim", "CPIdle", {"rgb", 80, 80, 80}} } },
     -- collect presence replies: sub-type 1..16 -> ACC bit 0..15
     { reply = MSG.CP_BEACON, cont = true,
@@ -338,7 +345,7 @@ function std.totems.cp()
     -- Actions run in order, so {"r",0} here is the owner just set.
     { every = 2000, cont = true,
       when = { {"acc", "single"}, {"low", "~=", {"r", 0}} },
-      run = { {"set", 0, {"low"}}, {"start", 0},
+      run = { {"set", 0, {"low"}}, {"set", 1, 0}, {"start", 0},
               {"bcast", MSG.CP_SCORE, {"r", 0}},
               {"anim", "Control", {"args", 0xFE, {"r", 0}}} } },
     -- still the same lone owner one period later: another point, and
@@ -348,14 +355,22 @@ function std.totems.cp()
                {"r", 0, "~=", 0xFF}, {"elapsed", 0, ">=", POINT_MS} },
       run = { {"bcast", MSG.CP_SCORE, {"r", 0}}, {"start", 0},
               {"anim", "Bonus"} } },
+    -- contest over — the challenger left, or everyone did: the hill is
+    -- back to its owner, so put the owner's colour back on the ring.
+    -- Sits BEFORE the contest rule on purpose: a window that is still
+    -- contested simply overwrites this, and only the last background
+    -- applied in a tick ever reaches the LEDs.
+    { every = 2000, cont = true,
+      when = { {"r", 1, "==", 1}, {"r", 0, "~=", 0xFF} },
+      run = { {"anim", "Control", {"args", 0xFE, {"r", 0}}}, {"set", 1, 0} } },
     -- contested: hold the current owner, show the contest
     { every = 2000, cont = true,
       when = { {"acc", "many"} },
-      run = { {"anim", "ControlContest"} } },
+      run = { {"anim", "ControlContest"}, {"set", 1, 1} } },
     -- empty and never owned: stay visibly unclaimed
     { every = 2000, cont = true,
       when = { {"acc", "empty"}, {"r", 0, "==", 0xFF} },
-      run = { {"anim", "CPIdle", {"rgb", 80, 80, 80}} } },
+      run = { {"anim", "CPIdle", {"rgb", 80, 80, 80}}, {"set", 1, 0} } },
     -- window epilogue: open the next window, beacon the owner
     { every = 2000,
       run = { {"accclr"}, {"bcast", MSG.CP_BEACON, {"r", 0}} } },
