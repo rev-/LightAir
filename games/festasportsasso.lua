@@ -108,10 +108,15 @@ local function cp_score_handler(vars, pkt)
 end
 
 -- Sender side: a confirmed lit is one more player lit, whether the
--- target survived it or went down.
-local function counted_lit(ui_event)
-  return function(vars)
+-- target survived it or went down.  `announce` is the tray line for the
+-- one a visitor wants to see — the beam is invisible and the buzzer
+-- cannot name anybody, so this is where they learn who they put down.
+local function counted_lit(ui_event, announce)
+  return function(vars, reply)
     vars.players_lit = vars.players_lit + 1
+    if announce then
+      la.show(la.player_short(reply.sender) .. announce, 3000)
+    end
     la.ui(ui_event)
   end
 end
@@ -308,7 +313,7 @@ return {
   on_reply = {
     [MSG.LIT] = {
       [R.TAKEN]  = counted_lit("Taken"),
-      [R.SHONE]  = counted_lit("Lit"),
+      [R.SHONE]  = counted_lit("Lit", " SHONE!"),
       [R.DOWN]   = function() la.ui("AlreadyDown") end,
       [R.IMMUNE] = function() la.ui("Immune")      end,
     },

@@ -133,7 +133,7 @@ return {
       [R.SHONE] = function(vars, reply)
         vars.energy = vars.energy + vars.start_energy   -- uncapped refill
         vars.points = vars.points + 1
-        la.show(la.player_short(reply.sender) .. " LIT", 2000)
+        la.show(la.player_short(reply.sender) .. " SHONE!", 3000)
         la.ui("Lit")
       end,
       [R.DOWN] = function(vars, reply)

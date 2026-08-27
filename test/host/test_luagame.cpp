@@ -29,13 +29,31 @@ static Enlight g_enlight(g_calib);
 Enlight* enlightPtr = &g_enlight;
 
 // ---- fake hardware behind the abstract interfaces ----
+// Records the tray band (the top of the screen) so a test can assert
+// that a ruleset's la.show() reached the glass, and that it left when it
+// expired: a fill over a tray row erases it, a print puts text back.
 struct FakeDisplay : LightAir_Display {
-    void clear() override {}
+    char tray[DisplayDefaults::TRAY_MAX_MESSAGES][32] = {};
+
+    static bool trayRow(uint8_t y, uint8_t& row) {
+        if (y >= DisplayDefaults::TRAY_HEIGHT) return false;
+        row = (uint8_t)(y / DisplayDefaults::FONT_HEIGHT);
+        return row < DisplayDefaults::TRAY_MAX_MESSAGES;
+    }
+    void clear() override { memset(tray, 0, sizeof(tray)); }
     void setColor(bool) override {}
-    void fillRect(uint8_t, uint8_t, uint8_t, uint8_t) override {}
+    void fillRect(uint8_t, uint8_t y, uint8_t, uint8_t) override {
+        uint8_t row;
+        if (trayRow(y, row)) tray[row][0] = '\0';
+    }
     void drawRect(uint8_t, uint8_t, uint8_t, uint8_t) override {}
     void drawBitmap(uint8_t, uint8_t, uint8_t, uint8_t, const uint8_t*) override {}
-    void print(uint8_t, uint8_t, const char*) override {}
+    void print(uint8_t, uint8_t y, const char* t) override {
+        uint8_t row;
+        if (!trayRow(y, row)) return;
+        strncpy(tray[row], t, sizeof(tray[row]) - 1);
+        tray[row][sizeof(tray[row]) - 1] = '\0';
+    }
     uint16_t textWidth(const char* t) override { return (uint16_t)(6 * strlen(t)); }
     void flush() override {}
 };
@@ -205,6 +223,15 @@ int main() {
     out = GameOutput();
     game.replyRadioRules[0].onReply(rep, orig, kNearRssi, disp, out);
     CHECK(*points == 1, "SHONE reply scored a point");
+
+    // …and the shiner is told who went down.  The beam is invisible and
+    // the UI cue cannot name a player, so this line is the whole feedback:
+    // it has to survive the trip la.show -> DisplayCtrl tray -> screen.
+    disp.update();
+    CHECK(!strcmp(rawDisp.tray[0], "YLW SHONE!"), "shone line reached the tray");
+    g_millis += 3001;                                  // the 3 s expiry
+    disp.update();
+    CHECK(rawDisp.tray[0][0] == '\0', "the line leaves when it expires");
 
     // ---- 6. Behaviour tick: trigger held -> shine, energy drops ----
     int* energy = slotOf(game, "energy");

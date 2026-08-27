@@ -152,10 +152,11 @@ return {
       [R.TAKEN]  = function() la.ui("Taken")  end,
       [R.FRIEND] = function() la.ui("Friend") end,
       [R.IMMUNE] = function() la.ui("Immune") end,
-      [R.SHONE]  = function(vars)
+      [R.SHONE]  = function(vars, reply)
         vars.points = vars.points + 1
         team_points = team_points + 1
         la.broadcast_relay(MSG.POINT_REPORT)
+        la.show(la.player_short(reply.sender) .. " SHONE!", 3000)
         la.ui("Lit")
       end,
     },

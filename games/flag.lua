@@ -247,7 +247,12 @@ return {
   on_reply = {
     [MSG.LIT] = {
       [R.TAKEN]  = function() la.ui("Taken")  end,
-      [R.SHONE]  = function() la.ui("Lit")    end,   -- no points for shining in Flag
+      -- No points for shining in Flag, but the tray still names who went
+      -- down: that is the only way a carrier's escort knows it worked.
+      [R.SHONE]  = function(vars, reply)
+        la.show(la.player_short(reply.sender) .. " SHONE!", 3000)
+        la.ui("Lit")
+      end,
       [R.FRIEND] = function() la.ui("Friend") end,
       [R.IMMUNE] = function() la.ui("Immune") end,
     },

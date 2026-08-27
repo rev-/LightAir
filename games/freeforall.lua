@@ -173,6 +173,10 @@ return {
       [R.IMMUNE] = function(vars, reply, orig) la.ui("Immune") end,
       [R.SHONE]  = function(vars, reply, orig)
         vars.points = vars.points + 1
+        -- The beam is invisible and the buzzer cannot name anybody, so
+        -- the one place a shiner learns WHO they put down is the tray.
+        -- `reply.sender` is the target: the reply came from them.
+        la.show(la.player_short(reply.sender) .. " SHONE!", 3000)
         la.ui("Lit")
       end,
     },
