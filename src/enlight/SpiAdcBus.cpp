@@ -33,16 +33,22 @@ bool SpiAdcBus::begin(spi_host_device_t host, int mosi, int miso, int clk,
 }
 
 bool SpiAdcBus::readChannel(uint8_t cmd, uint16_t& value_out) {
-    uint8_t tx[2] = { cmd, 0x00 };
-    uint8_t rx[2] = { 0,   0    };
+    // The ADC is pipelined: the channel selected in one 16-clock frame is
+    // converted and shifted out during the *next* frame.  Enlight compensates
+    // for the same delay with ADC_PIPELINE_DELAY when it decodes its DMA
+    // buffer; here the command is simply clocked twice in one transaction —
+    // the first frame returns whatever conversion was already in flight, the
+    // second one carries the channel asked for.
+    __attribute__((aligned(4))) uint8_t tx[4] = { cmd, 0x00, cmd, 0x00 };
+    __attribute__((aligned(4))) uint8_t rx[4] = { 0,   0,   0,   0    };
 
     spi_transaction_t t = {};
-    t.length    = 16;
-    t.rxlength  = 16;
+    t.length    = 32;
+    t.rxlength  = 32;
     t.tx_buffer = tx;
     t.rx_buffer = rx;
 
     if (spi_device_transmit(_dev, &t) != ESP_OK) return false;
-    value_out = (((uint16_t)rx[0] << 8) | rx[1]) & 0x0FFF;
+    value_out = (((uint16_t)rx[2] << 8) | rx[3]) & 0x0FFF;
     return true;
 }

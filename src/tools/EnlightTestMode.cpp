@@ -12,10 +12,11 @@ EnlightTestMode::EnlightTestMode(Enlight&            e,
                                   uint8_t             keypadId,
                                   SpiAdcSensor*       battSensor,
                                   SpiAdcSensor*       ledTempSensor,
-                                  SpiAdcSensor*       pdTempSensor)
+                                  SpiAdcSensor*       pdTempSensor,
+                                  float*              battVoltsOut)
     : _e(e), _ui(ui), _disp(disp), _input(input), _keypadId(keypadId),
       _battSensor(battSensor), _ledTempSensor(ledTempSensor),
-      _pdTempSensor(pdTempSensor) {}
+      _pdTempSensor(pdTempSensor), _battVoltsOut(battVoltsOut) {}
 
 EnlightTestMode::KeyEvent EnlightTestMode::pollKey() {
     const InputReport& rep = _input.poll();
@@ -90,7 +91,7 @@ void EnlightTestMode::run() {
     char diagColor[12]         = "--";
     char diagRgb[24]           = "--";
     char diagColorCoord[24]    = "--";
-    char diagSensors[22]       = "--";
+    char diagSensors[28]       = "--";
     uint32_t satPct = 0;
     bool     usedLP = false;
 
@@ -144,6 +145,10 @@ void EnlightTestMode::run() {
 
         if (key == buttonVirtualKey(InputDefaults::TRIG_1_ID) && state == (uint8_t)KeyState::PRESSED) {
             _e.setRepetitions(reps);
+            // Keep the AFE rail up when the run ends: the sensors read below
+            // are powered from it, and this way they ride on the settling time
+            // the shot already paid for.
+            _e.holdAfe();
             _e.run();
 
             EnlightResult res;
@@ -177,17 +182,28 @@ void EnlightTestMode::run() {
                 snprintf(diagColor, sizeof(diagColor), "none(%d)", (int)res.status);
             }
 
-            // Read sensors now that Enlight has released the SPI bus.
+            // Read sensors now that Enlight has released the SPI bus.  The
+            // rail is still up thanks to holdAfe(); ensureAfePowered() only
+            // costs the settling time if that somehow did not hold.
+            // Battery first: the NTC dividers hang off that rail, so their
+            // conversion needs the fresh voltage.
+            _e.ensureAfePowered();
             float bv, lt, pt;
-            bool bvOk = _battSensor    && _battSensor->read(bv);
+            bool bvOk = _battSensor && _battSensor->read(bv);
+            if (bvOk && _battVoltsOut) *_battVoltsOut = bv;
             bool ltOk = _ledTempSensor && _ledTempSensor->read(lt);
             bool ptOk = _pdTempSensor  && _pdTempSensor->read(pt);
-            if (bvOk || ltOk || ptOk) {
-                snprintf(diagSensors, sizeof(diagSensors), "V:%.2f L:%dC P:%dC",
-                         bvOk ? (double)bv : 0.0,
-                         ltOk ? (int)lt : -99,
-                         ptOk ? (int)pt : -99);
-            }
+            _e.releaseAfe();
+
+            // A failed read prints "--"; a real 0.00 V or 0 C is a reading.
+            char bs[8], ls[8], ps[8];
+            if (bvOk) snprintf(bs, sizeof(bs), "%.2f", (double)bv);
+            else      snprintf(bs, sizeof(bs), "--");
+            if (ltOk) snprintf(ls, sizeof(ls), "%dC", (int)lt);
+            else      snprintf(ls, sizeof(ls), "--");
+            if (ptOk) snprintf(ps, sizeof(ps), "%dC", (int)pt);
+            else      snprintf(ps, sizeof(ps), "--");
+            snprintf(diagSensors, sizeof(diagSensors), "V:%s L:%s P:%s", bs, ls, ps);
         }
     }
 }

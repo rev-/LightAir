@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 // Owns the SPI bus initialisation and the single spi_device_handle_t for the
-// shared ADC IC.  Must be constructed and begin()-ed before any client
+// shared ADC IC (TI ADC128S102, 8-channel 12-bit; see player_pins.h).  Must be constructed and begin()-ed before any client
 // (Enlight, sensors, SpiExternal) calls spi_bus_add_device() on the same host.
 //
 // Enlight calls getHandle() to obtain the handle for its bulk DMA transactions.
@@ -21,6 +21,10 @@ public:
     spi_device_handle_t getHandle() const { return _dev; }
 
     // Single-shot 12-bit read.  cmd = channel-select command byte for the ADC IC.
+    // Clocks the command twice, because the part is pipelined: the first frame
+    // only returns the conversion already in flight.
+    // Note the sensors sitting on these channels are powered from the AFE rail
+    // — a read taken with Enlight's AFE_ON low returns nothing useful.
     // Returns false on SPI error.
     bool readChannel(uint8_t cmd, uint16_t& value_out);
 

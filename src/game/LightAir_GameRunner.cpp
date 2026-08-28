@@ -154,9 +154,16 @@ void LightAir_GameRunner::update() {
     if (_enlight && _sensorCount > 0) {
         if (_enlight->isActive()) _lastEnlightActiveMs = loopStart;
         if (loopStart >= _nextSensorReadMs || _sensorReadPending) {
-            if (_enlight->isActive()) {
+            if (_enlight->busy()) {
+                // A run owns the ADC bus.  Ask it to leave the AFE rail up when
+                // it finishes: the sensors hang off that rail, and riding on a
+                // run's uptime saves powering and settling it ourselves.
+                _enlight->holdAfe();
                 _sensorReadPending = true;
             } else {
+                // Free if a run (or the holdAfe() above) already has the rail
+                // up, otherwise this powers it and blocks for the settling time.
+                _enlight->ensureAfePowered();
                 for (uint8_t i = 0; i < _sensorCount; i++) {
                     if (!_sensors[i]) continue;
                     float v;
@@ -165,6 +172,7 @@ void LightAir_GameRunner::update() {
                         if (i == 0 && _battVoltsOut) *_battVoltsOut = v;
                     }
                 }
+                _enlight->releaseAfe();
                 _sensorReadPending = false;
                 bool recentlyActive = (loopStart - _lastEnlightActiveMs)
                                       < SensorDefaults::ACTIVE_WINDOW_MS;
