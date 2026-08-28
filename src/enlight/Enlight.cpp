@@ -150,6 +150,7 @@ bool Enlight::begin(spi_device_handle_t adcHandle) {
     gc.mode=GPIO_MODE_OUTPUT;
     gpio_config(&gc);
     gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON, 0);
+    _afeOn = false;
 
     spi_bus_config_t lb={};
     lb.mosi_io_num=EnlightDefaults::LED_SDO;
@@ -219,6 +220,7 @@ bool Enlight::run() {
     _active=true;
     _firstCycle=true;
     gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,1);
+    _afeOn=true;
     spawnCycle();
     return true;
 }
@@ -555,7 +557,12 @@ void Enlight::onCycleDone() {
     }
 
     if (_repsRemaining==0) {
-        gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
+        // Leave the AFE rail up if a caller asked to read the sensors on it;
+        // releaseAfe() drops it once they are done.
+        if (!_afeHold) {
+            gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
+            _afeOn=false;
+        }
         EnlightResult r=classify();
         taskENTER_CRITICAL(&_mux);
         _latestResult=r;

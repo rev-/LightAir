@@ -12,7 +12,13 @@
 static constexpr int PLAYER_I2C_SDA =  8;
 static constexpr int PLAYER_I2C_SCL =  3;
 
-// ---- SPI (Enlight ADC — MCP3204 or equivalent) ----
+// ---- SPI (shared ADC — TI ADC128S102, 8-channel 12-bit) ----
+// One 16-clock frame per conversion.  The frame's first byte carries the
+// channel address in bits 5:3 (ADD2..ADD0), i.e. cmd = channel << 3; the
+// 12-bit result comes back in the low bits of the frame.  The part is
+// pipelined: the channel selected in one frame is converted and shifted out
+// during the *next* frame.  Enlight compensates for that with
+// ADC_PIPELINE_DELAY; single-shot reads clock the command twice.
 static constexpr int PLAYER_ADC_CS   = 13;  // chip select
 static constexpr int PLAYER_ADC_SDO  = 14;  // MOSI / FAR LED sine output
 static constexpr int PLAYER_ADC_SDI  = 21;  // MISO / ADC data in

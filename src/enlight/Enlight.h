@@ -4,6 +4,7 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/portmacro.h"
@@ -87,6 +88,56 @@ public:
     // True while a run() is in progress or its result has not yet been consumed by poll().
     // Non-destructive: does not clear the result. Use this for loop conditions.
     bool isActive() const { return _active; }
+
+    // True only while DMA cycles are actually in flight.  The dmaTask owns the
+    // shared ADC device for that whole window, so nothing else may touch the
+    // bus until this goes false (isActive() also covers the cooldown, when the
+    // bus is free again).
+    bool busy() const { return _active && !_complete; }
+
+    // ---- Analogue front end ------------------------------------------------
+    // AFE_ON powers the photodiode front end *and* the battery / NTC divider
+    // rail, so the SpiAdcSensor channels only read anything while it is up.
+    // run() raises it for the duration of a run and drops it when the last
+    // cycle completes.
+    //
+    //   holdAfe()           keep the rail up past the end of the current run,
+    //                       so a sensor read can ride on the settling time the
+    //                       run already paid for.  Cheap, never blocks; call it
+    //                       before or during the run.
+    //   ensureAfePowered()  rail up and settled by the time it returns.  Free
+    //                       when a run (or an earlier holdAfe()) already has it
+    //                       up; otherwise it powers the rail and blocks for
+    //                       AFE_STARTUP_MICROS.  Implies holdAfe().
+    //   releaseAfe()        drop the hold, and the rail with it unless a run is
+    //                       still using it.
+    //
+    // Read the sensors between ensureAfePowered() and releaseAfe(), and only
+    // while busy() is false.
+    void holdAfe() { _afeHold = true; }
+
+    void ensureAfePowered() {
+        const bool wasOn = _afeOn;
+        _afeHold = true;                  // set first: a run finishing between
+                                          // here and the raise must not drop it
+        gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON, 1);
+        _afeOn = true;
+        if (wasOn) return;                // already settled, nothing to wait for
+        const int64_t t0 = esp_timer_get_time();
+        while (esp_timer_get_time()-t0 < (int64_t)EnlightDefaults::AFE_STARTUP_MICROS) {}
+    }
+
+    void releaseAfe() {
+        _afeHold = false;
+        // busy(), not isActive(): with the hold set, the end-of-run code left
+        // the rail up and will not come back for it.  Only a run whose cycles
+        // are still in flight drops it on its own.
+        if (busy()) return;
+        gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON, 0);
+        _afeOn = false;
+    }
+
+    bool afePowered() const { return _afeOn; }
 
     // Set cooldown time, in milliseconds
     void setCooldown(int64_t ms) { _cooldown = ms * 1000; }
@@ -207,6 +258,15 @@ private:
 
     uint32_t        _repsRemaining = 0;
     bool            _firstCycle    = false;  // true on the first DMA cycle after AFE power-on
+
+    // AFE rail state.  Touched from both sides: run() and the dmaTask's
+    // end-of-run drive _afeOn, callers wanting the rail for a sensor read drive
+    // both through holdAfe() / ensureAfePowered() / releaseAfe().  volatile
+    // keeps either side from caching them; the drop-before-_complete ordering
+    // in onCycleDone() is what keeps a reader that waited for busy() to go
+    // false from seeing a stale _afeOn.
+    volatile bool   _afeOn         = false;
+    volatile bool   _afeHold       = false;
     TaskHandle_t    _taskHandle    = nullptr;
     struct TaskArgs { Enlight* self; };
     TaskArgs        _taskArgs      = {};

@@ -14,7 +14,8 @@ public:
                     uint8_t             keypadId,
                     SpiAdcSensor*       battSensor    = nullptr,
                     SpiAdcSensor*       ledTempSensor = nullptr,
-                    SpiAdcSensor*       pdTempSensor  = nullptr);
+                    SpiAdcSensor*       pdTempSensor  = nullptr,
+                    float*              battVoltsOut  = nullptr);
 
     void run();  // blocking; interactive Enlight test mode
 
@@ -35,6 +36,9 @@ private:
     SpiAdcSensor*       _battSensor;
     SpiAdcSensor*       _ledTempSensor;
     SpiAdcSensor*       _pdTempSensor;
+    // Supply reference the NTC sensors convert against — updated from the
+    // battery reading before the thermistors are converted.
+    float*              _battVoltsOut;
 
     // Input state tracking (mimics GameSetupMenu's gPrevKeyState / gPrevButtonState)
     uint8_t    _prevKeyState[256]    = {};

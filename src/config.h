@@ -182,9 +182,10 @@ namespace EnlightDefaults {
     constexpr int      ADC_SDI       = PLAYER_ADC_SDI;
     constexpr int      ADC_CS        = PLAYER_ADC_CS;
     constexpr uint32_t ADC_CLOCK_HZ  = 16000000;
-    constexpr uint8_t  ADC_CMD_R     = 24;
-    constexpr uint8_t  ADC_CMD_G     = 32;
-    constexpr uint8_t  ADC_CMD_B     = 40;
+    // ADC128S102 channel-select bytes — channel << 3 (ADD2..ADD0 in bits 5:3).
+    constexpr uint8_t  ADC_CMD_R     = 24;       // channel 3
+    constexpr uint8_t  ADC_CMD_G     = 32;       // channel 4
+    constexpr uint8_t  ADC_CMD_B     = 40;       // channel 5
     constexpr uint8_t  LED_HOST      = 2;        // SPI3_HOST
     constexpr int      LED_SDO       = PLAYER_LED_SDO;
     constexpr int      LED_SDI_OUT   = PLAYER_LED_SDI_OUT;
@@ -573,10 +574,11 @@ namespace colorBox {
 // Sensor configuration
 // ---------------------------------------------------------------
 namespace SensorDefaults {
-    // ADC channel-select commands — match to IC wiring.
-    static constexpr uint8_t  CMD_BATT_VOLT             = 0x00;
-    static constexpr uint8_t  CMD_LED_TEMP              = 0x10;
-    static constexpr uint8_t  CMD_PD_TEMP               = 0x08;
+    // ADC128S102 channel-select bytes — channel << 3 (ADD2..ADD0 in bits 5:3).
+    // Channels 3-5 are the Enlight photodiode inputs (see EnlightDefaults).
+    static constexpr uint8_t  CMD_BATT_VOLT             = 0x00;   // channel 0
+    static constexpr uint8_t  CMD_PD_TEMP               = 0x08;   // channel 1
+    static constexpr uint8_t  CMD_LED_TEMP              = 0x10;   // channel 2
 
     // ADC reference voltage.
     static constexpr float    ADC_VREF                  = 3.3f;

@@ -182,7 +182,8 @@ void _setup() {
                                                InputDefaults::KEYPAD_ID);
         testMode = new EnlightTestMode(*enlight, playerUi, rawDisplay, input,
                                        InputDefaults::KEYPAD_ID,
-                                       &battSensor, &ledTempSensor, &pdTempSensor);
+                                       &battSensor, &ledTempSensor, &pdTempSensor,
+                                       &battVolts);
         if (!enlight->begin(adcBus.getHandle())) {
             Serial.println("Enlight init FAILED — halting");
             while (true) delay(1000);
