@@ -252,7 +252,7 @@ bool Enlight::run() {
     _iqCount   = 0;
     _phaseGate = {};
     for (int ch = 0; ch < (int)ADC_CHANNELS; ch++)
-        _noiseVar[ch] = _rhoArr[ch] = 0.f;
+        _sigma[ch] = _rhoArr[ch] = 0.f;
     _coordErr[0] = _coordErr[1] = -1.f;
     _diagValid = false;
     _active=true;
@@ -476,12 +476,15 @@ void Enlight::processAdcCycle() {
 
         // Welford per-period I/Q update for the phase-confidence gate.
         // Per-period contribution: delta between cycle sums before and after this period.
-        // Scale-invariant: σ and R_mean are both in unscaled per-period units, so σ/R is preserved.
+        // Rescaled to full-power-equivalent units when this cycle ran in low-power mode,
+        // matching the rescale applied to the cycle sums below -- otherwise periods from
+        // a low-power cycle would be mixed at the wrong scale with full-power periods.
         const long long I_p[ADC_CHANNELS] = { rout_c - rout_c0, gout_c - gout_c0, bout_c - bout_c0 };
         const long long Q_p[ADC_CHANNELS] = { rnear_c - rnear_c0, gnear_c - gnear_c0, bnear_c - bnear_c0 };
+        const float periodScale = _useLowPower ? _cycleNormScale : 1.0f;
         _iqCount++;
         for (int ch = 0; ch < (int)ADC_CHANNELS; ch++) {
-            const float fi = (float)I_p[ch], fq = (float)Q_p[ch];
+            const float fi = (float)I_p[ch] * periodScale, fq = (float)Q_p[ch] * periodScale;
             float dI = fi - _iqMeanI[ch];
             _iqMeanI[ch] += dI / (float)_iqCount;
             _iqM2I[ch]   += dI * (fi - _iqMeanI[ch]);
@@ -554,7 +557,7 @@ EnlightResult Enlight::classify() {
         if (_iqCount >= 2) {
             for (int ch = 0; ch < (int)ADC_CHANNELS; ch++) {
                 const float sigma_eta2 = (_iqM2I[ch] + _iqM2Q[ch]) / (2.f * (_iqCount - 1));
-                _noiseVar[ch]          = sigma_eta2;
+                _sigma[ch]             = sqrtf(fmaxf(0.f, (float)_iqCount * sigma_eta2));
                 const float M_hat2     = _iqMeanI[ch]*_iqMeanI[ch] + _iqMeanQ[ch]*_iqMeanQ[ch];
                 const float rho        = (sigma_eta2 > 0.f)
                                          ? 2.f * (float)_iqCount * M_hat2 / sigma_eta2 : 0.f;
@@ -629,9 +632,9 @@ EnlightResult Enlight::classifyNear() {
     return {EnlightStatus::NEAR,0};
 }
 
-EnlightNoiseVar Enlight::noiseVariance() const {
+EnlightNoiseSigma Enlight::noiseSigma() const {
     if (!_diagValid) return {-1.f, -1.f, -1.f};
-    return {_noiseVar[0], _noiseVar[1], _noiseVar[2]};
+    return {_sigma[0], _sigma[1], _sigma[2]};
 }
 EnlightRhoVec Enlight::rhoVec() const {
     if (!_diagValid) return {-1.f, -1.f, -1.f};

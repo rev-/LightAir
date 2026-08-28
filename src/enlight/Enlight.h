@@ -74,7 +74,9 @@ struct EnlightPhaseGate {
     float snrPhase = 0.f;
 };
 
-struct EnlightNoiseVar  { float r, g, b; };          // σ²_η per channel; -1 if stale
+// σ of the accumulator SUM, per channel, pooled across FAR/NEAR quadratures --
+// same linear units as rawMeasure().rout/gout/bout and rnear/gnear/bnear. -1 if stale.
+struct EnlightNoiseSigma { float r, g, b; };
 struct EnlightRhoVec    { float r, g, b; };          // rho per channel;  -1 if stale
 struct EnlightCoordErr  { float outr, outang; };     // 99%-CI half-widths; -1 if no FAR hit
 
@@ -131,7 +133,7 @@ public:
     EnlightRawMeasure   rawMeasure()   const;
     EnlightColorCoords  colorCoords()  const { return _colorCoords; }
     EnlightPhaseGate    phaseGate()    const { return _phaseGate;   }
-    EnlightNoiseVar     noiseVariance() const;
+    EnlightNoiseSigma   noiseSigma()    const;
     EnlightRhoVec       rhoVec()        const;
     EnlightCoordErr     coordErrors()   const;
     const EnlightCalib& calib()        const { return _cal; }
@@ -234,7 +236,7 @@ private:
     float    _iqM2Q  [ADC_CHANNELS] = {};  // Welford M2 for NEAR, per channel
     uint32_t _iqCount = 0;                  // active periods counted (shared across channels)
     EnlightPhaseGate _phaseGate     = {};   // last classify() result, for diagnostics
-    float         _noiseVar[ADC_CHANNELS] = {};  // σ²_η per channel
+    float         _sigma[ADC_CHANNELS]    = {};  // pooled σ of accumulator sum, per channel
     float         _rhoArr  [ADC_CHANNELS] = {};  // rho per channel
     float         _coordErr[2]            = {};  // 99%-CI for outr, outang
     volatile bool _diagValid              = false;
