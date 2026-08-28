@@ -577,8 +577,8 @@ namespace SensorDefaults {
     // ADC128S102 channel-select bytes — channel << 3 (ADD2..ADD0 in bits 5:3).
     // Channels 3-5 are the Enlight photodiode inputs (see EnlightDefaults).
     static constexpr uint8_t  CMD_BATT_VOLT             = 0x00;   // channel 0
-    static constexpr uint8_t  CMD_PD_TEMP               = 0x08;   // channel 1
-    static constexpr uint8_t  CMD_LED_TEMP              = 0x30;   // channel 7
+    static constexpr uint8_t  CMD_PD_TEMP               = 0x38;   // channel 7
+    static constexpr uint8_t  CMD_LED_TEMP              = 0x08;   // channel 1
 
     // ADC reference voltage.
     static constexpr float    ADC_VREF                  = 3.3f;
