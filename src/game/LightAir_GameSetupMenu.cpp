@@ -36,6 +36,7 @@ static const char* TAG = "GameConfig";
 
 #define MGR_NVS_NAMESPACE  "lightair"
 #define MGR_NVS_KEY_DM     "is_dm"
+#define MGR_NVS_KEY_CFG    "last_cfg"   // blob: the config committed at the last game start
 
 // Key state tracking for menu input (used by waitForKey and resetKeyStates)
 static KeyState gPrevKeyState[256] = {};  // Track previous state per key (indexed by ASCII)
@@ -244,6 +245,54 @@ bool LightAir_GameSetupMenu::loadIsDm() {
     nvs_get_u8(h, MGR_NVS_KEY_DM, &val);
     nvs_close(h);
     return val != 0;
+}
+
+// Checkpoint the config that is actually about to run — same wire format
+// as the radio blob (game_serialize_config), just written to flash instead
+// of the air.  Called from commitToRunner(), so it captures the DM's own
+// edits and a non-DM's applied-from-radio values alike, right as a match
+// is confirmed on either path.
+//
+// This is what "Restart last game" (S1) reads back: without it, S1 only
+// remembered *which* game to reload, and reloading a game file always
+// resets every config slot to its declared default (LightAir_GameStore
+// only reuses live slots when the same typeId is already the realized
+// instance, which is never true right after a boot) — so "Restart" was
+// silently indistinguishable from "New" every time it mattered, i.e.
+// after the end-game A+B chord, which reboots the device.
+void LightAir_GameSetupMenu::saveLastConfig() {
+    if (!_game) return;
+    uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
+    uint16_t len = game_serialize_config(*_game, blob, sizeof(blob),
+                                         _totemAssignment, _teams, _radio.sessionToken());
+    if (len == 0) return;
+    nvs_handle_t h;
+    if (nvs_open(MGR_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_blob(h, MGR_NVS_KEY_CFG, blob, len);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+// Best-effort restore for S1: applies the persisted blob over `game`'s
+// freshly-defaulted slots exactly the way an incoming radio config blob
+// is applied (game_apply_config guards on a matching typeId), so S4a then
+// opens showing last session's values instead of the file's defaults.
+// The session token byte is deliberately ignored — runPreStart() always
+// mints a fresh one, and reusing a stale token would risk colliding with
+// any device or totem still lingering from the previous match.
+// Nothing is saved yet on a device's first-ever boot, and a mismatched or
+// truncated blob is rejected by game_apply_config() — both cases leave
+// `game`'s slots exactly as _mgr.load() just set them (the file defaults),
+// which is the same behaviour S1 already had before this existed.
+void LightAir_GameSetupMenu::applyLastConfig(const LightAir_Game& game) {
+    nvs_handle_t h;
+    if (nvs_open(MGR_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return;
+    uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
+    size_t len = sizeof(blob);
+    esp_err_t err = nvs_get_blob(h, MGR_NVS_KEY_CFG, blob, &len);
+    nvs_close(h);
+    if (err != ESP_OK) return;
+    game_apply_config(game, blob, (uint16_t)len, _totemAssignment, _teams, nullptr);
 }
 
 void LightAir_GameSetupMenu::runSettingsMenu() {
@@ -521,6 +570,7 @@ bool LightAir_GameSetupMenu::runRestartPrompt() {
             _game    = &lastGame;
             _gameIdx = lastIdx;
             initTotemAssignment();
+            applyLastConfig(lastGame);   // best-effort: last session's values, not the file's
             return true;
         }
         if (ev.key == 'B') return false;
@@ -1174,6 +1224,11 @@ void LightAir_GameSetupMenu::commitToRunner() {
         uint8_t id = TotemDefs::idFromIndex(s);
         _runner.addTotem(id, roleId);
     }
+
+    // Checkpoint what is actually about to run, for S1's "Restart" to
+    // read back after the reboot that always follows a match (the
+    // end-game A+B chord calls esp_restart()).
+    saveLastConfig();
 }
 
 /* =========================================================

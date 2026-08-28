@@ -144,6 +144,11 @@ private:
     void runShareTool();     // Settings → Share games (reboots on exit)
     void saveIsDm(bool val);
     bool loadIsDm();
+    // Config-blob checkpoint (same wire format as the radio broadcast),
+    // used to make S1 "Restart last game" restore actual values instead
+    // of the file's defaults.  See saveLastConfig()'s doc comment.
+    void saveLastConfig();
+    void applyLastConfig(const LightAir_Game& game);
 
     // ---- Non-DM waiting path ----
     MenuResult runWaiter();
