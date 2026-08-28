@@ -32,13 +32,37 @@ public:
         uint8_t y
     );
 
-    bool bindCooldownVariable(
+    /* ================================
+     *       BAR (value → filling gauge)
+     *
+     * Renders *variable* as a number, except while it sits at
+     * triggerValue: then the slot becomes a bar that fills over
+     * *fillSecs seconds, and reverts to the number as soon as the
+     * variable leaves the trigger.
+     *
+     * fillSecs is a POINTER into the owning config slot, not a copy:
+     * bindings are built once at game start while the duration
+     * (recharge / respawn seconds) stays menu-editable, so the bar must
+     * read it live.  It may be null, in which case nothing is drawn
+     * while at the trigger.
+     *
+     * The fill restarts whenever the variable arrives at the trigger, and
+     * whenever this binding set is activated — entering a state is what
+     * starts a respawn wait, and a bar bound to an always-at-trigger
+     * variable has no value change to key off.
+     *
+     * Two shapes cover what the game needs:
+     *   energy  : variable = energy,      trigger = 0, fill = rechargeSecs
+     *   respawn : variable = a const 0,   trigger = 0, fill = respawnSecs
+     *    =================================== */
+    bool bindBarVariable(
         int* variable,
         IconType icon,
         uint8_t x,
         uint8_t y,
-        uint32_t cooldownTimeMs,
-        uint8_t barWidth = 16
+        int triggerValue,
+        const int* fillSecs,
+        uint8_t barWidth = DisplayDefaults::BAR_WIDTH
     );
 
     bool bindStringVariable(
@@ -69,27 +93,28 @@ private:
 
     enum BindingType {
         TYPE_INT,
-        TYPE_COOLDOWN,
+        TYPE_BAR,
         TYPE_STRING
     };
 
     struct VariableBinding {
         union {
-            int*        variable;    // TYPE_INT, TYPE_COOLDOWN
+            int*        variable;    // TYPE_INT, TYPE_BAR
             const char* strVariable; // TYPE_STRING
         };
         IconType icon;
         BindingType type;
         uint8_t  x;
         uint8_t  y;
-        uint32_t cooldownTime;
-        uint32_t cooldownStart;
-        uint8_t  barWidth;
+        int        trigger;     // TYPE_BAR: value at which the bar takes over
+        const int* fillSecs;    // TYPE_BAR: live pointer to the fill duration
+        uint32_t   fillStart;   // TYPE_BAR: millis() when the fill began
+        uint8_t    barWidth;
         union {
-            int  lastValue;       // TYPE_INT, TYPE_COOLDOWN
+            int  lastValue;       // TYPE_INT, TYPE_BAR
             char lastText[32];    // TYPE_STRING
         };
-        bool     cooldownActive;
+        bool     filling;       // TYPE_BAR: currently drawing the bar
     };
 
     struct BindingSet {
@@ -103,7 +128,7 @@ private:
      *    =================================== */
     void renderBinding(VariableBinding& b);
     void renderInt(VariableBinding& b);
-    void renderCooldown(VariableBinding& b);
+    void renderBar(VariableBinding& b);
     void renderString(VariableBinding& b);
     void renderTray();
 

@@ -90,9 +90,18 @@ class LightAir_LEDStrip {
 public:
     static constexpr uint8_t MAX_LEDS = 30;
 
+    // One-shot animations QUEUE rather than replace one another: two players
+    // respawning at the same base in the same cycle must each get their own
+    // run of the strip, and a role that flashes twice in one rule (FLAG's
+    // missing-then-taken pair) must show both.  Overflow past this depth is
+    // dropped — a base still animating for a player who left long ago is
+    // worse than a missed frame.
+    static constexpr uint8_t MAX_ONESHOTS = 10;
+
     virtual ~LightAir_LEDStrip() {}
 
-    // Play a one-shot animation.  Overrides the background until complete.
+    // Queue a one-shot animation.  It plays as soon as the ones already
+    // queued finish, overriding the background for its duration.
     virtual void play(const StripAnimation& anim) = 0;
 
     // Set a looping background animation.  Plays whenever no foreground is active.

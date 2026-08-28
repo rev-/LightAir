@@ -23,6 +23,7 @@
 //   strip.begin(13, 13);                                  // DATA_PIN, NUM_LEDS
 //   strip.loop({ 255,0,0, StripEffect::Blink, 1000 });    // red blink forever
 //   strip.play({ 0,255,0, StripEffect::Wipe,  500  });    // green wipe once
+//   // one-shots queue: two play() calls in one tick show one after the other
 //   // in game loop:
 //   strip.update();
 // ----------------------------------------------------------------
@@ -41,15 +42,20 @@ private:
     CRGB    _leds[MAX_LEDS];
     uint8_t _numLeds  = 0;
 
-    // Foreground (one-shot)
-    StripAnimation _fg        = {};
-    bool           _fgActive  = false;
+    // Foreground (one-shots), played in arrival order.  _fgCount is the
+    // number still waiting including the one on screen, which sits at _fgHead.
+    StripAnimation _fg[MAX_ONESHOTS] = {};
+    uint8_t        _fgHead    = 0;
+    uint8_t        _fgCount   = 0;
     uint32_t       _fgStartMs = 0;
 
     // Background (looping)
     StripAnimation _bg        = {};
     bool           _bgActive  = false;
     uint32_t       _bgStartMs = 0;
+
+    // Total play time of one queued one-shot (pulseCount cycles, or one).
+    static uint32_t oneShotTotal(const StripAnimation& a);
 
     // Render `a` into _leds for the given elapsed time (ms since start).
     void renderAnim(const StripAnimation& a, uint32_t elapsed);

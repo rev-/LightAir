@@ -5,7 +5,7 @@
 //
 // Flash this sketch onto the totem ESP32 to assign its logical
 // totem number and hardware type.  After the sketch runs, reflash
-// the device with LightAir_Totem.ino.
+// the device with the unified firmware (LightAir.ino at the repo root).
 //
 // Usage:
 //   1. Open Serial Monitor at 115200 baud.
@@ -59,7 +59,7 @@ void setup() {
 
     if (cfg.id       == TOTEM_ID &&
         cfg.hardware == DeviceHardware::TOTEM) {
-        Serial.println("Provisioning OK.  Reflash with LightAir_Totem.ino.");
+        Serial.println("Provisioning OK.  Reflash with the unified LightAir.ino.");
     } else {
         Serial.println("MISMATCH — check NVS write permissions.");
     }

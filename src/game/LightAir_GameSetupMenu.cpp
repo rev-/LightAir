@@ -1,8 +1,29 @@
+// ----------------------------------------------------------------
+// LightAir_GameSetupMenu.cpp — the blocking pre-game menu.
+//
+// Map (the screen flow S1..S5 is drawn in the header):
+//   config blob serialize/apply  → free functions, top of file
+//   home / settings / share / ID → runSettingsMenu and friends
+//   non-DM path                  → runWaiter (join + wait for config)
+//   S1/S2 game choice            → runRestartPrompt / runGameList
+//   S4(+a,b,c) setup submenus    → runSetupMenu / runConfig-/Teams-/
+//                                  TotemsSubmenu
+//   S5 pre-start + countdown     → runPreStart / commitToRunner
+//   shared input plumbing        → pollKeyEvent / waitForKey (edge
+//                                  detection + HELD auto-repeat over
+//                                  raw InputReports), bottom of file
+//
+// Everything here runs BEFORE GameRunner::begin(): loops block on
+// waitForKey()/delay() and may talk to the radio directly — the
+// 10 ms READ→LOGIC→OUTPUT discipline only starts with the runner.
+// ----------------------------------------------------------------
 #include "LightAir_GameSetupMenu.h"
 #include "../tools/EnlightCalibRoutine.h"
 #include "../tools/EnlightTestMode.h"
+#include "../tools/GameFileServer.h"
 #include "../nvs_config.h"
-#include "../totem-rulesets/TotemRoleIds.h"
+#include "../version.h"
+#include "../totem/TotemRoleIds.h"
 #include <Arduino.h>
 #include <esp_log.h>
 #include <esp_random.h>
@@ -15,6 +36,7 @@ static const char* TAG = "GameConfig";
 
 #define MGR_NVS_NAMESPACE  "lightair"
 #define MGR_NVS_KEY_DM     "is_dm"
+#define MGR_NVS_KEY_CFG    "last_cfg"   // blob: the config committed at the last game start
 
 // Key state tracking for menu input (used by waitForKey and resetKeyStates)
 static KeyState gPrevKeyState[256] = {};  // Track previous state per key (indexed by ASCII)
@@ -146,10 +168,7 @@ LightAir_GameSetupMenu::LightAir_GameSetupMenu(LightAir_GameManager& mgr,
  *   PUBLIC API
  * ========================================================= */
 
-MenuResult LightAir_GameSetupMenu::run() {
-    _isDm = loadIsDm();
-
-    // ---- Home screen ----
+void LightAir_GameSetupMenu::runHomeScreen() {
     while (true) {
         const uint8_t pid = _radio.playerId();
         char playerLine[20];
@@ -158,7 +177,7 @@ MenuResult LightAir_GameSetupMenu::run() {
         _display.clear();
         _display.setColor(true);
         _display.print(0, 0,                              "Welcome to LightAir");
-        _display.print(0, DisplayDefaults::FONT_HEIGHT,    "V 1.0.0");
+        _display.print(0, DisplayDefaults::FONT_HEIGHT, VersionDefs::STR);
         _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, playerLine);
         printLegend("O:Play  X:Settings", DisplayDefaults::BOTTOM_LINE_Y);
         _display.flush();
@@ -170,30 +189,41 @@ MenuResult LightAir_GameSetupMenu::run() {
             _isDm = loadIsDm();   // refresh in case DM was toggled
             continue;
         }
-        if (ev.key == 'A') break;
+        if (ev.key == 'A') return;
     }
+}
 
-    // ---- Branch on DM ----
-    if (!_isDm) return runWaiter();
+MenuResult LightAir_GameSetupMenu::run() {
+    _isDm = loadIsDm();
 
-    // ---- S1: Restart last game? ----
-    bool restart = runRestartPrompt();
-
-    if (!restart) {
-        // ---- S2: Game list ----
-        runGameList();
-    }
-
-    // ---- S4 + S5: Setup → Pre-start (B in pre-start returns here) ----
+    // Home → play → (DM) game choice → setup → pre-start.  Every step that
+    // fails to leave a game selected drops back to Home rather than
+    // continuing: _game must be non-null from S2 onwards.
     while (true) {
-        if (!runSetupMenu()) {
-            // User pressed < to go back to game selection
-            runGameList();
-            continue;
+        // ---- Home screen ----
+        runHomeScreen();
+
+        // ---- Branch on DM ----
+        if (!_isDm) return runWaiter();
+
+        // ---- S1: Restart last game? ----
+        bool restart = runRestartPrompt();
+
+        // ---- S2: Game list ----
+        if (!restart && !runGameList()) continue;   // nothing to play → Home
+
+        // ---- S4 + S5: Setup → Pre-start (B in pre-start returns here) ----
+        bool confirmed = false;
+        while (true) {
+            if (!runSetupMenu()) {
+                // User pressed < to go back to game selection
+                if (!runGameList()) break;          // nothing to play → Home
+                continue;
+            }
+            if (runPreStart() == MenuResult::Confirmed) { confirmed = true; break; }
         }
-        if (runPreStart() == MenuResult::Confirmed) break;
+        if (confirmed) return MenuResult::Confirmed;
     }
-    return MenuResult::Confirmed;
 }
 
 /* =========================================================
@@ -217,9 +247,58 @@ bool LightAir_GameSetupMenu::loadIsDm() {
     return val != 0;
 }
 
+// Checkpoint the config that is actually about to run — same wire format
+// as the radio blob (game_serialize_config), just written to flash instead
+// of the air.  Called from commitToRunner(), so it captures the DM's own
+// edits and a non-DM's applied-from-radio values alike, right as a match
+// is confirmed on either path.
+//
+// This is what "Restart last game" (S1) reads back: without it, S1 only
+// remembered *which* game to reload, and reloading a game file always
+// resets every config slot to its declared default (LightAir_GameStore
+// only reuses live slots when the same typeId is already the realized
+// instance, which is never true right after a boot) — so "Restart" was
+// silently indistinguishable from "New" every time it mattered, i.e.
+// after the end-game A+B chord, which reboots the device.
+void LightAir_GameSetupMenu::saveLastConfig() {
+    if (!_game) return;
+    uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
+    uint16_t len = game_serialize_config(*_game, blob, sizeof(blob),
+                                         _totemAssignment, _teams, _radio.sessionToken());
+    if (len == 0) return;
+    nvs_handle_t h;
+    if (nvs_open(MGR_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_blob(h, MGR_NVS_KEY_CFG, blob, len);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+// Best-effort restore for S1: applies the persisted blob over `game`'s
+// freshly-defaulted slots exactly the way an incoming radio config blob
+// is applied (game_apply_config guards on a matching typeId), so S4a then
+// opens showing last session's values instead of the file's defaults.
+// The session token byte is deliberately ignored — runPreStart() always
+// mints a fresh one, and reusing a stale token would risk colliding with
+// any device or totem still lingering from the previous match.
+// Nothing is saved yet on a device's first-ever boot, and a mismatched or
+// truncated blob is rejected by game_apply_config() — both cases leave
+// `game`'s slots exactly as _mgr.load() just set them (the file defaults),
+// which is the same behaviour S1 already had before this existed.
+void LightAir_GameSetupMenu::applyLastConfig(const LightAir_Game& game) {
+    nvs_handle_t h;
+    if (nvs_open(MGR_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return;
+    uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
+    size_t len = sizeof(blob);
+    esp_err_t err = nvs_get_blob(h, MGR_NVS_KEY_CFG, blob, &len);
+    nvs_close(h);
+    if (err != ESP_OK) return;
+    game_apply_config(game, blob, (uint16_t)len, _totemAssignment, _teams, nullptr);
+}
+
 void LightAir_GameSetupMenu::runSettingsMenu() {
-    static const char* const kEntries[] = { "Calibration", "ID / DM", "Test Mode" };
-    static constexpr uint8_t kCount = 3;
+    static const char* const kEntries[] = { "Calibration", "ID / DM", "Test Mode",
+                                            "Share games" };
+    static constexpr uint8_t kCount = 4;
     uint8_t sel = 0;
 
     while (true) {
@@ -246,8 +325,64 @@ void LightAir_GameSetupMenu::runSettingsMenu() {
             if (sel == 0 && _calibTool) _calibTool->run();
             if (sel == 1) runIdSettings();
             if (sel == 2 && _testTool) _testTool->run();
+            if (sel == 3 && _shareTool) runShareTool();
         }
     }
+}
+
+void LightAir_GameSetupMenu::runShareTool() {
+    if (!_shareTool) return;
+
+    showMessage2("Share games", "Starting WiFi...", "", "");
+    if (!_shareTool->start()) {
+        showMessage2("Share games", "WiFi AP failed.", "Press any key.", "");
+        waitForKey();
+        return;
+    }
+
+    char url[28];
+    snprintf(url, sizeof(url), "http://%s/", _shareTool->ipAddress());
+    char pass[20];
+    snprintf(pass, sizeof(pass), "Pass: %s", _shareTool->password());
+
+    uint8_t  lastStations = 0xFF;      // force first draw
+    uint32_t lastDraw = 0;
+    resetKeyStates();
+
+    while (true) {
+        _shareTool->handleClient();
+
+        // Redraw when a device joins/leaves (and at least once a second,
+        // cheap enough and keeps the screen honest after odd states).
+        uint8_t  st  = _shareTool->stationCount();
+        uint32_t now = millis();
+        if (st != lastStations || now - lastDraw >= 1000) {
+            lastStations = st;
+            lastDraw = now;
+            char devs[20];
+            snprintf(devs, sizeof(devs), "Devices: %u", st);
+            _display.clear();
+            _display.setColor(true);
+            _display.print(0, 0, "-- Share games --");
+            _display.print(0, DisplayDefaults::FONT_HEIGHT,     _shareTool->ssid());
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * 2, pass);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * 3, url);
+            _display.print(0, DisplayDefaults::FONT_HEIGHT * 4, devs);
+            printLegend("X:Exit + reboot", DisplayDefaults::BOTTOM_LINE_Y);
+            _display.flush();
+        }
+
+        MenuKeyEvent ev = pollKeyEvent();
+        if (ev.key == 'B' && ev.state == KeyState::PRESSED) break;
+        delay(2);
+    }
+
+    // Uploads may have changed the game list, and SoftAP mode displaced
+    // the ESP-NOW radio — a reboot rescans /games and restores both.
+    _shareTool->stop();
+    showMessage2("Share games", "Rebooting...", "", "");
+    delay(300);
+    ESP.restart();
 }
 
 void LightAir_GameSetupMenu::runIdSettings() {
@@ -369,7 +504,14 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
             }
 
             if (ev.packet.msgType != _msgType) continue;
+            if (ev.packet.payloadLen < 2) continue;
+            uint16_t blobType;
+            memcpy(&blobType, ev.packet.payload, 2);
             for (uint8_t g = 0; g < _mgr.count(); g++) {
+                if (_mgr.game(g).typeId != blobType) continue;
+                // Realize lazy .lua entries: the placeholder has no config
+                // vars yet, and game_apply_config needs the real ones.
+                if (!_mgr.load(g)) break;
                 const LightAir_Game& candidate = _mgr.game(g);
                 uint8_t token = 0;
                 if (game_apply_config(candidate, ev.packet.payload,
@@ -420,9 +562,15 @@ bool LightAir_GameSetupMenu::runRestartPrompt() {
         MenuKeyEvent ev = waitForKey();
         if (ev.state != KeyState::PRESSED) continue;  // Only action buttons on PRESS
         if (ev.key == 'A') {
+            if (!_mgr.load(lastIdx)) {          // realize lazy .lua entries
+                showMessage2("Game failed", "to load.", "", "");
+                waitForKey();
+                return false;                   // fall through to the list
+            }
             _game    = &lastGame;
             _gameIdx = lastIdx;
             initTotemAssignment();
+            applyLastConfig(lastGame);   // best-effort: last session's values, not the file's
             return true;
         }
         if (ev.key == 'B') return false;
@@ -454,15 +602,19 @@ void LightAir_GameSetupMenu::renderGameList(uint8_t sel) {
     _display.flush();
 }
 
-void LightAir_GameSetupMenu::runGameList() {
-    if (_mgr.count() == 0) {
-        // Fallback: no games registered.
-        _game    = &_mgr.game(0);
-        _gameIdx = 0;
-        return;
-    }
-
+bool LightAir_GameSetupMenu::runGameList() {
     resetKeyStates();  // Sync prevState with current reality to prevent carryover
+
+    if (_mgr.count() == 0) {
+        // No games on flash: LittleFS failed to mount at boot, /games is
+        // empty, or every file was rejected by the manifest scan (see the
+        // "GameStore:" lines on the serial log).  Leave _game null and send
+        // the caller back to Home — the setup screens dereference it.
+        showMessage2("No games found", "Add .lua games:",
+                     "Settings>Share", "O:Back");
+        waitForKey();
+        return false;
+    }
 
     uint8_t lastIdx = _mgr.loadLastPlayed();
     uint8_t sel = (lastIdx < _mgr.count()) ? lastIdx : 0;
@@ -483,19 +635,30 @@ void LightAir_GameSetupMenu::runGameList() {
                 break;
             case 'A':
                 // Start with default/current config — skip S4.
+                if (!_mgr.load(sel)) {          // realize lazy .lua entries
+                    showMessage2("Game failed", "to load.", "", "");
+                    waitForKey();
+                    renderGameList(sel);
+                    break;
+                }
                 _game    = &_mgr.game(sel);
                 _gameIdx = sel;
                 _mgr.saveLastPlayed(sel);
                 initTotemAssignment();
-                return;
+                return true;
             case 'B':
                 // Enter setup.
+                if (!_mgr.load(sel)) {
+                    showMessage2("Game failed", "to load.", "", "");
+                    waitForKey();
+                    renderGameList(sel);
+                    break;
+                }
                 _game    = &_mgr.game(sel);
                 _gameIdx = sel;
                 _mgr.saveLastPlayed(sel);
                 initTotemAssignment();
-                runSetupMenu();
-                return;
+                return true;
         }
     }
 }
@@ -505,6 +668,7 @@ void LightAir_GameSetupMenu::runGameList() {
  * ========================================================= */
 
 bool LightAir_GameSetupMenu::runSetupMenu() {
+    if (!_game) return false;   // no game selected — caller returns to Home
     resetKeyStates();  // Sync prevState with current reality to prevent carryover
 
     // Build entry list: always Config + optional Teams + always Totems
@@ -684,7 +848,7 @@ void LightAir_GameSetupMenu::renderTeamEntry(uint8_t cursor) {
 
         uint8_t pid = (uint8_t)(idx + 1);  // player IDs 1–15
         char buf[20];
-        const char* teamName = (_teams[pid] == 0) ? TeamNames::kTeamO : TeamNames::kTeamX;
+        const char* teamName = TeamNames::forTeam(_teams[pid]);
         snprintf(buf, sizeof(buf), "%s%-3s  T%s",
                  (delta == 0) ? ">" : " ",
                  PlayerDefs::playerShort[pid],
@@ -853,6 +1017,7 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
  * ========================================================= */
 
 MenuResult LightAir_GameSetupMenu::runPreStart() {
+    if (!_game) return MenuResult::Cancelled;   // no game selected
     resetKeyStates();  // Sync prevState with current reality to prevent carryover
 
     // Generate session token (1–255; 0 is UNSET sentinel, skip it).
@@ -966,8 +1131,11 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll) {
         char buf[24];
         if (_game->teamCount > 0) {
             uint8_t off = (uint8_t)snprintf(buf, sizeof(buf), "P:%u(", nPlayers);
-            for (uint8_t t = 0; t < _game->teamCount && off + 4 < sizeof(buf); t++)
-                off += (uint8_t)snprintf(buf + off, sizeof(buf) - off, "%u:%u ", t, counts[t]);
+            // Teams are named ("O", "X", …), never numbered — the index is
+            // an internal id and means nothing to the player holding the DM.
+            for (uint8_t t = 0; t < _game->teamCount && off + 4u < sizeof(buf); t++)
+                off += (uint8_t)snprintf(buf + off, sizeof(buf) - off, "%s:%u ",
+                                         TeamNames::forTeam(t), counts[t]);
             if (off > 0 && buf[off - 1] == ' ') buf[off - 1] = ')';
         } else {
             snprintf(buf, sizeof(buf), "Players: %u", nPlayers);
@@ -1005,7 +1173,8 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll) {
             case TotemRoleId::BASE_X: case TotemRoleId::FLAG_X: team = 1; break;
         }
         if (team != 0xFF)
-            off += snprintf(full + off, sizeof(full) - off, " T%u", team);
+            off += snprintf(full + off, sizeof(full) - off, " T%s",
+                            TeamNames::forTeam(team));
 
         char rowBuf[20];
         snprintf(rowBuf, sizeof(rowBuf), "%s", full);
@@ -1055,6 +1224,11 @@ void LightAir_GameSetupMenu::commitToRunner() {
         uint8_t id = TotemDefs::idFromIndex(s);
         _runner.addTotem(id, roleId);
     }
+
+    // Checkpoint what is actually about to run, for S1's "Restart" to
+    // read back after the reboot that always follows a match (the
+    // end-game A+B chord calls esp_restart()).
+    saveLastConfig();
 }
 
 /* =========================================================

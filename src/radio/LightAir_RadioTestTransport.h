@@ -75,15 +75,22 @@ public:
         return true;
     }
 
-    bool receive(uint8_t* data, int& len, int maxLen) override {
+    // rssi: simulated receive-side signal strength (settable per test via
+    // testRssi; games gate proximity on it).  The parameter was added to
+    // the transport interface for RSSI support; this double had bit-rotted.
+    bool receive(uint8_t* data, int& len, int maxLen, int8_t& rssi) override {
         if (_recvHead == _recvTail) return false;
         const RawEntry& r = _recvQueue[_recvTail];
         int copyLen = (r.len < maxLen) ? r.len : maxLen;
         memcpy(data, r.data, copyLen);
-        len = copyLen;
+        len  = copyLen;
+        rssi = testRssi;
         _recvTail = (_recvTail + 1) % TEST_TRANSPORT_QUEUE;
         return true;
     }
+
+    // Signal strength reported for every received packet.
+    int8_t testRssi = -40;
 
     // ============================================================
     // Test helpers — inject incoming packets

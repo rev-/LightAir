@@ -9,6 +9,7 @@
 
 class EnlightCalibRoutine;
 class EnlightTestMode;
+class GameFileServer;
 
 // ----------------------------------------------------------------
 // Config blob format (used by game_serialize_config / game_apply_config):
@@ -96,7 +97,12 @@ public:
     // Must be called before run().
     void setTestTool(EnlightTestMode& t) { _testTool = &t; }
 
-    // Valid after Confirmed return.
+    // Optional: register the game share server (Settings → Share games):
+    // WiFi AP + web page to download the .lua games from this device and
+    // upload new ones to it.  Must be called before run().
+    void setShareTool(GameFileServer& t) { _shareTool = &t; }
+
+    // Valid after Confirmed return (which guarantees a selected game).
     const LightAir_Game& selectedGame() const { return *_game; }
 
 private:
@@ -110,11 +116,13 @@ private:
 
     EnlightCalibRoutine* _calibTool = nullptr;
     EnlightTestMode*     _testTool  = nullptr;
+    GameFileServer*      _shareTool = nullptr;
     bool                 _isDm   = false;
     const LightAir_Game* _game   = nullptr;
     uint8_t              _gameIdx = 0;
 
-    // Team assignments: _teams[id] = 0 (O) or 1 (X)
+    // Team assignments: _teams[id] = team index 0..teamCount-1
+    // (0 = O, 1 = X in two-team games); 0xFF = unassigned/teamless.
     uint8_t _teams[PlayerDefs::MAX_PLAYER_ID] = {};
 
     // Totem slot assignments: _totemAssignment[slot] = TotemRoleId constant.
@@ -130,17 +138,27 @@ private:
     uint8_t _countdownSecs = GameDefaults::COUNTDOWN_DEFAULT_S;
 
     // ---- Home / Settings ----
+    void runHomeScreen();    // blocks until O:Play; O:Settings handled inline
     void runSettingsMenu();
     void runIdSettings();
+    void runShareTool();     // Settings → Share games (reboots on exit)
     void saveIsDm(bool val);
     bool loadIsDm();
+    // Config-blob checkpoint (same wire format as the radio broadcast),
+    // used to make S1 "Restart last game" restore actual values instead
+    // of the file's defaults.  See saveLastConfig()'s doc comment.
+    void saveLastConfig();
+    void applyLastConfig(const LightAir_Game& game);
 
     // ---- Non-DM waiting path ----
     MenuResult runWaiter();
 
     // ---- S1 / S2 ----
     bool     runRestartPrompt();            // true → use last game, skip S2–S4
-    void     runGameList();                 // sets _game and _gameIdx
+    // Game picker.  true → _game / _gameIdx now hold the selection; false →
+    // nothing was selected (no games installed) and _game is still null, so
+    // the caller must go back Home instead of entering S4/S5.
+    bool     runGameList();
     void     renderGameList(uint8_t sel);
 
     // ---- S4 ----

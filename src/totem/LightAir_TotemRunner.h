@@ -3,12 +3,10 @@
 #include "LightAir_TotemOutput.h"
 
 // ----------------------------------------------------------------
-// LightAir_TotemRunner — abstract base for per-ruleset totem logic.
-//
-// One subclass is defined per game role that has totem-side
-// behaviour (e.g. FlagRunner, BaseRunner, CPRunner).
-// Multiple instances of the same subclass may run on different
-// totem devices simultaneously.
+// LightAir_TotemRunner — abstract lifecycle interface for totem
+// behaviour.  The single production implementation is
+// LightAir_TotemVM, which interprets the behaviour program received
+// in the 0xF1 activation reply (docs/totem-behavior-handshake.md).
 //
 // A totem is stateless (no role, no session token, no typeId) only
 // *between* games.  Lifecycle managed by LightAir_TotemDriver:
@@ -33,10 +31,9 @@
 //       watchdog (~10s margin) in case MSG_TOTEM_ROSTER is never received
 //     - optional per-role config (e.g. cooldown seconds for BONUS/MALUS)
 //
-//   TotemDriver looks up the runner via LightAir_TotemRoleManager, decodes
-//   the reply into a LightAir_TotemActivation, and calls
-//   runner->onActivate(info, out).  onMessage() is NOT called with the
-//   activation packet.
+//   TotemDriver decodes the reply into a LightAir_TotemActivation, loads
+//   the TotemVM program it carries, and calls onActivate(info, out).
+//   onMessage() is NOT called with the activation packet.
 //
 //   Unconfigured and non-totem senders receive no reply.
 //

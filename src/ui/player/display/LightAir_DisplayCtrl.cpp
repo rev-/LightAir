@@ -66,29 +66,33 @@ bool LightAir_DisplayCtrl::bindIntVariable(int* variable, IconType icon, uint8_t
     return true;
 }
 
-bool LightAir_DisplayCtrl::bindCooldownVariable(
+bool LightAir_DisplayCtrl::bindBarVariable(
     int* variable,
     IconType icon,
     uint8_t x,
     uint8_t y,
-    uint32_t cooldownTimeMs,
+    int triggerValue,
+    const int* fillSecs,
     uint8_t barWidth
 ) {
     if (y < DisplayDefaults::TRAY_HEIGHT) return false;
+    if (barWidth == 0 || barWidth > DisplayDefaults::BAR_WIDTH) return false;
 
     BindingSet& set = _sets[_selectedSet];
     if (set.locked || set.count >= DisplayDefaults::MAX_BINDINGS) return false;
 
     VariableBinding& b = set.bindings[set.count++];
-    b.variable       = variable;
-    b.icon           = icon;
-    b.type           = TYPE_COOLDOWN;
-    b.x              = x;
-    b.y              = y;
-    b.cooldownTime   = cooldownTimeMs;
-    b.cooldownActive = false;
-    b.barWidth       = barWidth;
-    b.lastValue      = INT32_MIN;
+    b.variable  = variable;
+    b.icon      = icon;
+    b.type      = TYPE_BAR;
+    b.x         = x;
+    b.y         = y;
+    b.trigger   = triggerValue;
+    b.fillSecs  = fillSecs;
+    b.fillStart = 0;
+    b.filling   = false;
+    b.barWidth  = barWidth;
+    b.lastValue = INT32_MIN;
     return true;
 }
 
@@ -149,6 +153,10 @@ void LightAir_DisplayCtrl::update() {
                 s.bindings[i].lastText[0] = '\0';
             else
                 s.bindings[i].lastValue = INT32_MIN;
+            // Entering a state is what starts a respawn wait, and a bar bound
+            // to an always-at-trigger variable sees no value change to key off.
+            if (s.bindings[i].type == TYPE_BAR)
+                s.bindings[i].filling = false;
         }
         // Any tray message already queued must be redrawn on the fresh buffer.
         for (uint8_t i = 0; i < DisplayDefaults::TRAY_MAX_MESSAGES; i++) {
@@ -173,8 +181,8 @@ void LightAir_DisplayCtrl::update() {
 void LightAir_DisplayCtrl::renderBinding(VariableBinding& b) {
     if (b.type == TYPE_INT)
         renderInt(b);
-    else if (b.type == TYPE_COOLDOWN)
-        renderCooldown(b);
+    else if (b.type == TYPE_BAR)
+        renderBar(b);
     else
         renderString(b);
 }
@@ -192,37 +200,44 @@ void LightAir_DisplayCtrl::renderInt(VariableBinding& b) {
 
     char buf[12];
     snprintf(buf, sizeof(buf), "%d", value);
-    _display.print(b.x + 10, b.y, buf);
+    _display.print(b.x + DisplayDefaults::ICON_GUTTER, b.y, buf);
 }
 
-void LightAir_DisplayCtrl::renderCooldown(VariableBinding& b) {
+void LightAir_DisplayCtrl::renderBar(VariableBinding& b) {
     int value = *b.variable;
 
-    if (value > 0) {
-        b.cooldownActive = false;
+    // Away from the trigger this slot is an ordinary number.
+    if (value != b.trigger) {
+        b.filling = false;
         renderInt(b);
         return;
     }
 
-    if (!b.cooldownActive) {
-        b.cooldownStart = millis();
-        b.cooldownActive = true;
+    // Arrived at the trigger (or the set was just activated): start filling.
+    if (!b.filling) {
+        b.fillStart = millis();
+        b.filling   = true;
+        b.lastValue = INT32_MIN;      // force the first bar frame to draw
     }
 
-    uint32_t elapsed = millis() - b.cooldownStart;
-    if (elapsed >= b.cooldownTime) {
-        b.cooldownActive = false;
-        return;
-    }
+    uint32_t fillMs = b.fillSecs ? (uint32_t)(*b.fillSecs) * 1000u : 0u;
+    if (fillMs == 0) return;          // nothing to time — leave the slot as is
 
-    float ratio = (float)elapsed / b.cooldownTime;
+    uint32_t elapsed = millis() - b.fillStart;
+    if (elapsed > fillMs) elapsed = fillMs;
+
+    // Redraw only when the drawn length would actually change.
+    int filled = (int)((elapsed * b.barWidth) / fillMs);
+    if (filled == b.lastValue) return;
+    b.lastValue = filled;
 
     _display.setColor(false);
     _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
     drawIcon(ICON_HOURGLASS, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
-    drawBar(b.x + 10, b.y + 2, b.barWidth, 6, ratio);
+    drawBar(b.x + DisplayDefaults::ICON_GUTTER, b.y + 2,
+            b.barWidth, DisplayDefaults::BAR_HEIGHT, (float)elapsed / (float)fillMs);
 }
 
 void LightAir_DisplayCtrl::renderString(VariableBinding& b) {
@@ -237,7 +252,7 @@ void LightAir_DisplayCtrl::renderString(VariableBinding& b) {
     _display.setColor(true);
 
     drawIcon(b.icon, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
-    _display.print(b.x + 10, b.y, b.lastText);
+    _display.print(b.x + DisplayDefaults::ICON_GUTTER, b.y, b.lastText);
 }
 
 /* =========================================================
@@ -298,6 +313,8 @@ const uint8_t* LightAir_DisplayCtrl::getIconBitmap(IconType icon) {
     }
 }
 
+// The one bar renderer in the firmware: every gauge on the player LCD
+// comes through here.
 void LightAir_DisplayCtrl::drawBar(uint8_t x, uint8_t y, uint8_t width, uint8_t height, float ratio) {
     uint8_t filled = width * ratio;
     _display.drawRect(x, y, width, height);

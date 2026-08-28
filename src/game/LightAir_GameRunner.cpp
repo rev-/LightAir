@@ -11,13 +11,26 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
                                  LightAir_DisplayCtrl& display,
                                  LightAir_InputCtrl&   input,
                                  LightAir_Radio&       radio,
-                                 LightAir_UICtrl*      ui) {
+                                 LightAir_UICtrl*      ui,
+                                 Enlight*              enlight,
+                                 SpiAdcSensor**        sensors,
+                                 uint8_t               sensorCount,
+                                 float*                battVoltsOut) {
     _game    = &game;
     _display = &display;
     _input   = &input;
     _radio   = &radio;
     _ui      = ui;
     _bindingCount = 0;
+
+    _enlight     = enlight;
+    _battVoltsOut = battVoltsOut;
+    _sensorCount = (sensorCount < MAX_SENSORS) ? sensorCount : MAX_SENSORS;
+    for (uint8_t i = 0; i < _sensorCount; i++)
+        _sensors[i] = sensors ? sensors[i] : nullptr;
+    _lastEnlightActiveMs = 0;
+    _nextSensorReadMs    = 0;
+    _sensorReadPending   = false;
 
     // -- Build display binding sets from MonitorVar::stateMask --
 
@@ -109,6 +122,15 @@ uint8_t LightAir_GameRunner::totemIdForRole(uint8_t roleId, uint8_t idx) const {
 }
 
 /* =========================================================
+ *   SENSOR VALUE ACCESSOR
+ * ========================================================= */
+
+float LightAir_GameRunner::sensorValue(uint8_t idx) const {
+    if (idx >= _sensorCount) return 0.0f;
+    return _sensorValues[idx];
+}
+
+/* =========================================================
  *   TEAM MAP
  * ========================================================= */
 
@@ -127,6 +149,31 @@ uint8_t LightAir_GameRunner::teamOf(uint8_t id) const {
 
 void LightAir_GameRunner::update() {
     uint32_t loopStart = millis();
+
+    // ---- Sensor scheduling (three-state cadence) ----
+    if (_enlight && _sensorCount > 0) {
+        if (_enlight->isActive()) _lastEnlightActiveMs = loopStart;
+        if (loopStart >= _nextSensorReadMs || _sensorReadPending) {
+            if (_enlight->isActive()) {
+                _sensorReadPending = true;
+            } else {
+                for (uint8_t i = 0; i < _sensorCount; i++) {
+                    if (!_sensors[i]) continue;
+                    float v;
+                    if (_sensors[i]->read(v)) {
+                        _sensorValues[i] = v;
+                        if (i == 0 && _battVoltsOut) *_battVoltsOut = v;
+                    }
+                }
+                _sensorReadPending = false;
+                bool recentlyActive = (loopStart - _lastEnlightActiveMs)
+                                      < SensorDefaults::ACTIVE_WINDOW_MS;
+                _nextSensorReadMs = loopStart + (recentlyActive
+                    ? SensorDefaults::SENSOR_ACTIVE_CADENCE_MS
+                    : SensorDefaults::SENSOR_STANDBY_CADENCE_MS);
+            }
+        }
+    }
 
     // ---- Step 1: READ ----
     const InputReport& inputs = _input->poll();
@@ -188,20 +235,24 @@ void LightAir_GameRunner::update() {
         if (ev.type != RadioEventType::MessageReceived) continue;
         if (infraHandled[e]) continue;
 
-        bool matched = false;
         for (uint8_t i = 0; i < _game->directRadioRuleCount; i++) {
             const DirectRadioRule& r = _game->directRadioRules[i];
             if (r.fromState != *_game->currentState) continue;
             if (r.msgType   != ev.packet.msgType)    continue;
             if (r.condition && !r.condition(ev.packet)) continue;
 
-            if (r.onReceive) r.onReceive(ev.packet, *_display, output);
-            output.radio.reply(ev.packet, r.replySubType);
-            matched = true;
+            if (r.onReceive) r.onReceive(ev.packet, ev.rssi, *_display, output);
+            // DYNAMIC_REPLY: the callback queued its own reply with a
+            // runtime-decided sub-type (Lua handlers return it).
+            if (r.replySubType != DirectRadioRule::DYNAMIC_REPLY)
+                output.radio.reply(ev.packet, r.replySubType);
             break;
         }
-        if (!matched)
-            output.radio.reply(ev.packet);  // standard empty reply — prevents sender timeout
+        // No blanket reply for an unmatched message.  Totem beacons are
+        // broadcasts every player in range hears; answering all of them was
+        // pure airtime, and it let an uninterested player's empty reply stand
+        // in for the deliberate one a BASE or BONUS was waiting for.  A reply
+        // now means "this ruleset acted on your beacon", nothing else.
     }
 
     // Step 2c: ReplyRadioRules — handle all ReplyReceived and Timeout events.
@@ -220,7 +271,7 @@ void LightAir_GameRunner::update() {
                 (ev.packet.payloadLen == 0 || ev.packet.payload[0] != r.replySubType)) continue;
             if (r.condition && !r.condition(ev.packet, ev.original)) continue;
 
-            if (r.onReply) r.onReply(ev.packet, ev.original, *_display, output);
+            if (r.onReply) r.onReply(ev.packet, ev.original, ev.rssi, *_display, output);
             break;
         }
     }
@@ -296,8 +347,13 @@ void LightAir_GameRunner::update() {
 //                  duration of the game)
 //   payload[2:3] = gameTimeLeft as uint16_t, big-endian, exact seconds;
 //                  0xFFFF if the ruleset has no live countdown to report
-//   payload[4]   = *configSecs for this role, only if a requirement has one set
-// No reply is sent to non-totem senders or totems with no assigned role.
+//   payload[4]   = TotemVMDefs::VERSION
+//   payload[5:6] = program length, uint16_t little-endian
+//   payload[7..] = the serialized TotemVM program (the totem's whole
+//                  behaviour; per-role config seconds are baked into it)
+//
+// No reply is sent to non-totem senders, totems with no assigned role,
+// or roles the game defines no program for.
 void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& output) {
     uint8_t id = ev.packet.senderId;
     if (!TotemDefs::isTotemId(id)) return;
@@ -305,8 +361,7 @@ void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& o
     for (uint8_t t = 0; t < _totemCount; t++) {
         if (_totems[t].id != id) continue;
         uint8_t roleId = _totems[t].roleId;
-        uint8_t buf[5] = { roleId, _radio->sessionToken(), 0xFF, 0xFF, 0 };
-        uint8_t bufLen = 4;
+        uint8_t buf[7 + TotemVMDefs::MAX_PROG] = { roleId, _radio->sessionToken(), 0xFF, 0xFF };
 
         if (_game->gameTimeLeft) {
             uint16_t secs = (uint16_t)*_game->gameTimeLeft;   // exact, no rounding
@@ -314,18 +369,15 @@ void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& o
             buf[3] = (uint8_t)(secs & 0xFF);
         }
 
-        // Include configSecs if any requirement for this role has one.
-        if (_game->totemRequirements) {
-            for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
-                const LightAir_TotemRequirement& req = _game->totemRequirements[r];
-                if (req.roleId == roleId && req.configSecs != nullptr) {
-                    buf[4] = (uint8_t)*req.configSecs;
-                    bufLen = 5;
-                    break;
-                }
-            }
-        }
-        output.radio.replyWithPayload(ev.packet, buf, bufLen);
+        const TotemProgramEntry* prog =
+            _game->totemProgram ? _game->totemProgram(roleId) : nullptr;
+        if (!prog || !prog->bytes || prog->len > TotemVMDefs::MAX_PROG)
+            break;   // no program for this role: no reply, totem stays IDLE
+        buf[4] = TotemVMDefs::VERSION;
+        buf[5] = (uint8_t)(prog->len & 0xFF);
+        buf[6] = (uint8_t)(prog->len >> 8);
+        memcpy(buf + 7, prog->bytes, prog->len);
+        output.radio.replyWithPayload(ev.packet, buf, (uint8_t)(7 + prog->len));
         break;
     }
 }

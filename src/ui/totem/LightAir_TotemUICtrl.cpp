@@ -13,6 +13,7 @@ constexpr uint16_t kMalusIdlePeriod =  400;
 constexpr uint16_t kFlagMissPeriod  = 1500;
 constexpr uint16_t kControlPeriod   = 1500;
 constexpr uint16_t kContestPeriod   =  600;
+constexpr uint16_t kRespawnPeriod   = 1000;   // one full lap of the strip
 
 inline uint16_t periodOr(const TotemUICmd& cmd, uint16_t fallback) {
     return cmd.periodMs ? cmd.periodMs : fallback;
@@ -142,7 +143,24 @@ void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
 
         case TotemUIEvent::Control: {
             uint8_t r, g, b;
-            if (cmd.r == 0xFF) {
+            if (cmd.r == 0xFE) {
+                // Slot-based (TotemVM): cmd.g = owner slot 0-15.
+                // Slots 0/1 are teams; 2+ map to player id = slot+1.
+                // Keeps the colour policy in the renderer so the VM
+                // needs no arithmetic (docs/totem-behavior-handshake.md).
+                uint8_t slot = cmd.g;
+                if (slot < 2) {
+                    r = TeamColors::kColors[slot][0];
+                    g = TeamColors::kColors[slot][1];
+                    b = TeamColors::kColors[slot][2];
+                } else {
+                    uint8_t pid = (uint8_t)(slot + 1);
+                    if (pid >= PlayerDefs::MAX_PLAYER_ID) pid = 0;
+                    r = PlayerColors::kColors[pid][0];
+                    g = PlayerColors::kColors[pid][1];
+                    b = PlayerColors::kColors[pid][2];
+                }
+            } else if (cmd.r == 0xFF) {
                 // Player-based: look up by player ID in cmd.g
                 uint8_t pid = (cmd.g < PlayerDefs::MAX_PLAYER_ID) ? cmd.g : 0;
                 r = PlayerColors::kColors[pid][0];
@@ -187,12 +205,18 @@ void LightAir_TotemUICtrl::dispatchOneShot(const TotemUICmd& cmd) {
     // number of cycles to play before the background resumes.
     switch (cmd.event) {
         case TotemUIEvent::Respawn: {
-            // Fast, sharp perimeter blink in the respawned player's colour —
-            // contrasts with Base's smooth idle breathing.  4 blinks @200ms.
-            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Blink, 200,
-                                 0,0,0, StripZone::Perimeter, /*cycles*/ 4 };
+            // One lit LED runs the whole strip once, in the respawning
+            // player's colour: unmistakable across the room, and its single
+            // travelling dot reads nothing like Base's breathing perimeter
+            // idle.  One 1 s lap — short enough that two players respawning
+            // together are both shown without the base lagging behind them.
+            StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Chase,
+                                 kRespawnPeriod,
+                                 0,0,0, StripZone::All, /*cycles*/ 1 };
             _strip.play(a);
-            _rgb.set(cmd.r, cmd.g, cmd.b);
+            // RGB button untouched: it keeps showing whose base this is,
+            // which would otherwise stay stuck on the visitor's colour —
+            // the base only repaints it when its idle state is re-entered.
             break;
         }
 

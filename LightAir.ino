@@ -20,19 +20,21 @@
 
 #include <Arduino.h>
 #include <ArduinoLog.h>
-#include <LightAir.h>
+#include "src/LightAir.h"
 #ifndef LOG_LEVEL
 #define LOG_LEVEL LOG_LEVEL_INFO
 #endif 
 
-#include <tools/EnlightCalibRoutine.h>
-#include <tools/EnlightTestMode.h>
+#include "src/tools/EnlightCalibRoutine.h"
+#include "src/tools/EnlightTestMode.h"
+#include "src/tools/GameFileServer.h"
+#include "src/lua/LightAir_GameStore.h"
 
 // ----------------------------------------------------------------
 // Enlight global pointer
-// Required by every ruleset translation unit.  Set to the real
-// Enlight instance on the player path; left nullptr on the totem
-// path (player ruleset code is compiled in but never called).
+// Required by the Lua game binding (la.shine verbs).  Set to the
+// real Enlight instance on the player path; left nullptr on the
+// totem path (the verbs guard against it).
 // ----------------------------------------------------------------
 Enlight* enlightPtr = nullptr;
 
@@ -46,11 +48,10 @@ static LightAir_Radio*      radio = nullptr;
 // TOTEM PATH — objects are trivially constructed at global scope;
 // hardware init (begin() calls) only runs when hw == TOTEM.
 // ================================================================
-static LightAir_TotemRGB_HW      totemRgb;
-static LightAir_LEDStrip_HW      totemStrip;
-static LightAir_TotemUICtrl      totemUi(totemRgb, totemStrip);
-static LightAir_TotemRoleManager roleMgr;
-static LightAir_TotemDriver*     driver = nullptr;
+static LightAir_TotemRGB_HW  totemRgb;
+static LightAir_LEDStrip_HW  totemStrip;
+static LightAir_TotemUICtrl  totemUi(totemRgb, totemStrip);
+static LightAir_TotemDriver* driver = nullptr;
 
 // ================================================================
 // PLAYER PATH — objects are trivially constructed at global scope;
@@ -62,6 +63,16 @@ static EnlightCalib       enlightCalib;
 static Enlight*           enlight      = nullptr;
 static EnlightCalibRoutine* calibRoutine = nullptr;
 static EnlightTestMode*   testMode     = nullptr;
+
+// ---- SPI ADC bus and sensors ----
+static SpiAdcBus   adcBus;
+static float       battVolts = SensorDefaults::ADC_VREF;
+static VDivSensor  battSensor(SensorDefaults::BATT_R_TOP, SensorDefaults::BATT_R_BOTTOM);
+static NtcSensor   ledTempSensor(SensorDefaults::LED_NTC_R_FIXED, SensorDefaults::LED_NTC_R0,
+                                  SensorDefaults::LED_NTC_BETA, &battVolts);
+static NtcSensor   pdTempSensor (SensorDefaults::PD_NTC_R_FIXED,  SensorDefaults::PD_NTC_R0,
+                                  SensorDefaults::PD_NTC_BETA,  &battVolts);
+static SpiExternal extSpi;
 
 
 // ---- Display ----
@@ -88,6 +99,8 @@ static LightAir_InputCtrl input;
 // ---- Game ----
 static LightAir_GameManager manager;
 static LightAir_GameRunner  runner;
+static LightAir_GameStore   gameStore;   // LittleFS-backed .lua games
+static GameFileServer       shareServer; // Settings → Share games (WiFi AP)
 
 // ================================================================
 // Runtime path flag (set in setup(), read in loop())
@@ -98,7 +111,7 @@ static DeviceHardware hw;
 
 
 #ifdef TEST_UNIT
-#include <test/LightAir_test.h>"
+#include "src/test/LightAir_test.h"
 
 void _setup() {
     // write as needed  
@@ -122,14 +135,13 @@ void _setup() {
 
     if (hw == DeviceHardware::TOTEM) {
         // ------------------------------------------------------------
-        // TOTEM PATH
+        // TOTEM PATH — no game files, no role registry: behaviour
+        // arrives as a TotemVM program in the activation handshake.
         // ------------------------------------------------------------
-        registerAllTotems(roleMgr);
-
         static RadioConfig radioCfg;
         radio  = new LightAir_Radio(transport, cfg.id,
                                     RadioToken::UNSET, 0, 0, radioCfg);
-        driver = new LightAir_TotemDriver(*radio, totemUi, roleMgr);
+        driver = new LightAir_TotemDriver(*radio, totemUi);
 
         totemRgb.begin(TOTEM_PIN_COMM, TOTEM_PIN_R, TOTEM_PIN_G, TOTEM_PIN_B);
         totemStrip.begin(TOTEM_PIN_DATA, TOTEM_NUM_LEDS);
@@ -147,6 +159,21 @@ void _setup() {
         // PLAYER PATH
         // ------------------------------------------------------------
 
+        // SPI ADC bus — must be initialised before Enlight and sensors.
+        if (!adcBus.begin((spi_host_device_t)EnlightDefaults::ADC_HOST,
+                          EnlightDefaults::ADC_SDO, EnlightDefaults::ADC_SDI,
+                          EnlightDefaults::ADC_CLK, EnlightDefaults::ADC_CS,
+                          (int)EnlightDefaults::ADC_CLOCK_HZ,
+                          ENLIGHT_SPI_MAX_DMA_LEN)) {
+            Serial.println("SPI ADC bus init FAILED — halting");
+            while (true) delay(1000);
+        }
+        battSensor   .begin(adcBus, SensorDefaults::CMD_BATT_VOLT, "V");
+        ledTempSensor.begin(adcBus, SensorDefaults::CMD_LED_TEMP,  "C");
+        pdTempSensor .begin(adcBus, SensorDefaults::CMD_PD_TEMP,   "C");
+        extSpi.begin((spi_host_device_t)EnlightDefaults::ADC_HOST,
+                     SPI_EXT_CS, (int)EnlightDefaults::ADC_CLOCK_HZ);
+
         // Enlight
         enlight_calib_load(enlightCalib);
         enlight      = new Enlight(enlightCalib);
@@ -154,8 +181,9 @@ void _setup() {
         calibRoutine = new EnlightCalibRoutine(*enlight, rawDisplay, input,
                                                InputDefaults::KEYPAD_ID);
         testMode = new EnlightTestMode(*enlight, playerUi, rawDisplay, input,
-                                       InputDefaults::KEYPAD_ID);
-        if (!enlight->begin()) {
+                                       InputDefaults::KEYPAD_ID,
+                                       &battSensor, &ledTempSensor, &pdTempSensor);
+        if (!enlight->begin(adcBus.getHandle())) {
             Serial.println("Enlight init FAILED — halting");
             while (true) delay(1000);
         }
@@ -181,21 +209,30 @@ void _setup() {
             while (true) delay(1000);
         }
 
-        // Game setup menu (blocking)
-        registerAllGames(manager);
+        // Games are .lua files on LittleFS (seeded from the embedded
+        // bundle on first boot); there are no firmware-coded games.
+        // Zero registered games is survivable — the menu says so instead
+        // of starting a game — but it is always a fault worth logging.
+        if (!gameStore.begin())
+            Log.errorln("GameStore: LittleFS unavailable — no games installed");
+        else if (gameStore.registerLuaGames(manager) == 0)
+            Log.errorln("GameStore: no playable game files in %s", LuaDefaults::GAMES_DIR);
         LightAir_GameSetupMenu menu(manager, runner,
                                     rawDisplay, input,
                                     InputDefaults::KEYPAD_ID,
                                     *radio);
         menu.setCalibTool(*calibRoutine);
         menu.setTestTool(*testMode);
+        menu.setShareTool(shareServer);
         if (menu.run() != MenuResult::Confirmed) {
             Log.infoln("Setup menu cancelled — rebooting");
             ESP.restart();
         }
 
         // Start game
-        runner.begin(menu.selectedGame(), displayCtrl, input, *radio, &playerUi);
+        static SpiAdcSensor* gameSensors[] = { &battSensor, &ledTempSensor, &pdTempSensor };
+        runner.begin(menu.selectedGame(), displayCtrl, input, *radio, &playerUi,
+                     enlight, gameSensors, 3, &battVolts);
 
         Log.infoln("Player ready.");
     }

@@ -30,11 +30,13 @@ struct RadioOutMsg {
 };
 
 // Minimal fields needed to send a reply (avoids copying the full RadioPacket).
+// The payload is sized for the largest reply we send: the 0xF1 totem
+// activation reply carrying a TotemVM program (header + up to 225 bytes).
 struct RadioReplyMsg {
     uint8_t  senderId;
     uint8_t  origMsgType;
     uint32_t origTimestamp;
-    uint8_t  payload[5];    // reply payload bytes
+    uint8_t  payload[GameDefaults::RADIO_REPLY_PAYLOAD];
     uint8_t  payloadLen;    // 0 = no payload
 };
 
@@ -93,11 +95,12 @@ struct RadioOutput {
         }
     }
 
-    // Queue a reply with an explicit multi-byte payload (up to 5 bytes).
+    // Queue a reply with an explicit multi-byte payload.
     void replyWithPayload(const RadioPacket& original,
                           const uint8_t* pl, uint8_t len) {
         if (replyCount >= GameDefaults::RADIO_REPLY_MAX) return;
-        if (len > 5) len = 5;
+        if (len > GameDefaults::RADIO_REPLY_PAYLOAD)
+            len = GameDefaults::RADIO_REPLY_PAYLOAD;
         RadioReplyMsg& r   = replies[replyCount++];
         r.senderId         = original.senderId;
         r.origMsgType      = original.msgType;

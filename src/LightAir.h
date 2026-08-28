@@ -4,8 +4,15 @@
 #include "config.h"
 #include "nvs_config.h"
 
-// Optical hit detection
+// Optical shine emission + lit-target detection
+#include "enlight/SpiAdcBus.h"
 #include "enlight/Enlight.h"
+
+// Sensor inputs
+#include "input/SpiAdcSensor.h"
+#include "input/NtcSensor.h"
+#include "input/VDivSensor.h"
+#include "input/SpiExternal.h"
 
 // Radio
 #include "radio/LightAir_Radio.h"
@@ -29,10 +36,6 @@
 #include "game/LightAir_RadioOutput.h"
 #include "game/LightAir_UIOutput.h"
 #include "game/LightAir_GameOutput.h"
-#include "game/LightAir_GameVar.h"
-#include "game/LightAir_StateRule.h"
-#include "game/LightAir_StateBehavior.h"
-#include "game/LightAir_TotemRequirement.h"
 #include "totem/LightAir_TotemOutput.h"
 #include "totem/LightAir_TotemRunner.h"
 #include "game/LightAir_Game.h"
@@ -48,12 +51,7 @@
 #include "ui/totem/LightAir_TotemUIOutput.h"
 #include "ui/totem/LightAir_TotemUICtrl.h"
 
-// Totem driver and role registry
+// Totem driver (games arrive as TotemVM programs over the radio)
 #include "totem/LightAir_TotemDriver.h"
-#include "totem/LightAir_TotemRole.h"
-#include "totem/LightAir_TotemRoleManager.h"
-#include "totem/AllTotems.h"
-#include "totem-rulesets/TotemRoleIds.h"
-
-// Rulesets
-#include "rulesets/AllGames.h"
+#include "totem/LightAir_TotemVM.h"
+#include "totem/TotemRoleIds.h"

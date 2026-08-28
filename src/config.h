@@ -31,9 +31,9 @@
 namespace RadioMsg {
 
 // ── 0x10 block: player game messages ───────────────────────────
-// Used by every game that has direct player-to-player hits.
+// Used by every game where players shine each other directly.
 
-// Unicast hit notification sent by shooter to target.
+// Unicast lit notification, sent by the shining player to the lit target.
 // Reply (0x11) payload[0] = ReplySubType (TAKEN / SHONE / DOWN / FRIEND).
 constexpr uint8_t MSG_LIT           = 0x10;
 
@@ -43,7 +43,10 @@ constexpr uint8_t MSG_SCORE_COLLECT = 0x12;
 // Periodic team-score update so teammates track aggregate points (Teams).
 constexpr uint8_t MSG_POINT_REPORT  = 0x14;
 
-// Next available in 0x10 block: 0x16
+// 0x16 is used by games/virus.lua (Lua-declared infection broadcast;
+// game files may claim even msgTypes outside the 0xA0/0xF0 blocks —
+// typeId + sessionToken isolate games on the wire).
+// Next available in 0x10 block: 0x18
 
 // ── 0x50 block: totem-mediated game messages ────────────────────
 // Messages that travel between a player and a totem (not player→player).
@@ -79,7 +82,8 @@ constexpr uint8_t MSG_BASE_BEACON   = 0x56;
 
 // FLAG totem beacon (new role-based architecture).
 // payload[0] = state (0=FLAG_IN, 1=FLAG_OUT); payload[1] = team (0=O, 1=X).
-// Reply (0x59): enemy-team player picking up the flag.
+// Unanswered: a pickup is announced to everyone with MSG_FLAG_EVENT, which
+// is what the FLAG totem itself listens on.
 constexpr uint8_t MSG_FLAG_BEACON   = 0x58;
 
 // Reserved (retired): flag drop/score is now carried by MSG_FLAG_EVENT
@@ -96,20 +100,14 @@ constexpr uint8_t MSG_BONUS_BEACON  = 0x5E;
 // Reply (0x61): player claims malus.
 constexpr uint8_t MSG_MALUS_BEACON  = 0x60;
 
-// Player → BASE totem unicast: "I am respawning at you" (even; no relay).
-// payload[0] = myTeam+1 (non-zero sanity marker). senderId = the player and
-// team = the player's team (both auto-stamped by sendTo). Replaces the old
-// odd-reply respawn signal, which processPacket() silently dropped because the
-// base's beacon (broadcast) never stored a pending entry to match it against.
+// Reserved (retired): player → totem unicasts that once carried respawn and
+// CP presence.  They existed because a broadcast beacon's replies were being
+// dropped — the radio released a broadcast's pending slot on the first reply,
+// so only one of the many answers to a beacon ever arrived.  That is fixed in
+// LightAir_Radio (a broadcast keeps its slot for the whole reply window), so
+// the odd-reply signal carries both again and there is one mechanism instead
+// of two.  Do not reuse these byte values.
 constexpr uint8_t MSG_RESPAWN_NOTIFY = 0x62;
-
-// Player → CP totem unicast: "I am present at you" (even; no relay).
-// Presence is RSSI-gated at the CP, so the player is in direct range — a
-// unicast addressed to the CP suffices (no hops). payload[0] = myTeam+1
-// (1..16; 0 reserved/ignored). Replaces the old odd-reply presence signal,
-// which processPacket() silently dropped (same bug as base respawn),
-// breaking CP ownership detection. CPTotem folds payload[0] into its
-// presence mask exactly as it did the old reply subType.
 constexpr uint8_t MSG_CP_NOTIFY      = 0x64;
 
 // Next available in 0x50 block: 0x66
@@ -163,7 +161,7 @@ constexpr uint8_t MSG_TOTEM_ROSTER  = 0xF2;
 // ---------------------------------------------------------------
 namespace FlagEvent {
     constexpr uint8_t TAKEN   = 1;  // a player picked up the flag
-    constexpr uint8_t DROPPED = 2;  // carrier was shot; flag returns home
+    constexpr uint8_t DROPPED = 2;  // carrier was shone; flag returns home
     constexpr uint8_t SCORED  = 3;  // flag captured at a base; flag returns home
 }
 
@@ -259,6 +257,11 @@ namespace DisplayDefaults {
     constexpr uint8_t CELL_HEIGHT       = FONT_HEIGHT + 2;
     // Y coordinate of the last text row — always pinned to the screen bottom.
     constexpr uint8_t BOTTOM_LINE_Y     = SCREEN_HEIGHT - FONT_HEIGHT - FONT_TOP_PADDING;
+    // A bar binding draws to the right of its 8 px icon (+2 px gap) and must
+    // stay inside its own cell, so this is also the widest a bar may be.
+    constexpr uint8_t ICON_GUTTER       = 10;
+    constexpr uint8_t BAR_WIDTH         = CELL_WIDTH - ICON_GUTTER - 4;
+    constexpr uint8_t BAR_HEIGHT        = 6;
 }
 
 // ---------------------------------------------------------------
@@ -276,8 +279,9 @@ namespace GameDefaults {
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
     constexpr uint8_t  RADIO_OUT_PAYLOAD = 237;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
-    constexpr uint8_t  MAX_GAMES         = 8;    // max games registered in GameManager
+    constexpr uint8_t  MAX_GAMES         = 50;   // max games in the menu (manifests are lightweight)
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
+    constexpr uint8_t  RADIO_REPLY_PAYLOAD = 237; // max payload bytes per queued reply (0xF1 carries TotemVM programs)
     constexpr uint8_t  MAX_WINNER_VARS   = 2;    // max entries in a winnerVars[] table (primary + tie-breaker)
     constexpr uint32_t SCORE_RETRY_MS           = 2000; // ms between score re-broadcasts during scoringState
     constexpr uint32_t SCORE_TIMEOUT_MS         = 10000;// ms before winner shown despite missing scores
@@ -285,6 +289,54 @@ namespace GameDefaults {
     constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
     constexpr uint8_t  MSG_END_GAME             = RadioMsg::MSG_END_GAME;
 }
+// ---------------------------------------------------------------
+// Lua game engine configuration
+// ---------------------------------------------------------------
+namespace LuaDefaults {
+    constexpr uint8_t  API_VERSION     = 1;      // game-file `api` contract version
+    constexpr uint8_t  MAX_LUA_GAMES   = 4;      // fully-loaded instances (selected game + scratch); the
+                                                 // menu lists lightweight manifests, loaded on selection
+    constexpr uint8_t  MAX_VARS        = 24;     // int + text slots per game
+    constexpr uint8_t  MAX_TEXT_LEN    = 16;     // capacity of one text slot (incl. NUL)
+    constexpr uint8_t  MAX_VAR_ID      = 20;     // max chars of a var/config id
+    constexpr uint8_t  MAX_CFG_NAME    = 13;     // menu label buffer (12 chars + NUL)
+    constexpr uint8_t  MAX_RULES       = 16;     // state-transition rules per game
+    constexpr uint8_t  MAX_MSG_RULES   = 24;     // (state, msgType) handler pairs
+    constexpr uint8_t  MAX_MONITOR     = 16;     // monitor entries per game
+    constexpr uint8_t  MAX_STATES      = 8;      // game states (mask fits uint32)
+    constexpr uint8_t  MAX_COUNTDOWNS  = 4;      // vars with countdown_in per game
+    constexpr uint8_t  MAX_GAME_NAME   = 16;     // display name buffer (15 + NUL)
+    constexpr uint32_t INSTR_BUDGET    = 200000; // Lua instructions per callback
+    constexpr const char* GAMES_DIR    = "/games";
+    constexpr const char* LIB_DIR      = "/games/lib";
+}
+
+// ---------------------------------------------------------------
+// Game share server (Settings -> Share games)
+// ---------------------------------------------------------------
+namespace ShareDefaults {
+    constexpr const char* AP_SSID_PREFIX = "LightAir-";   // + player short name
+    constexpr const char* AP_PASSWORD    = "lightair";    // WPA2 (>= 8 chars)
+    constexpr uint16_t    HTTP_PORT      = 80;
+    constexpr uint32_t    MAX_UPLOAD     = 64 * 1024;     // one .lua file
+}
+
+// ---------------------------------------------------------------
+// TotemVM — fixed state-machine interpreter in totem firmware,
+// configured by the program carried in the 0xF1 activation reply.
+// See docs/totem-behavior-handshake.md for the normative encoding.
+// ---------------------------------------------------------------
+namespace TotemVMDefs {
+    constexpr uint8_t VERSION        = 1;
+    constexpr uint8_t MAX_STATES     = 8;
+    constexpr uint8_t MAX_REGS       = 8;
+    constexpr uint8_t MAX_TIMERS     = 4;
+    constexpr uint8_t MAX_RULES      = 32;   // total across all states
+    constexpr uint8_t MAX_PROG       = 225;  // program bytes inside the 0xF1 payload
+    constexpr uint8_t MAX_BCAST_TPL  = 8;    // template bytes per bcast action
+    constexpr uint8_t MAX_ENTER_DEPTH = 4;   // goto/enter recursion cap
+}
+
 // ---------------------------------------------------------------
 // Totem identity tables
 //
@@ -294,7 +346,7 @@ namespace GameDefaults {
 namespace TotemDefs {
     constexpr uint8_t MAX_TOTEM_ID    = 254;
     constexpr uint8_t MAX_TOTEMS      = 16;   // IDs 239–254
-    constexpr uint8_t MAX_TOTEM_ROLES = 32;   // max entries in LightAir_TotemRoleManager
+    constexpr uint8_t MAX_TOTEM_ROLES = 8;    // max totem roles one game declares
 
     constexpr uint8_t totemIndex(uint8_t id)   { return MAX_TOTEM_ID - id; }
     constexpr uint8_t idFromIndex(uint8_t idx) { return MAX_TOTEM_ID - idx; }
@@ -409,14 +461,6 @@ static_assert((1u + GameDefaults::MAX_WINNER_VARS * 4u) * (PlayerDefs::MAX_PLAYE
 // Used by the totem UI layer (LightAir_TotemUICtrl) and any runner
 // that needs to map a team or player ID to a display colour.
 // ---------------------------------------------------------------
-// ---------------------------------------------------------------
-// Team names
-// ---------------------------------------------------------------
-namespace TeamNames {
-    constexpr const char* kTeamO = "O";
-    constexpr const char* kTeamX = "X";
-}
-
 namespace TeamColors {
     // [team][channel]  0=R, 1=G, 2=B  — up to 8 teams supported
     static constexpr uint8_t kCount = 8;
@@ -430,6 +474,26 @@ namespace TeamColors {
         {   0,   0, 255 },  // team 6 : blue
         { 128,   0, 255 },  // team 7 : purple
     };
+}
+
+// ---------------------------------------------------------------
+// Team names
+//
+// One short label per team index, in step with TeamColors::kColors:
+// team 0 is "O", team 1 is "X", and the extra slots keep going through
+// the alphabet.  Everything the player sees — the pre-game roster, the
+// team-assignment submenu, the start summary — names teams through
+// forTeam(), and game files reach the same table through the la.team_short()
+// kernel verb, so nothing anywhere spells "O"/"X" out for itself.
+// ---------------------------------------------------------------
+namespace TeamNames {
+    constexpr const char* kNames[TeamColors::kCount] = {
+        "O", "X", "C", "D", "E", "F", "G", "H",
+    };
+    // Safe lookup: clamps out-of-range team indices to entry 0.
+    constexpr const char* forTeam(uint8_t team) {
+        return kNames[(team < TeamColors::kCount) ? team : 0];
+    }
 }
 
 // ---------------------------------------------------------------
@@ -503,6 +567,40 @@ namespace colorBox {
         { -10, -10, -10, -10 },      //15
         { -10, -10, -10, -10 },      //16
         };
+}
+
+// ---------------------------------------------------------------
+// Sensor configuration
+// ---------------------------------------------------------------
+namespace SensorDefaults {
+    // ADC channel-select commands — match to IC wiring.
+    static constexpr uint8_t  CMD_BATT_VOLT             = 0x00;
+    static constexpr uint8_t  CMD_LED_TEMP              = 0x10;
+    static constexpr uint8_t  CMD_PD_TEMP               = 0x08;
+
+    // ADC reference voltage.
+    static constexpr float    ADC_VREF                  = 3.3f;
+
+    // NTC parameters — LED board temperature sensor.
+    // Reference part: NTCG104EF104FT1X
+    static constexpr float    LED_NTC_R_FIXED           = 100000.0f;
+    static constexpr float    LED_NTC_R0                = 100000.0f;
+    static constexpr float    LED_NTC_BETA              = 4308.0f;
+
+    // NTC parameters — photodiode temperature sensor.
+    // Reference part: NCP15WF104F03RC
+    static constexpr float    PD_NTC_R_FIXED            = 22000.0f;
+    static constexpr float    PD_NTC_R0                 = 100000.0f;
+    static constexpr float    PD_NTC_BETA               = 4250.0f;
+
+    // Battery voltage divider resistors.
+    static constexpr float    BATT_R_TOP                = 100000.0f;
+    static constexpr float    BATT_R_BOTTOM             = 100000.0f;
+
+    // Scheduling cadence.
+    static constexpr uint32_t ACTIVE_WINDOW_MS          =  30000;   // 30 s
+    static constexpr uint32_t SENSOR_ACTIVE_CADENCE_MS  =   2000;   //  2 s
+    static constexpr uint32_t SENSOR_STANDBY_CADENCE_MS = 600000;   // 10 min
 }
 
 #endif // CONFIG_H
