@@ -577,19 +577,29 @@ namespace SensorDefaults {
     // ADC128S102 channel-select bytes — channel << 3 (ADD2..ADD0 in bits 5:3).
     // Channels 3-5 are the Enlight photodiode inputs (see EnlightDefaults).
     static constexpr uint8_t  CMD_BATT_VOLT             = 0x00;   // channel 0
-    static constexpr uint8_t  CMD_PD_TEMP               = 0x38;   // channel 7
     static constexpr uint8_t  CMD_LED_TEMP              = 0x08;   // channel 1
+    static constexpr uint8_t  CMD_PD_TEMP               = 0x38;   // channel 7
 
     // ADC reference voltage.
     static constexpr float    ADC_VREF                  = 3.3f;
 
-    // NTC parameters — LED board temperature sensor.
+    // Divider supply rails.  The battery divider and the LED NTC divider are
+    // powered from the battery, so their readings scale with it — the NTC needs
+    // the measured battery voltage passed in as its supply, and the ADC
+    // reference does not cancel out.  The PD NTC divider runs off a fixed 3.3 V
+    // rail, equal to the ADC reference, so there the reference cancels and the
+    // battery voltage is irrelevant.
+
+    // NTC parameters — LED board temperature sensor.  Battery-referenced.
     // Reference part: NTCG104EF104FT1X
     static constexpr float    LED_NTC_R_FIXED           = 100000.0f;
     static constexpr float    LED_NTC_R0                = 100000.0f;
     static constexpr float    LED_NTC_BETA              = 4308.0f;
 
-    // NTC parameters — photodiode temperature sensor.
+    // NTC parameters — photodiode temperature sensor.  Fixed 3.3 V reference.
+    // R_FIXED is RT1, which carries a 1 uF cap in parallel: it holds the node
+    // steady for the ADC's sampling instant, and would make the divider slow to
+    // settle (tau ~ 18 ms) if that rail were ever switched rather than fixed.
     // Reference part: NCP15WF104F03RC
     static constexpr float    PD_NTC_R_FIXED            = 22000.0f;
     static constexpr float    PD_NTC_R0                 = 100000.0f;

@@ -70,8 +70,11 @@ static float       battVolts = SensorDefaults::ADC_VREF;
 static VDivSensor  battSensor(SensorDefaults::BATT_R_TOP, SensorDefaults::BATT_R_BOTTOM);
 static NtcSensor   ledTempSensor(SensorDefaults::LED_NTC_R_FIXED, SensorDefaults::LED_NTC_R0,
                                   SensorDefaults::LED_NTC_BETA, &battVolts);
+// Fixed 3.3 V divider supply — passed explicitly (not &battVolts) so the
+// constant-supply conversion is used: supply == adc_ref, so it cancels out.
 static NtcSensor   pdTempSensor (SensorDefaults::PD_NTC_R_FIXED,  SensorDefaults::PD_NTC_R0,
-                                  SensorDefaults::PD_NTC_BETA,  &battVolts);
+                                  SensorDefaults::PD_NTC_BETA,
+                                  SensorDefaults::ADC_VREF, SensorDefaults::ADC_VREF);
 static SpiExternal extSpi;
 
 
