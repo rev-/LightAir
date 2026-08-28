@@ -578,7 +578,7 @@ namespace SensorDefaults {
     // Channels 3-5 are the Enlight photodiode inputs (see EnlightDefaults).
     static constexpr uint8_t  CMD_BATT_VOLT             = 0x00;   // channel 0
     static constexpr uint8_t  CMD_PD_TEMP               = 0x08;   // channel 1
-    static constexpr uint8_t  CMD_LED_TEMP              = 0x10;   // channel 2
+    static constexpr uint8_t  CMD_LED_TEMP              = 0x30;   // channel 7
 
     // ADC reference voltage.
     static constexpr float    ADC_VREF                  = 3.3f;
