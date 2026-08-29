@@ -20,12 +20,14 @@
 --              BASE plays its respawn animation, the King of Hill
 --              screen comes up and the turn clock starts at sub_time.
 --   ACTIVE     the King of Hill sub-game, turn clock running.
---   DOWN       shone: the clock keeps running, a BASE brings you back
---              after respawn_secs — exactly as in King of Hill.
---   SUB_END    the clock ran out: a frozen stats screen showing the
---              turn's numbers.  The A+B chord (deliberately NOT
---              written on the screen — it is the staff's key, not
---              the visitor's) starts the next visitor's turn.
+--   DOWN       shone: "OUT OF GAME" / "GO TO BASE" on the tray while the
+--              clock keeps running; a BASE brings you back after
+--              respawn_secs — exactly as in King of Hill.
+--   SUB_END    the clock ran out: a frozen stats screen leading with
+--              "#<counter> POINTS: <score>" (score = 10 per CP totem
+--              point plus 1 per player lit this turn).  The A+B chord
+--              (deliberately NOT written on the screen — it is the
+--              staff's key, not the visitor's) starts the next turn.
 --
 -- The player counter is the one number that survives a restart. It
 -- reads as "<visitors before this one><projector digit>": 2 = the
@@ -64,7 +66,6 @@ local cp_ids      = {}          -- [i] = device id of the i-th CP totem
 local cp_owner    = {}          -- [i] = last announced owner slot or CP_NONE
 local respawn_at  = 0
 local can_respawn = false
-local shone_by    = nil         -- short name of whoever put us down
 local imm         = std.immunity(3000)
 local shiner      = std.shiner{ energy = "energy", spent = "energy_spent",
                                 max = "start_energy", recharge = "recharge_secs" }
@@ -128,24 +129,25 @@ end
 
 -- Shone: out until a BASE picks us up again.  The turn clock keeps
 -- running, so a long wait costs the visitor playing time.  Two
--- persistent lines say who put them down and what to do about it; the
--- "Down" cue is the moment feedback, so no transient line competes.
+-- persistent lines for the whole wait; the "Down" cue is the moment
+-- feedback, so no transient line competes for the tray.
 local function go_down(vars)
   vars.shone_times = vars.shone_times + 1
   respawn_at  = la.now() + vars.respawn_secs * 1000
   can_respawn = false
-  la.show("Go to base", 0)
-  la.show("LIT by " .. (shone_by or "?"), 0)
+  la.show("GO TO BASE", 0)
+  la.show("OUT OF GAME", 0)
   la.ui("Down")
 end
 
--- Turn over: freeze the numbers and read them out.  The tray spells
--- out the pair the four-cell screen has to squeeze into one cell.
+-- Turn over: freeze the numbers and read them out.  The tray leads with
+-- the number that matters to the visitor: their player number and the
+-- score for this turn — 10 points per CP totem point, 1 per player lit.
 local function sub_end(vars)
   vars.tally = string.format("%d/%d", vars.players_lit, vars.shone_times)
   la.clear_tray()
-  la.show(string.format("LIT %d  SHONE %d",
-                        vars.players_lit, vars.shone_times), 0)
+  la.show(string.format("#%d POINTS: %d",
+                        vars.counter, 10 * vars.points + vars.players_lit), 0)
   la.show("Time up!", 3000)
   la.ui("EndGame")
 end
@@ -167,7 +169,6 @@ local function welcome(vars)
   vars.tally        = "0/0"
   respawn_at  = 0
   can_respawn = false
-  shone_by    = nil
   imm.reset()
   shiner.reset()
   la.clear_tray()
@@ -186,7 +187,6 @@ local function start_turn(vars)
   vars.energy    = vars.start_energy
   vars.time_left = vars.sub_time
   can_respawn = false
-  shone_by    = nil
   imm.reset()
   shiner.reset()
   la.clear_tray()
@@ -298,7 +298,6 @@ return {
       [MSG.LIT] = std.lit_target{
         lives = "lives", immunity = imm,
         reply = { taken = R.TAKEN, shone = R.SHONE, immune = R.IMMUNE },
-        on_shone = function(_, pkt) shone_by = la.player_short(pkt.sender) end,
       },
       [MSG.CP_BEACON] = cp_beacon_handler(true),
       [MSG.CP_SCORE]  = cp_score_handler,
@@ -351,9 +350,8 @@ return {
         vars.lives  = vars.start_lives
         vars.energy = vars.start_energy
         can_respawn = false
-        shone_by    = nil
         imm.reset()
-        la.clear_tray()             -- drop the credit and the instruction
+        la.clear_tray()             -- drop the "OUT OF GAME" screen
         la.show("Back in game!", 1000)
         la.ui("Up")
       end },
