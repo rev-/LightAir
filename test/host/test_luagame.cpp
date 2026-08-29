@@ -607,7 +607,10 @@ int main() {
         *fs.currentState = 1;
         CHECK(*clock == 500 && *fLives == 3, "the BASE starts a full turn");
 
-        // One confirmed lit on another player, then our own shone.
+        // One confirmed lit on another player, then our own shone — the
+        // real way, three incoming lits from the same sender, so the
+        // third one runs std.lit_target's on_shone and actually sets who
+        // gets credited on the DOWN screen.
         const ReplyRadioRule* shoneReply = nullptr;
         for (uint8_t i = 0; i < fs.replyRadioRuleCount; i++)
             if (fs.replyRadioRules[i].eventType == RadioEventType::ReplyReceived)
@@ -619,13 +622,31 @@ int main() {
         out = GameOutput();
         if (shoneReply) shoneReply->onReply(rep2, orig2, kNearRssi, disp, out);
 
-        *fLives = 0;
+        const DirectRadioRule* activeLit = nullptr;
+        for (uint8_t i = 0; i < fs.directRadioRuleCount; i++)
+            if (fs.directRadioRules[i].fromState == 1 &&
+                fs.directRadioRules[i].msgType == RadioMsg::MSG_LIT)
+                activeLit = &fs.directRadioRules[i];
+        CHECK(activeLit, "ACTIVE handles incoming lit");
+        // Three different senders, so the per-sender immunity window
+        // (3 s) never blocks a hit; the last one is who takes the credit.
+        RadioPacket lit3 = {}; lit3.msgType = RadioMsg::MSG_LIT;
+        uint8_t litSenders[3] = { 2, 5, 6 };
+        for (uint8_t s : litSenders) {
+            lit3.senderId = s;
+            out = GameOutput();
+            if (activeLit) activeLit->onReceive(lit3, kNearRssi, disp, out);
+        }
+        CHECK(*fLives == 0, "three lits from different senders empty the lives");
         CHECK(down && down->condition(keys, nrr), "0 lives sends the visitor down");
         out = GameOutput();
         if (down) down->onTransition(disp, out);
         *fs.currentState = 2;
         CHECK(fs.winnerVarCount == 2 && *fs.winnerVars[1].value == 1,
               "shone_times counted");
+        disp.update();
+        CHECK(!strcmp(rawDisp.tray[0], "SHONE by RED"), "down screen credits the shiner");
+        CHECK(!strcmp(rawDisp.tray[1], "GO TO BASE"), "...and what to do about it");
 
         // The turn clock runs out while down: stats screen, frozen.
         *clock = 0;
@@ -634,6 +655,30 @@ int main() {
         if (over) over->onTransition(disp, out);
         *fs.currentState = 3;
         CHECK(tally && strcmp(tally, "1/1") == 0, "stats screen shows lit/shone");
+        // "Time up!" flashes on top for 3 s; once it expires the points
+        // line — the number the visitor actually cares about — takes the
+        // top row for the rest of the screen's indefinite wait.  No CP
+        // point landed in this script, so the score is players_lit alone.
+        g_millis += 3001;
+        disp.update();
+        CHECK(!strcmp(rawDisp.tray[0], "#2 POINTS: 1"),
+              "stats screen leads with player number and turn score");
+
+        // The scoring formula itself: 10 per CP totem point, 1 per player
+        // lit.  5 CP points + 3 lit = 53, the worked example from the spec.
+        // players_lit has no monitor binding to poke directly, so reach 3
+        // the real way: two more confirmed SHONE replies (already at 1).
+        if (shoneReply) {
+            shoneReply->onReply(rep2, orig2, kNearRssi, disp, out);
+            shoneReply->onReply(rep2, orig2, kNearRssi, disp, out);
+        }
+        *fPoints = 5;
+        out = GameOutput();
+        if (over) over->onTransition(disp, out);
+        g_millis += 3001;
+        disp.update();
+        CHECK(!strcmp(rawDisp.tray[0], "#2 POINTS: 53"),
+              "score = 10*totem points + players lit");
 
         // Only the staff's A+B chord starts the next visitor.
         keys.keyEventCount = 1;
