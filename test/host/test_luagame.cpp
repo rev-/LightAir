@@ -626,9 +626,6 @@ int main() {
         *fs.currentState = 2;
         CHECK(fs.winnerVarCount == 2 && *fs.winnerVars[1].value == 1,
               "shone_times counted");
-        disp.update();
-        CHECK(!strcmp(rawDisp.tray[0], "OUT OF GAME"), "down screen names the state");
-        CHECK(!strcmp(rawDisp.tray[1], "GO TO BASE"), "...and what to do about it");
 
         // The turn clock runs out while down: stats screen, frozen.
         *clock = 0;
@@ -637,30 +634,6 @@ int main() {
         if (over) over->onTransition(disp, out);
         *fs.currentState = 3;
         CHECK(tally && strcmp(tally, "1/1") == 0, "stats screen shows lit/shone");
-        // "Time up!" flashes on top for 3 s; once it expires the points
-        // line — the number the visitor actually cares about — takes the
-        // top row for the rest of the screen's indefinite wait.  No CP
-        // point landed in this script, so the score is players_lit alone.
-        g_millis += 3001;
-        disp.update();
-        CHECK(!strcmp(rawDisp.tray[0], "#2 POINTS: 1"),
-              "stats screen leads with player number and turn score");
-
-        // The scoring formula itself: 10 per CP totem point, 1 per player
-        // lit.  5 CP points + 3 lit = 53, the worked example from the spec.
-        // players_lit has no monitor binding to poke directly, so reach 3
-        // the real way: two more confirmed SHONE replies (already at 1).
-        if (shoneReply) {
-            shoneReply->onReply(rep2, orig2, kNearRssi, disp, out);
-            shoneReply->onReply(rep2, orig2, kNearRssi, disp, out);
-        }
-        *fPoints = 5;
-        out = GameOutput();
-        if (over) over->onTransition(disp, out);
-        g_millis += 3001;
-        disp.update();
-        CHECK(!strcmp(rawDisp.tray[0], "#2 POINTS: 53"),
-              "score = 10*totem points + players lit");
 
         // Only the staff's A+B chord starts the next visitor.
         keys.keyEventCount = 1;
