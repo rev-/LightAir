@@ -695,6 +695,60 @@ int main() {
         CHECK(*fs.winnerVars[1].value == 0, "shone_times reset with the turn");
     }
 
+    // ---- 15. `bar` monitor rows reach the display with live pointers ----
+    // A bar's timing belongs to whoever owns the wait, not to the display, so
+    // what matters here is that both pointers land on the right SLOTS and
+    // still read through after the owner writes them.  A copied value would
+    // pass a first assertion and then freeze.
+    {
+        // Realized on the shared slot, as every game after the first is: the
+        // instance pool is deliberately small and a reload is how the menu
+        // switches games anyway.
+        CHECK(shared.load("test/host/fixtures/bar.lua"), "bar fixture loads");
+        const LightAir_Game& bd = shared.descriptor();
+        *bd.currentState = bd.initialState;
+        bd.onBegin(disp, radio, &ui, runner);
+
+        const MonitorVar* owned = nullptr;   // energy, with a start_var
+        const MonitorVar* selfT = nullptr;   // respawn_zero, without one
+        const MonitorVar* plain = nullptr;   // the ordinary row on the other screen
+        for (uint8_t i = 0; i < bd.monitorCount; i++) {
+            const MonitorVar& m = bd.monitorVars[i];
+            if (m.type == VarType::BAR && !strcmp(m.name, "energy"))       owned = &m;
+            if (m.type == VarType::BAR && !strcmp(m.name, "respawn_zero")) selfT = &m;
+            if (m.type == VarType::INT && !strcmp(m.name, "energy"))       plain = &m;
+        }
+        CHECK(owned && selfT, "both bar rows synthesized as VarType::BAR");
+        CHECK(plain, "a non-bar row beside them stays VarType::INT");
+
+        if (owned && selfT && plain) {
+            CHECK(owned->barTrigger == 0, "bar_at reached the descriptor");
+            CHECK(owned->barFill && *owned->barFill == 10, "fill_var points at reload_secs");
+            CHECK(owned->barStart && *owned->barStart == 0, "start_var points at reload");
+            CHECK(selfT->barStart == nullptr, "no start_var leaves the display self-starting");
+            CHECK(selfT->barWidth == 30, "width reached the descriptor");
+            CHECK(owned->barWidth == 0, "an unset width defers to the display default");
+            CHECK(owned->asInt == plain->asInt,
+                  "the bar and the plain row address the same energy slot");
+
+            // The owner writes; the binding must see it, because these are
+            // pointers into the slots and not copies taken at load.
+            *owned->asInt = 0;
+            int* reload     = slotOf(bd, "reload");
+            int* reloadSecs = slotOf(bd, "reload_secs");
+            CHECK(reload == owned->barStart, "start_var resolved to the reload slot");
+            CHECK(reloadSecs == owned->barFill, "fill_var resolved to the reload_secs slot");
+            if (reload && reloadSecs && owned->barStart && owned->barFill) {
+                *reload = 4321;
+                *reloadSecs = 7;
+                CHECK(*owned->barStart == 4321, "the start pointer reads the owner's write");
+                CHECK(*owned->barFill  == 7,    "the fill pointer reads the owner's write");
+            } else {
+                CHECK(false, "bar fixture vars reachable through the descriptor");
+            }
+        }
+    }
+
     printf(failures == 0 ? "\nLUAGAME HOST TESTS PASS\n" : "\n%d FAILURES\n", failures);
     return failures == 0 ? 0 : 1;
 }

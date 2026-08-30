@@ -626,12 +626,54 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
                 lua_pop(L, 1);
             }
             lua_pop(L, 1);                                 // states
-            if (_slots[slot].isText)
+
+            // A `bar` row shows its number until the value reaches `bar_at`,
+            // and a filling bar while it sits there.  Both the duration and
+            // the instant the wait began come from other game vars, because
+            // the timing belongs to whoever owns the wait — for energy that
+            // is the projector, whose recharge starts on the trigger's
+            // release rather than when the pool hit zero.
+            lua_getfield(L, e, "bar");
+            const bool isBar = lua_toboolean(L, -1);
+            lua_pop(L, 1);
+
+            if (isBar) {
+                if (_slots[slot].isText)
+                    luaL_error(L, "monitor bar '%s' is a text var", id);
+                char fillId[LuaDefaults::MAX_VAR_ID];
+                fieldStr(L, e, "fill_var", fillId, sizeof(fillId), true);
+                int fillSlot = findSlot(fillId);
+                if (fillSlot < 0 || _slots[fillSlot].isText)
+                    luaL_error(L, "monitor bar fill_var '%s' invalid", fillId);
+
+                // start_var is optional: without one the display self-starts
+                // its clock when the value arrives at the trigger.
+                const int* startPtr = nullptr;
+                char startId[LuaDefaults::MAX_VAR_ID];
+                lua_getfield(L, e, "start_var");
+                if (lua_isstring(L, -1)) {
+                    lua_pop(L, 1);
+                    fieldStr(L, e, "start_var", startId, sizeof(startId), true);
+                    int ss = findSlot(startId);
+                    if (ss < 0 || _slots[ss].isText)
+                        luaL_error(L, "monitor bar start_var '%s' invalid", startId);
+                    startPtr = &_slots[ss].val;
+                } else {
+                    lua_pop(L, 1);
+                }
+
+                _monitorVars[monitorCount] = MonitorVar::Bar(
+                    _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row,
+                    (int)fieldInt(L, e, "bar_at", 0, false),
+                    &_slots[fillSlot].val, startPtr,
+                    (uint8_t)fieldInt(L, e, "width", 0, false));
+            } else if (_slots[slot].isText) {
                 _monitorVars[monitorCount] = MonitorVar::Str(
                     _slots[slot].id, _slots[slot].text, mask, (IconType)icon, col, row);
-            else
+            } else {
                 _monitorVars[monitorCount] = MonitorVar::Int(
                     _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row);
+            }
             monitorCount++;
             lua_pop(L, 1);                                 // entry
         }

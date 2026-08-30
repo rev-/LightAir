@@ -57,12 +57,19 @@ class LightAir_GameRunner;
 //   CHARS : char* (mutable null-terminated buffer).
 //           Compatible with DisplayCtrl::bindStringVariable.
 //
-// DisplayCtrl also offers bindBarVariable (a value that turns into a
-// filling bar at a trigger value — energy during recharge, the respawn
-// wait).  No descriptor row reaches it yet: that binding is driven by the
-// projector object, not by a monitor row, and is wired up with it.
+//   BAR   : int*, drawn as a number until it reaches a trigger value and
+//           as a filling bar while it sits there — energy during
+//           recharge, the respawn wait.
+//           Compatible with DisplayCtrl::bindBarVariable.
+//
+// A BAR row's timing belongs to whoever owns the wait, not to the
+// display: both the fill duration and the instant the wait began are
+// pointers into game vars, which the projector object keeps current.  The
+// row itself is declarative like any other, because binding sets are
+// built once in GameRunner::begin() and lock on first activation — there
+// is no later moment at which a binding could be added.
 // ----------------------------------------------------------------
-enum class VarType : uint8_t { INT, CHARS };
+enum class VarType : uint8_t { INT, CHARS, BAR };
 
 // ----------------------------------------------------------------
 // ConfigVar — one variable shown and edited in the pre-game config menu.
@@ -95,11 +102,18 @@ struct ConfigVar {
 struct MonitorVar {
     const char* name;
     VarType     type;
-    int*        asInt;      // non-null when type == INT
+    int*        asInt;      // non-null when type == INT or BAR
     char*       asChars;    // non-null when type == CHARS
     uint32_t    stateMask;  // bit N → display in state N
     IconType    icon;
     uint8_t     col, row;
+    // ---- BAR only ----
+    int         barTrigger; // value at which the bar takes over from the number
+    const int*  barFill;    // live pointer to the fill duration, in seconds
+    const int*  barStart;   // live pointer to the wait's start instant, in
+                            // millis; 0 = at the trigger but not yet waiting.
+                            // null = let the display self-start the clock.
+    uint8_t     barWidth;   // 0 = DisplayDefaults::BAR_WIDTH
 
     // ---- factory helpers ----
 
@@ -114,6 +128,23 @@ struct MonitorVar {
         v.stateMask = stateMask;
         v.icon      = icon;
         v.col       = col;  v.row = row;
+        return v;
+    }
+
+    // A number that becomes a filling bar while it sits at trigger.
+    // fill and start are pointers into game vars kept current by whoever
+    // owns the wait — see the VarType note above.
+    static MonitorVar Bar(const char* name, int* value,
+                          uint32_t stateMask, IconType icon,
+                          uint8_t col, uint8_t row,
+                          int trigger, const int* fill,
+                          const int* start = nullptr, uint8_t width = 0) {
+        MonitorVar v = Int(name, value, stateMask, icon, col, row);
+        v.type       = VarType::BAR;
+        v.barTrigger = trigger;
+        v.barFill    = fill;
+        v.barStart   = start;
+        v.barWidth   = width;
         return v;
     }
 

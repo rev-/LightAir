@@ -46,14 +46,24 @@ public:
      * read it live.  It may be null, in which case nothing is drawn
      * while at the trigger.
      *
-     * The fill restarts whenever the variable arrives at the trigger, and
-     * whenever this binding set is activated — entering a state is what
-     * starts a respawn wait, and a bar bound to an always-at-trigger
-     * variable has no value change to key off.
+     * By default the fill restarts whenever the variable arrives at the
+     * trigger, and whenever this binding set is activated — entering a
+     * state is what starts a respawn wait, and a bar bound to an
+     * always-at-trigger variable has no value change to key off.
      *
-     * Two shapes cover what the game needs:
-     *   energy  : variable = energy,      trigger = 0, fill = rechargeSecs
-     *   respawn : variable = a const 0,   trigger = 0, fill = respawnSecs
+     * startMs overrides that when the owner knows better.  It is a
+     * pointer to a millisecond timestamp: the instant the wait actually
+     * began, or 0 for "not waiting", which draws an empty bar.  A
+     * projector's energy needs this — with a refill recharge the wait
+     * starts when the TRIGGER IS RELEASED, not when the pool hit zero, so
+     * a self-started bar would fill while a player held a dead trigger
+     * and nothing came back.  Null = self-start, as above.
+     *
+     * Three shapes cover what the game needs:
+     *   energy  : variable = energy, trigger = 0, fill = rechargeSecs,
+     *             start = the projector's reload anchor
+     *   respawn : variable = a const 0, trigger = 0, fill = respawnSecs
+     *   simple  : as respawn, with start = null to self-start
      *    =================================== */
     bool bindBarVariable(
         int* variable,
@@ -62,7 +72,8 @@ public:
         uint8_t y,
         int triggerValue,
         const int* fillSecs,
-        uint8_t barWidth = DisplayDefaults::BAR_WIDTH
+        uint8_t barWidth = DisplayDefaults::BAR_WIDTH,
+        const int* startMs = nullptr
     );
 
     bool bindStringVariable(
@@ -108,6 +119,7 @@ private:
         uint8_t  y;
         int        trigger;     // TYPE_BAR: value at which the bar takes over
         const int* fillSecs;    // TYPE_BAR: live pointer to the fill duration
+        const int* startMs;     // TYPE_BAR: owner's start instant; null = self-start
         uint32_t   fillStart;   // TYPE_BAR: millis() when the fill began
         uint8_t    barWidth;
         union {

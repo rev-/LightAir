@@ -73,7 +73,8 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     uint8_t y,
     int triggerValue,
     const int* fillSecs,
-    uint8_t barWidth
+    uint8_t barWidth,
+    const int* startMs
 ) {
     if (y < DisplayDefaults::TRAY_HEIGHT) return false;
     if (barWidth == 0 || barWidth > DisplayDefaults::BAR_WIDTH) return false;
@@ -89,6 +90,7 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     b.y         = y;
     b.trigger   = triggerValue;
     b.fillSecs  = fillSecs;
+    b.startMs   = startMs;
     b.fillStart = 0;
     b.filling   = false;
     b.barWidth  = barWidth;
@@ -223,7 +225,28 @@ void LightAir_DisplayCtrl::renderBar(VariableBinding& b) {
     uint32_t fillMs = b.fillSecs ? (uint32_t)(*b.fillSecs) * 1000u : 0u;
     if (fillMs == 0) return;          // nothing to time — leave the slot as is
 
-    uint32_t elapsed = millis() - b.fillStart;
+    // The owner may know when the wait really began — a projector's recharge
+    // starts on the trigger's release, not when the pool hit zero.  0 there
+    // means "at the trigger, but not yet waiting": draw the bar empty rather
+    // than animating a countdown that has not started.
+    uint32_t start = b.fillStart;
+    if (b.startMs) {
+        if (*b.startMs == 0) {
+            if (b.lastValue == 0) return;
+            b.lastValue = 0;
+            _display.setColor(false);
+            _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH,
+                              DisplayDefaults::CELL_HEIGHT);
+            _display.setColor(true);
+            drawIcon(ICON_HOURGLASS, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
+            drawBar(b.x + DisplayDefaults::ICON_GUTTER, b.y + 2,
+                    b.barWidth, DisplayDefaults::BAR_HEIGHT, 0.0f);
+            return;
+        }
+        start = (uint32_t)*b.startMs;
+    }
+
+    uint32_t elapsed = millis() - start;
     if (elapsed > fillMs) elapsed = fillMs;
 
     // Redraw only when the drawn length would actually change.

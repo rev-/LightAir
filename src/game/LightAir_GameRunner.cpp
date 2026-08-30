@@ -65,7 +65,13 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
             const uint8_t px = var.col * DisplayDefaults::CELL_WIDTH;
             const uint8_t py = var.row * DisplayDefaults::CELL_HEIGHT
                                + 3 * DisplayDefaults::FONT_HEIGHT;
-            if (var.type == VarType::INT)
+            if (var.type == VarType::BAR)
+                display.bindBarVariable(var.asInt, var.icon, px, py,
+                                        var.barTrigger, var.barFill,
+                                        var.barWidth ? var.barWidth
+                                                     : DisplayDefaults::BAR_WIDTH,
+                                        var.barStart);
+            else if (var.type == VarType::INT)
                 display.bindIntVariable(var.asInt, var.icon, px, py);
             else
                 display.bindStringVariable(var.asChars, var.icon, px, py);
