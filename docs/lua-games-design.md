@@ -320,7 +320,17 @@ No verbs run on totems: totem behaviour is TotemVM data (§5), and totem
 animations are referenced by name inside those programs.
 
 **Loader** — `la.lib(name)` runs `/games/lib/<name>.lua` once per state and
-caches the result (a two-line C function; there is no `require`/`package`).
+caches the result (there is no `require`/`package`).
+
+During a **manifest peek** it returns an inert stand-in instead: a table
+answering any index or call with itself.  A peek reads three literal fields
+(`api`, `type_id`, `name`), but the chunk stating them is a whole game file,
+and a game file pulls its libraries in at file scope — so loading them for
+real would compile tens of kilobytes of Lua per file, into a state torn down
+immediately afterwards, for every file in `/games`.  On a device that is
+enough to exhaust the interpreter partway through the scan and drop games
+from the menu.  File-scope library use therefore no-ops harmlessly while
+peeking, and **manifest fields must be literals**.
 
 The `vars` proxy is passed to every handler as the first argument *and*
 installed as a global, so load-time closures (e.g. a friendly-fire predicate)

@@ -49,6 +49,10 @@ public:
     // WITHOUT synthesizing a descriptor or claiming a trampoline slot.
     // Used by the store's boot scan; safe on a dedicated scratch
     // instance.  Leaves the instance unloaded.
+    // Reads api / type_id / name only.  The chunk still RUNS — that is how a
+    // game file states them — but la.lib() hands back an inert stand-in
+    // instead of the real library, so a peek never compiles games/lib/*.lua.
+    // See _manifestOnly.
     bool peekManifest(const char* path, char* nameOut, size_t nameCap,
                       uint16_t* typeIdOut);
 
@@ -112,6 +116,18 @@ private:
     // ================= instance data =================
     LightAir_LuaEngine _engine;
     bool               _loaded = false;
+    // Set only for the duration of a peekManifest chunk run.  A manifest is
+    // three literal fields, but the chunk that states them is a whole game
+    // file, and a game file pulls its libraries in at file scope.  Compiling
+    // ~60 KB of library per file — for every file in /games, into a state
+    // that is torn down straight afterwards — is what a peek must not do:
+    // it is slow, and on a device it is what runs the interpreter out of
+    // memory partway through the scan, so games vanish from the menu.
+    //
+    // While set, la.lib() returns an inert stand-in that answers any index
+    // or call with itself, so file-scope library use no-ops harmlessly.
+    // Manifest fields must therefore be literals, which they are.
+    bool               _manifestOnly = false;
     uint8_t            _slotIdx = 0xFF;      // index in the static registry
     char               _name[LuaDefaults::MAX_GAME_NAME] = {0};
 

@@ -465,9 +465,30 @@ static int l_shine_action(lua_State* L) {
 }
 
 // ---- library loader ----
+// An inert stand-in for a library: any index or call yields it again, so a
+// game file's file-scope library use — proj.define{...}, std.immunity(3000),
+// std.totems.cp() — runs to completion without doing anything.  Used only
+// while peeking a manifest; see LightAir_LuaGame::_manifestOnly.
+static int l_inert(lua_State* L) {
+    lua_pushvalue(L, 1);        // both __index(t,k) and __call(t,...) -> t
+    return 1;
+}
+
+static void pushInertLib(lua_State* L) {
+    lua_newtable(L);
+    lua_newtable(L);
+    lua_pushcfunction(L, l_inert); lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, l_inert); lua_setfield(L, -2, "__call");
+    lua_setmetatable(L, -2);
+}
+
 int LightAir_LuaGame::l_lib(lua_State* L) {
     LightAir_LuaGame* g = self(L);
     const char* name = luaL_checkstring(L, 1);
+
+    // A manifest peek reads three literal fields; it must not compile the
+    // libraries to get them.
+    if (g->_manifestOnly) { pushInertLib(L); return 1; }
 
     lua_rawgeti(L, LUA_REGISTRYINDEX, g->_libCacheRef);   // cache
     lua_getfield(L, -1, name);

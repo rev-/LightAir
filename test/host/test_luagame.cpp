@@ -145,6 +145,30 @@ int main() {
         CHECK(!scanner.loaded(), "rejected peeks leave the scanner unloaded");
     }
 
+    // ---- 1c. A manifest peek must not need the libraries -------------
+    // Every ruleset pulls its libraries in at file scope, and a peek runs
+    // file scope.  If it loaded them for real it would compile tens of
+    // kilobytes of Lua per file into a state thrown away immediately —
+    // which is what ran a device out of memory mid-scan and left one game
+    // in the menu.  The fixture asks for a library that does not exist and
+    // then indexes, calls and chains it the way a ruleset does.
+    {
+        char name[16] = {0};
+        uint16_t tid = 0;
+        CHECK(scanner.peekManifest("test/host/fixtures/libatscope.lua",
+                                   name, sizeof(name), &tid),
+              "a peek reads the manifest without loading any library");
+        CHECK(tid == 0x7F06, "peek got the typeId past the library use");
+        CHECK(strcmp(name, "LibScope") == 0, "peek got the name past the library use");
+
+        // Loading it for real must NOT paper over the missing library: the
+        // stand-in exists for the peek and nowhere else.  Reuses the shared
+        // instance (the pool is deliberately small, and the deep test below
+        // reloads it straight afterwards).
+        CHECK(!shared.load("test/host/fixtures/libatscope.lua"),
+              "a real load still fails on a missing library");
+    }
+
     // Deep-test freeforall: realize it again on the same instance.
     if (!shared.load("games/freeforall.lua")) {
         printf("no FFA, aborting\n");

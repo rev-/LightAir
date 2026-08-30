@@ -1060,6 +1060,11 @@ bool LightAir_LuaGame::peekManifest(const char* path, char* nameOut,
     for (uint8_t i = 0; i < 3; i++) _pktUdRef[i] = LUA_NOREF;
     registerKernel();                       // chunks index `la` at top level
 
+    // From here until the chunk has run, la.lib() hands back an inert
+    // stand-in: a manifest is three literals, and compiling every game's
+    // libraries to read them is what emptied the menu once already.
+    _manifestOnly = true;
+
     lua_State* L = _engine.L();
     bool ok = false;
 
@@ -1098,6 +1103,7 @@ bool LightAir_LuaGame::peekManifest(const char* path, char* nameOut,
         if (!ok)
             Log.errorln("LuaGame: %s has a bad manifest (api/type_id/name)", path);
     }
+    _manifestOnly = false;
     _engine.end();
     return ok;
 }
