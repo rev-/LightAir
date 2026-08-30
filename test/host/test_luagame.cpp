@@ -167,6 +167,23 @@ int main() {
         // reloads it straight afterwards).
         CHECK(!shared.load("test/host/fixtures/libatscope.lua"),
               "a real load still fails on a missing library");
+
+        // ...and it says WHY.  The menu puts this string on the LCD, which
+        // is the only channel a player editing .lua files over WiFi has:
+        // "Game failed to load" alone sent two device faults to be guessed
+        // at from the bench.  The reason must survive as far as the caller,
+        // must name the actual cause, and must not drag the traceback or
+        // the directory prefix onto a 20-column screen.
+        const char* why = shared.loadError();
+        CHECK(why && why[0], "a refused load reports a reason");
+        CHECK(strstr(why, "this_library_does_not_exist") != nullptr,
+              "the reason names the missing library");
+        CHECK(strchr(why, '\n') == nullptr, "the reason is one line, not a traceback");
+        CHECK(strncmp(why, "libatscope.lua:", 15) == 0,
+              "the reason keeps the basename and line, drops the directory");
+
+        CHECK(shared.load("games/teams.lua"), "a good file still loads");
+        CHECK(shared.loadError()[0] == 0, "a successful load clears the reason");
     }
 
     // Deep-test freeforall: realize it again on the same instance.

@@ -563,7 +563,7 @@ bool LightAir_GameSetupMenu::runRestartPrompt() {
         if (ev.state != KeyState::PRESSED) continue;  // Only action buttons on PRESS
         if (ev.key == 'A') {
             if (!_mgr.load(lastIdx)) {          // realize lazy .lua entries
-                showMessage2("Game failed", "to load.", "", "");
+                showLoadFailure();
                 waitForKey();
                 return false;                   // fall through to the list
             }
@@ -636,7 +636,7 @@ bool LightAir_GameSetupMenu::runGameList() {
             case 'A':
                 // Start with default/current config — skip S4.
                 if (!_mgr.load(sel)) {          // realize lazy .lua entries
-                    showMessage2("Game failed", "to load.", "", "");
+                    showLoadFailure();
                     waitForKey();
                     renderGameList(sel);
                     break;
@@ -649,7 +649,7 @@ bool LightAir_GameSetupMenu::runGameList() {
             case 'B':
                 // Enter setup.
                 if (!_mgr.load(sel)) {
-                    showMessage2("Game failed", "to load.", "", "");
+                    showLoadFailure();
                     waitForKey();
                     renderGameList(sel);
                     break;
@@ -1346,6 +1346,40 @@ MenuKeyEvent LightAir_GameSetupMenu::waitForKey() {
         if (ev.key != 0) return ev;
         delay(GameDefaults::LOOP_MS);
     }
+}
+
+// "Game failed to load." is not a diagnosis, and the people who hit it
+// are the ones editing the .lua files and pushing them over WiFi — the
+// serial log they cannot see is the wrong place for the only copy of the
+// reason.  Wrap it over the two free lines, breaking on a space when one
+// is available in the second half of the first line.
+void LightAir_GameSetupMenu::showLoadFailure() {
+    static constexpr size_t  kCols = 20;         // ~128 px of the 10 px font
+    static constexpr uint8_t kRows = 3;          // y = 10, 20, 30
+
+    _display.clear();
+    _display.setColor(true);
+    _display.print(0, 0, "Game failed:");
+
+    const char* why = _mgr.lastLoadError();
+    if (!why || !why[0]) why = "no reason reported";
+
+    for (uint8_t row = 0; row < kRows && *why; row++) {
+        size_t n   = strlen(why);
+        size_t cut = (n <= kCols) ? n : kCols;
+        if (n > kCols)                            // prefer a space to a hard split
+            for (size_t i = cut; i > kCols / 2; i--)
+                if (why[i] == ' ') { cut = i; break; }
+        char line[kCols + 1];
+        memcpy(line, why, cut);
+        line[cut] = 0;
+        _display.print(0, DisplayDefaults::FONT_HEIGHT * (row + 1), line);
+        why += cut;
+        while (*why == ' ') why++;
+    }
+
+    printLegend("O:Back", DisplayDefaults::BOTTOM_LINE_Y);
+    _display.flush();
 }
 
 void LightAir_GameSetupMenu::showMessage2(const char* l0, const char* l1,

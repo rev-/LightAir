@@ -61,6 +61,13 @@ public:
     uint16_t             typeId()     const { return _game.typeId; }
     bool                 loaded()     const { return _loaded; }
 
+    // Why the last load() failed, in the fewest words that still name the
+    // cause ("not enough memory", "library 'projector' not found", "too
+    // many vars (max 24)").  Games are user-editable files on flash, so
+    // this has to reach the player on the LCD, not only the serial log.
+    // Empty after a successful load.
+    const char*          loadError()  const { return _loadErr; }
+
     // ---- Fault accounting (policy: log, notify, continue) ----
     //
     // A runtime Lua error never ends the match: the failed callback is a
@@ -130,6 +137,12 @@ private:
     bool               _manifestOnly = false;
     uint8_t            _slotIdx = 0xFF;      // index in the static registry
     char               _name[LuaDefaults::MAX_GAME_NAME] = {0};
+    char               _loadErr[64] = {0};   // reason the last load() failed
+
+    // Record why a load failed: keeps the tail of a Lua message (which
+    // leads with "path:line:" and ends with the interesting part) and
+    // clears the traceback that pcall appends.
+    void setLoadError(const char* msg);
 
     LightAir_Game _game = {};
     uint8_t       _state = 0;                // storage for _game.currentState

@@ -513,9 +513,15 @@ int LightAir_LuaGame::l_lib(lua_State* L) {
     lua_remove(L, -2);                                     // drop scratch buffer
     lua_call(L, 0, 1);                                     // run chunk -> module
 #else
-    // Host builds (tests): read from the working directory.
+    // Host builds (tests): read from the working directory.  A missing
+    // file is reported in the device's words ("library 'x' not found"),
+    // not stdio's, so what a test asserts about the message is what a
+    // player would read off the LCD.
     char path[128];
     snprintf(path, sizeof(path), "games/lib/%s.lua", name);
+    FILE* probe = fopen(path, "r");
+    if (!probe) return luaL_error(L, "library '%s' not found", name);
+    fclose(probe);
     if (luaL_loadfile(L, path) != LUA_OK)
         return lua_error(L);
     lua_call(L, 0, 1);

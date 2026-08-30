@@ -133,11 +133,15 @@ uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
     return _count;
 }
 
-bool LightAir_GameStore::realizeHook(LightAir_Game& game) {
-    return s_instance ? s_instance->realize(game) : false;
+bool LightAir_GameStore::realizeHook(LightAir_Game& game,
+                                     char* errOut, size_t errCap) {
+    if (s_instance) return s_instance->realize(game, errOut, errCap);
+    if (errOut && errCap) snprintf(errOut, errCap, "no game store");
+    return false;
 }
 
-bool LightAir_GameStore::realize(LightAir_Game& game) {
+bool LightAir_GameStore::realize(LightAir_Game& game,
+                                 char* errOut, size_t errCap) {
     // Find the manifest owning this placeholder (also accepts a
     // re-realize of an already-filled descriptor).
     const Manifest* m = nullptr;
@@ -146,8 +150,17 @@ bool LightAir_GameStore::realize(LightAir_Game& game) {
     if (!m) return true;                    // not one of ours (native etc.)
 
     if (!s_loadedGame.loaded() || s_loadedGame.typeId() != m->typeId) {
-        Log.infoln("GameStore: loading %s", m->path);
-        if (!s_loadedGame.load(m->path)) return false;
+        // Log the headroom on the way in: a game that loads on the bench
+        // and refuses on the device is a memory question first, and this
+        // is the line that answers it without a second flash.
+        Log.infoln("GameStore: loading %s (heap %d B, psram %d B)", m->path,
+                   (int)ESP.getFreeHeap(), (int)ESP.getFreePsram());
+        if (!s_loadedGame.load(m->path)) {
+            if (errOut && errCap) snprintf(errOut, errCap, "%s", s_loadedGame.loadError());
+            return false;
+        }
+        Log.infoln("GameStore: loaded %s (heap %d B, psram %d B)", m->path,
+                   (int)ESP.getFreeHeap(), (int)ESP.getFreePsram());
     }
     // Copy the full descriptor over the placeholder in place: every
     // pointer inside it targets the shared instance, so the menu's
@@ -165,7 +178,7 @@ bool LightAir_GameStore::realize(LightAir_Game& game) {
 bool LightAir_GameStore::begin() { return false; }
 uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager&) { return 0; }
 void LightAir_GameStore::seedDefaults() {}
-bool LightAir_GameStore::realize(LightAir_Game&) { return false; }
-bool LightAir_GameStore::realizeHook(LightAir_Game&) { return false; }
+bool LightAir_GameStore::realize(LightAir_Game&, char*, size_t) { return false; }
+bool LightAir_GameStore::realizeHook(LightAir_Game&, char*, size_t) { return false; }
 
 #endif

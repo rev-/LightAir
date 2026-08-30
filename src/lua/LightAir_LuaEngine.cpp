@@ -114,6 +114,14 @@ bool LightAir_LuaEngine::pcall(int nargs, int nresults) {
     return false;
 }
 
+void LightAir_LuaEngine::gcFullCollect() {
+    if (_lua) lua_gc(_lua, LUA_GCCOLLECT);
+}
+
+unsigned LightAir_LuaEngine::heapKB() const {
+    return _lua ? (unsigned)lua_gc(_lua, LUA_GCCOUNT) : 0u;
+}
+
 void LightAir_LuaEngine::gcStep() {
     // LUA_GCSTEP takes a size_t vararg in Lua 5.5; 0 = one basic step.
     if (_lua) lua_gc(_lua, LUA_GCSTEP, (size_t)0);

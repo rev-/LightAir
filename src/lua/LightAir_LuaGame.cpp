@@ -984,14 +984,33 @@ static int loadChunk(lua_State* L, const char* path) {
 }
 #endif
 
+void LightAir_LuaGame::setLoadError(const char* msg) {
+    if (!msg || !*msg) { _loadErr[0] = 0; return; }
+    // pcall appends a traceback; only the first line names the cause.
+    const char* nl  = strchr(msg, '\n');
+    size_t      len = nl ? (size_t)(nl - msg) : strlen(msg);
+    // Lua prefixes "<chunkname>:<line>: ".  Keep the basename — the line
+    // number is worth the characters — but lose the directory.
+    const char* start = msg;
+    const char* colon = (const char*)memchr(msg, ':', len);
+    if (colon)
+        for (const char* p = msg; p < colon; p++) if (*p == '/') start = p + 1;
+    len -= (size_t)(start - msg);
+    if (len >= sizeof(_loadErr)) len = sizeof(_loadErr) - 1;
+    memcpy(_loadErr, start, len);
+    _loadErr[len] = 0;
+}
+
 bool LightAir_LuaGame::load(const char* path) {
     unload();
+    _loadErr[0] = 0;
 
     // Claim a trampoline slot once; reloads keep it (the menu realizes
     // different games on the same instance as the user browses).
     if (_slotIdx == 0xFF) {
         if (s_instanceCount >= LuaDefaults::MAX_LUA_GAMES) {
             Log.errorln("LuaGame: instance pool full");
+            setLoadError("instance pool full");
             return false;
         }
         _slotIdx = s_instanceCount;
@@ -999,6 +1018,7 @@ bool LightAir_LuaGame::load(const char* path) {
     }
     if (!_engine.begin()) {
         Log.errorln("LuaGame: lua_State allocation failed");
+        setLoadError("no memory for interpreter");
         return false;
     }
 
@@ -1018,18 +1038,22 @@ bool LightAir_LuaGame::load(const char* path) {
 
     // Compile + run the chunk (its top-level code executes here).
     if (loadChunk(L, path) != LUA_OK) {
-        Log.errorln("LuaGame: %s: %s", path, lua_tostring(L, -1));
+        const char* msg = lua_tostring(L, -1);
+        Log.errorln("LuaGame: %s: %s", path, msg ? msg : "(no message)");
+        setLoadError(msg);
         lua_pop(L, 1);
         _engine.end();
         return false;
     }
     if (!_engine.pcall(0, 1)) {
-        Log.errorln("LuaGame: %s failed to run", path);
+        Log.errorln("LuaGame: %s failed to run: %s", path, _engine.lastError());
+        setLoadError(_engine.lastError());
         _engine.end();
         return false;
     }
     if (!lua_istable(L, -1)) {
         Log.errorln("LuaGame: %s did not return a table", path);
+        setLoadError("no game table returned");
         lua_settop(L, 0);
         _engine.end();
         return false;
@@ -1042,6 +1066,7 @@ bool LightAir_LuaGame::load(const char* path) {
     lua_pushvalue(L, -3);                                  // the game table
     if (!_engine.pcall(2, 0)) {
         Log.errorln("LuaGame: %s rejected: %s", path, _engine.lastError());
+        setLoadError(_engine.lastError());
         lua_settop(L, 0);
         _engine.end();
         return false;
@@ -1049,7 +1074,13 @@ bool LightAir_LuaGame::load(const char* path) {
 
     _gameRef = luaL_ref(L, LUA_REGISTRYINDEX);             // keep the table alive
     _loaded = true;
-    Log.infoln("LuaGame: loaded '%s' (typeId 0x%x) from %s", _name, _game.typeId, path);
+    // Parsing the ruleset and its two libraries leaves more garbage than
+    // the incremental collector has reached, and nothing is timing-critical
+    // until the match starts — so pay for it here, and report what the
+    // ruleset actually costs.
+    _engine.gcFullCollect();
+    Log.infoln("LuaGame: loaded '%s' (typeId 0x%x, %d KB of Lua) from %s",
+               _name, _game.typeId, (int)_engine.heapKB(), path);
     return true;
 }
 

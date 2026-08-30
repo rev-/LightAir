@@ -196,6 +196,9 @@ private:
     void     resetKeyStates();  // Reset prevState to reflect current input reality
     void     showMessage2(const char* line0, const char* line1,
                           const char* line2, const char* line3);
+    // The refusal screen for a game the loader would not accept, carrying
+    // the loader's own reason rather than a bare "failed to load".
+    void     showLoadFailure();
     // Print text centered horizontally at pixel row y.
     void     printLegend(const char* text, uint8_t y);
 };

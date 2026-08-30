@@ -450,6 +450,18 @@ Full model, semantics, wire encoding, versioning and failure modes:
   ~80-byte manifests in RAM, not 50 interpreters.  Totems need no files at
   all: their behaviour travels as TotemVM programs in the activation reply
   (§5).
+  A realize that fails carries its **reason** back with it —
+  `LightAir_LuaGame::loadError()` → the hook's `errOut` →
+  `GameManager::lastLoadError()` → the setup menu's failure screen — because
+  the people who hit it are the ones editing `.lua` files and uploading them
+  over WiFi, and the serial log they cannot see is the wrong place for the
+  only copy of the message.  The reason is the Lua error's first line with
+  the directory stripped ("`festasportsasso.lua:52: library 'projector' not
+  found`"), which also names the two failures a bare "Game failed to load"
+  once left to be guessed at from the bench: a missing library and an
+  exhausted heap.  A successful load then logs the ruleset's cost —
+  `loaded 'X' (typeId 0x8, 57 KB of Lua)` — after a full collection, so
+  serial answers "how much of the device does this game take" directly.
 - **HTTP exchange** (`GameFileServer`): the Settings → "Share games" menu
   entry (next to Calibration and ID/DM) starts a SoftAP
   (`LightAir-<PLAYERSHORT>`, password `lightair`) + `WebServer.h` on

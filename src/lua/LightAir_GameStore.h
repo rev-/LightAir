@@ -54,7 +54,7 @@ private:
     uint8_t  _count = 0;
 
     void seedDefaults();
-    bool realize(LightAir_Game& game);
-    static bool realizeHook(LightAir_Game& game);   // -> singleton
+    bool realize(LightAir_Game& game, char* errOut, size_t errCap);
+    static bool realizeHook(LightAir_Game& game, char* errOut, size_t errCap);
     static LightAir_GameStore* s_instance;
 };

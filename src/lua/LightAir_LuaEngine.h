@@ -47,6 +47,17 @@ public:
     // One incremental GC step; call in the game loop's slack window.
     void gcStep();
 
+    // Full collection.  Loading a ruleset parses it and both its
+    // libraries, which leaves far more garbage than the incremental
+    // collector will have reached — and does it at the one moment
+    // nothing is timing-critical, before the match starts.
+    void gcFullCollect();
+
+    // Lua's own heap, in KB.  Logged after a load: the ruleset files are
+    // user-editable, so "how much of the device did this one cost" is a
+    // question the serial log has to be able to answer.
+    unsigned heapKB() const;
+
     // Last pcall error message (truncated); empty string if none.
     const char* lastError() const { return _err; }
 
