@@ -37,9 +37,16 @@ static int cmp_u32(const void* a, const void* b) {
 }
 
 void EnlightCalibRoutine::step1() {
+    // The distance matters now: these same shots become the reference return
+    // that fixes the 1/x^n curve (step 2 turns them into cal.refFar*), which is
+    // what lets classify() report an estimated distance in metres.
+    char distLine[24];
+    snprintf(distLine, sizeof(distLine), "at %u m exactly.",
+             (unsigned)EnlightDefaults::CAL_REF_DIST_M);
     showLines("Step 1: Phase",
               "Clear target in",
-              "view.",
+              "view,",
+              distLine,
               "TRIG1 per shot.");
 
     uint32_t  phases[N_RUNS];
@@ -47,11 +54,15 @@ void EnlightCalibRoutine::step1() {
     long long ssR  = 0, ssG  = 0, ssB  = 0;
     uint32_t  n = 0;
 
+    char targetLine[24];
+    snprintf(targetLine, sizeof(targetLine), "Clear target @%um",
+             (unsigned)EnlightDefaults::CAL_REF_DIST_M);
+
     while (n < N_RUNS) {
         char prompt[24];
         snprintf(prompt, sizeof(prompt), "Shot %lu/%lu - TRIG1",
                  (unsigned long)(n + 1), (unsigned long)N_RUNS);
-        showLines("Clear target", prompt);
+        showLines(targetLine, prompt);
         waitTrig(TRIG_1_ID);
 
         EnlightRawMeasure m;
@@ -121,6 +132,15 @@ static int cmp_f(const void* a, const void* b) {
     return (x > y) - (x < y);
 }
 
+// Sort in place and return the median, rounded, as a uint32.  0 for an empty
+// sample, which is also the "not calibrated" sentinel for the ref values.
+static uint32_t medianU32(float* arr, uint32_t count) {
+    if (count == 0) return 0;
+    qsort(arr, count, sizeof(float), cmp_f);
+    const float m = arr[count / 2];
+    return (m > 0.0f) ? (uint32_t)(m + 0.5f) : 0u;
+}
+
 void EnlightCalibRoutine::step2() {
     showLines("Step 2: Baseline",
               "No target (void).",
@@ -185,6 +205,11 @@ void EnlightCalibRoutine::step2() {
 
     // Compute white-balance factors from step1 clear-target measurements.
     // _step1_r/g/b[i] accumulated over REPS cycles; subtract REPS cycles of baseline.
+    //
+    // The same baseline-subtracted values, divided by REPS, are the per-cycle
+    // reference return at CAL_REF_DIST_M metres — the anchor of the 1/x^n range
+    // model.  They can only be computed here, because step 1 does not yet know
+    // the baselines it has to subtract.
     float rfact_arr[N_RUNS], bfact_arr[N_RUNS];
     uint32_t rfact_count = 0, bfact_count = 0;
     for (uint32_t i = 0; i < _step1_n; i++) {
@@ -197,6 +222,35 @@ void EnlightCalibRoutine::step2() {
         if (b > 0) {
             bfact_arr[bfact_count++] = (float)g / (float)b;
         }
+    }
+
+    // Reference return, per channel: the same baseline-subtracted step-1 values
+    // divided by REPS.  Medians for the same reason the white-balance factors
+    // use them — one stray shot (a glancing target, a passing reflection) must
+    // not move the anchor every distance estimate is measured against.
+    //
+    // One reusable buffer, filled and reduced per channel: step2's frame
+    // already carries six long long[N_RUNS], and three more arrays here would
+    // add another 600 bytes to a stack that has no reason to grow.
+    {
+        float    tmp[N_RUNS];
+        uint32_t cnt;
+        const long long* src[3] = { _step1_r, _step1_g, _step1_b };
+        const uint32_t   base[3] = { cal.rcal, cal.gcal, cal.bcal };
+        uint32_t         ref[3]  = { 0, 0, 0 };
+        for (int ch = 0; ch < 3; ch++) {
+            cnt = 0;
+            for (uint32_t i = 0; i < _step1_n; i++) {
+                const long long v = src[ch][i] - (long long)REPS * (long long)base[ch];
+                if (v > 0) tmp[cnt++] = (float)v / (float)REPS;
+            }
+            ref[ch] = medianU32(tmp, cnt);
+        }
+        cal.refFarR = ref[0];
+        cal.refFarG = ref[1];
+        cal.refFarB = ref[2];
+        cal.refDistM = (cal.refFarR || cal.refFarG || cal.refFarB)
+                     ? EnlightDefaults::CAL_REF_DIST_M : 0;
     }
 
     // Sort and find medians of rfact and bfact.
@@ -305,7 +359,7 @@ void EnlightCalibRoutine::step4() {
 
     // Build one formatted line per calibration value.
     struct CalEntry { char line[22]; };
-    const uint8_t N_ENTRIES    = 17;
+    const uint8_t N_ENTRIES    = 21;
     const uint8_t ROWS_PER_PAGE = 5;
     const uint8_t N_PAGES      = (N_ENTRIES + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
 
@@ -317,7 +371,7 @@ void EnlightCalibRoutine::step4() {
     snprintf(entries[4].line,  sizeof(entries[4].line),  "rcalN:  %lu",  (unsigned long)cal.rcalNear);
     snprintf(entries[5].line,  sizeof(entries[5].line),  "gcalN:  %lu",  (unsigned long)cal.gcalNear);
     snprintf(entries[6].line,  sizeof(entries[6].line),  "bcalN:  %lu",  (unsigned long)cal.bcalNear);
-    snprintf(entries[7].line,  sizeof(entries[7].line),  "limpow: %lu",  (unsigned long)cal.limpow);
+    snprintf(entries[7].line,  sizeof(entries[7].line),  "refD:   %u m", (unsigned)cal.refDistM);
     snprintf(entries[8].line,  sizeof(entries[8].line),  "rfact:  %.4g", (double)cal.rfact);
     snprintf(entries[9].line,  sizeof(entries[9].line),  "bfact:  %.4g", (double)cal.bfact);
     snprintf(entries[10].line, sizeof(entries[10].line), "nRatMx: %.4g", (double)cal.nearRatioMax);
@@ -327,6 +381,15 @@ void EnlightCalibRoutine::step4() {
     snprintf(entries[14].line, sizeof(entries[14].line), "thFrR:  %lu",  (unsigned long)cal.thresh_far_r);
     snprintf(entries[15].line, sizeof(entries[15].line), "thFrG:  %lu",  (unsigned long)cal.thresh_far_g);
     snprintf(entries[16].line, sizeof(entries[16].line), "thFrB:  %lu",  (unsigned long)cal.thresh_far_b);
+    snprintf(entries[17].line, sizeof(entries[17].line), "refR:   %lu",  (unsigned long)cal.refFarR);
+    snprintf(entries[18].line, sizeof(entries[18].line), "refG:   %lu",  (unsigned long)cal.refFarG);
+    snprintf(entries[19].line, sizeof(entries[19].line), "refB:   %lu",  (unsigned long)cal.refFarB);
+    // The headline number: how far this DEVICE can see, from its own
+    // calibration.  Verifiable by walking, which is the point of showing it.
+    // Computed from the freshly loaded cal, not through _e, whose copy dates
+    // from construction and predates everything the earlier steps just wrote.
+    snprintf(entries[20].line, sizeof(entries[20].line), "Rmax:   %.1f m",
+             (double)enlight_max_range_m(cal));
 
     uint8_t page = 0;
     for (;;) {

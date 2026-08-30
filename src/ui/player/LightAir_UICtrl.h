@@ -33,6 +33,7 @@ public:
     ControlGain,
     ControlLoss,
     RoleChange,
+    ProjectorChange,
     Stop,
     Bonus,
     Malus,
@@ -66,6 +67,13 @@ public:
   void setObserver(LightAir_UIEventObserver* obs);
   void defineCustomAction(UIEvent slot,
                           const UIAction& action);
+
+  // Replace the action played for UIEvent::Enlight, or restore the standard
+  // one by passing nullptr.  Used by the projector object so each profile can
+  // sound different WITHOUT introducing new UIEvent values: the runtime
+  // burst-duration override in executeStep() is keyed on the event *value*, so
+  // a per-projector event id would silently discard the real burst length.
+  void setEnlightAction(const UIAction* action);
 
   void setBackground(const UIAction& action);
   void clearBackground();
@@ -129,6 +137,10 @@ private:
 
   UIAction _customActions[4];
   bool _customDefined[4];
+
+  // Enlight-slot override (see setEnlightAction).
+  UIAction _enlightAction;
+  bool     _enlightDefined;
 };
 
 #endif

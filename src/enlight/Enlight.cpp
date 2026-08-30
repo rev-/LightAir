@@ -202,6 +202,27 @@ bool Enlight::begin(spi_device_handle_t adcHandle) {
 }
 
 /* ============================================================
+ *   estimateRangeM()
+ *
+ *   The metric range model.  It lives here because it needs the
+ *   calibration constants and the falloff exponent — physics, not game
+ *   design.  Enlight only ever REPORTS a distance; deciding what counts
+ *   as in range is the projector's business, and stays in Lua.
+ *   (Rmax is enlight_max_range_m() in the header — the calibration
+ *   routine needs it over a calib struct it has just written.)
+ * ============================================================ */
+float Enlight::estimateRangeM(float farSum, float baseScale) const {
+    const float refSum = (float)_cal.refFarR + (float)_cal.refFarG + (float)_cal.refFarB;
+    if (refSum <= 0.0f || _cal.refDistM == 0) return 0.0f;   // never calibrated
+    if (farSum <= 0.0f || baseScale <= 0.0f)  return 0.0f;   // nothing to measure
+
+    const float perCycle = farSum / baseScale;
+    if (perCycle <= 0.0f) return 0.0f;
+    return (float)_cal.refDistM
+         * powf(refSum / perCycle, 1.0f / EnlightDefaults::RANGE_FALLOFF_EXP);
+}
+
+/* ============================================================
  *   run()  +  poll()
  * ============================================================ */
 bool Enlight::run() {
@@ -465,6 +486,10 @@ EnlightResult Enlight::classify() {
     const float scale = (nd_f > 0.0f) ? ((float)_activePeriods / nd_f) : 1.0f;
     const float baseScale = scale * (float)nCycles;
 
+    // No estimate until this run produces one; a stale value from the previous
+    // run would otherwise be read back through rangeEstM().
+    _rangeEstM = 0.0f;
+
     // Check if total power in all channels is below white-wall diffusing surface reference.
     // thresh_far_* are per-cycle peaks from calibration; scale by baseScale to match
     // the accumulated _rout/_gout/_bout values.
@@ -497,6 +522,16 @@ EnlightResult Enlight::classify() {
         ESP_LOGD(TAG, "NEAR ratio=%.3f", (double)(nearSum / farSum));
         return classifyNear();
     }
+
+    // Distance estimate.  Retroreflector return falls as 1/x^n, so the step-1
+    // reference at a known distance fixes the curve:
+    //     R = refDist * (refSum / measSumPerCycle)^(1/n)
+    // Both sides are baseline-subtracted and per DMA cycle, which is what makes
+    // the ratio independent of the repetition count the active projector chose.
+    // Reported through rangeEstM(); 0 = no reference calibration, or no signal.
+    // This is an OBSERVATION, not a gate: nothing here rejects a measurement on
+    // distance.  Range policy belongs to the projector, in Lua.
+    _rangeEstM = estimateRangeM(farSum, baseScale);
 
     float outr = rout * _cal.rfact, outb = bout * _cal.bfact, outg = (float)gout;
     const float s = outr + outb + outg;

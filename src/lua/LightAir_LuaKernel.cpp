@@ -41,7 +41,8 @@ extern Enlight* enlightPtr;
 static const char* const kUIEventNames[] = {
     "Enlight", "Lit", "Taken", "GotLit", "Immune", "Friend", "AlreadyDown",
     "Down", "Up", "EndGame", "GameStart", "FlagGain", "FlagTaken",
-    "FlagReturn", "ControlGain", "ControlLoss", "RoleChange", "Stop",
+    "FlagReturn", "ControlGain", "ControlLoss", "RoleChange",
+    "ProjectorChange", "Stop",
     "Bonus", "Malus", "Special1", "Special2",
     "Custom1", "Custom2", "Custom3", "Custom4",
 };

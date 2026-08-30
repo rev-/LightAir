@@ -46,7 +46,20 @@ constexpr uint8_t MSG_POINT_REPORT  = 0x14;
 // 0x16 is used by games/virus.lua (Lua-declared infection broadcast;
 // game files may claim even msgTypes outside the 0xA0/0xF0 blocks —
 // typeId + sessionToken isolate games on the wire).
-// Next available in 0x10 block: 0x18
+
+// Splash broadcast, sent by a player who has just absorbed a LIT, so that
+// bystanders can take graded splash damage from the same beam.  Used by
+// games/lib/projector.lua for any profile that declares a splash.
+//   payload[0] = splash strength, in standard hits
+//   payload[1] = RSSI gate, as a positive magnitude (50 means -50 dBm):
+//                the ATTACKER's projector declares it; a bystander compares
+//                its own reading of this packet against it.
+//   payload[2] = origin: 1 = a direct optical LIT.  A splash-induced hit
+//                never re-broadcasts, which is what stops a chain reaction.
+// Single-hop only (resend 0) — a flooded splash would reach the whole field.
+// No reply expected.
+constexpr uint8_t MSG_SPLASH        = 0x18;
+// Next available in 0x10 block: 0x1A
 
 // ── 0x50 block: totem-mediated game messages ────────────────────
 // Messages that travel between a player and a totem (not player→player).
@@ -203,6 +216,34 @@ namespace EnlightDefaults {
     constexpr float    SAT_DITCH_FRAC  = 0.95f; // ditch period if any channel has >95% saturated samples
     constexpr float    SAT_SWITCH_FRAC = 0.02f; // switch to low-power PDM if >2% of a cycle's active samples saturated
     constexpr float    LOW_POWER_FACTOR = 0.1f; // amplitude scale for the dim PDM buffer
+    // Retroreflector return falls as 1/x^RANGE_FALLOFF_EXP.  One reference
+    // measurement at a known distance therefore fixes the whole curve, which
+    // is what lets classify() report a distance estimate in metres.
+    // Re-fit against measurement by editing this constant alone.
+    constexpr float    RANGE_FALLOFF_EXP = 3.0f;
+    // Distance, in metres, at which calibration step 1 captures the reference
+    // return.  Changing it invalidates stored refFar*/refDistM pairs only if
+    // the operator does not re-calibrate — refDistM travels with the values.
+    constexpr uint8_t  CAL_REF_DIST_M  = 5;
+}
+
+// ---------------------------------------------------------------
+// Projector optical limits
+//
+// The projector object lives in games/lib/projector.lua and clamps its own
+// balance values at load.  Only the numbers that reach the hardware are
+// bounded here, because only these can put Enlight into a bad state; they
+// are re-applied by the la.shine_config verb whatever a game file asks for.
+//
+// MAX_CYCLES is not a hardware limit — nothing in Enlight binds below
+// ~8000 (the uint16_t millisecond cap in triggerEnlight()).  100 matches
+// the ceiling EnlightTestMode already uses and is a typo guard, not a
+// recommendation: the playable range is far lower, bounded by AFE on-time
+// and by how long a player can hold a target steady.
+// ---------------------------------------------------------------
+namespace ProjectorLimits {
+    constexpr uint16_t MIN_CYCLES      = 1,   MAX_CYCLES      = 100;
+    constexpr uint16_t MIN_COOLDOWN_MS = 0,   MAX_COOLDOWN_MS = 10000;
 }
 
 // ---------------------------------------------------------------

@@ -32,11 +32,37 @@ static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 static constexpr float    PDM_AMPLITUDE   = 0.95f;
 static constexpr int32_t  KERN_MAG        = 2048;
 
+// ----------------------------------------------------------------
+// Maximum range a device can resolve, from its own calibration:
+//     Rmax = refDist * (refFar / thresh_far)^(1/EXP)
+// using the strongest channel against its own floor — the device still sees
+// a target while ANY channel is above threshold.  Returns 0 when the step-1
+// reference has not been calibrated.
+//
+// Free function over the calib struct rather than an Enlight method alone, so
+// the calibration routine can report it from the values it has just written
+// without depending on when the live Enlight last loaded its copy.
+// ----------------------------------------------------------------
+inline float enlight_max_range_m(const EnlightCalib& cal) {
+    if (cal.refDistM == 0) return 0.0f;
+    const uint32_t ref[3] = { cal.refFarR,      cal.refFarG,      cal.refFarB      };
+    const uint32_t flr[3] = { cal.thresh_far_r, cal.thresh_far_g, cal.thresh_far_b };
+    float best = 0.0f;
+    for (int i = 0; i < 3; i++) {
+        if (ref[i] == 0 || flr[i] == 0) continue;
+        const float r = (float)cal.refDistM
+                      * powf((float)ref[i] / (float)flr[i],
+                             1.0f / EnlightDefaults::RANGE_FALLOFF_EXP);
+        if (r > best) best = r;
+    }
+    return best;
+}
+
 // Result type
 enum class EnlightStatus : uint8_t {
     IDLE        = 0,  // no run() issued since last poll()
     RUNNING     = 1,  // DMA cycles in progress
-    LOW_POW     = 2,  // rawsum below limpow -- no target
+    LOW_POW     = 2,  // below the calibrated detection floor -- no target
     NO_HIT      = 3,  // power OK, no far hit-box matched
     PLAYER_HIT  = 4,  // far target; id = player index (1-based)
     NEAR        = 5,  // near object; id = near-target colour id
@@ -173,6 +199,20 @@ public:
     EnlightColorCoords  colorCoords()  const { return _colorCoords; }
     const EnlightCalib& calib()        const { return _cal; }
 
+    // Estimated distance to the target of the last completed run, in metres.
+    // 0 = unknown: no step-1 reference calibration, or the run found no signal.
+    //
+    // This is an observation, never a gate — Enlight does not reject a
+    // measurement on distance.  Range policy belongs to the projector object
+    // (games/lib/projector.lua), which reads this through la.shine_result().
+    // Computed by classify(), so valid from the poll() that delivers a
+    // non-RUNNING status until the next run().
+    float rangeEstM() const { return _rangeEstM; }
+
+    // Maximum range this device can resolve, from the calibration currently
+    // loaded.  See enlight_max_range_m() above.
+    float maxRangeM() const { return enlight_max_range_m(_cal); }
+
     // Access to the raw ADC DMA buffer from the last completed DMA cycle.
     // Only the last cycle is retained; call before the next run().
     // Buffer layout: interleaved 16-bit big-endian values, 12-bit ADC in
@@ -222,6 +262,7 @@ private:
 
     uint32_t            _activePeriods = 0;  // non-ditched, non-settling periods accumulated this run
     EnlightColorCoords  _colorCoords   = {0.0f, 0.0f};
+    float               _rangeEstM     = 0.0f;  // see rangeEstM(); set by classify()
 
     // LED DIO SPI
     spi_device_handle_t _ledDevice    = nullptr;
@@ -277,6 +318,10 @@ private:
     void          processAdcCycle();
     EnlightResult classify();
     EnlightResult classifyNear();  // stub: {NEAR,0}; extend when near grid defined
+    // farSum is the baseline-subtracted far total for this run; baseScale
+    // normalises it back to one DMA cycle so the estimate is independent of
+    // the repetition count the active projector chose.
+    float         estimateRangeM(float farSum, float baseScale) const;
     void          spawnCycle();
     void          onCycleDone();
     static void   dmaTask(void* arg);

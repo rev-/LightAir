@@ -58,6 +58,10 @@ LightAir_UICtrl::_actionTable[(uint8_t)UIEvent::Count] = {
   // RoleChange
   {{100,100,100,0},3,{2000,2500,3000,0},{120,160,200,0},{ {255,0,255},{0,255,255},{255,255,255},{0,0,0} },2},
 
+  // ProjectorChange — two rising ticks, deliberately quieter than RoleChange:
+  // swapping projector is frequent, and must not drown the combat feedback.
+  {{80,80,0,0},2,{2600,3400,0,0},{110,140,0,0},{ {255,180,0},{255,255,255},{0,0,0},{0,0,0} },2},
+
   // Stop
   {{0,0,0,0},0,{0,0,0,0},{0,0,0,0},{ {0,0,0},{0,0,0},{0,0,0},{0,0,0} },1},
 
@@ -106,6 +110,7 @@ _backgroundRunning(false)
 {
   for (int i = 0; i < 4; i++)
     _customDefined[i] = false;
+  _enlightDefined = false;
 }
 
 // ================= PUBLIC =================
@@ -148,12 +153,28 @@ void LightAir_UICtrl::defineCustomAction(
   _customDefined[ci] = true;
 }
 
+void LightAir_UICtrl::setEnlightAction(const UIAction* action)
+{
+  if (action) {
+    _enlightAction  = *action;
+    _enlightDefined = true;
+  } else {
+    _enlightDefined = false;
+  }
+}
+
 // ================= RESOLVE =================
 
 const LightAir_UICtrl::UIAction&
 LightAir_UICtrl::resolveAction(UIEvent event)
 {
   uint8_t idx = (uint8_t)event;
+
+  // The active projector may supply its own shine feedback.  Overriding the
+  // Enlight slot (rather than adding an event) keeps executeStep()'s
+  // burst-duration override working, since that is keyed on the event value.
+  if (event == UIEvent::Enlight && _enlightDefined)
+    return _enlightAction;
 
   if (idx >= (uint8_t)UIEvent::Custom1 &&
     idx <= (uint8_t)UIEvent::Custom4)
