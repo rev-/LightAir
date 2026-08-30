@@ -9,6 +9,34 @@ profiles:
       - ArduinoLog (1.1.1)
       - AUnit (1.7.1)
     programmer: esptool
+  # The projectors in the field.  Two differences from N8R8 that both
+  # reach the firmware, not just the build:
+  #
+  #   PSRAM=disabled — the Lua allocator asks PSRAM first and falls back
+  #     to internal RAM without a word, so a ruleset and its libraries
+  #     (~50 KB of prototypes and tables, reported by the load log) come
+  #     out of the same pool as the radio, the display and the stacks.
+  #     Sources are streamed into the parser rather than buffered whole
+  #     for exactly this reason; keep it that way.
+  #
+  #   FlashSize=4M with huge_app — 4 MB leaves no room for the default
+  #     two 3.3 MB OTA slots, and min_spiffs' 190 KB filesystem is too
+  #     close to the ~140 KB of embedded games to leave headroom for
+  #     uploaded ones.  huge_app gives one 3 MB app slot (no OTA) and a
+  #     ~900 KB filesystem.  Flashing an 8 MB layout onto a 4 MB part
+  #     puts the filesystem past the end of the chip, which reads back
+  #     as aliased nonsense rather than as a clean failure.
+  ESP32-S3-WROOM-1-N4:
+    fqbn: esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=4M,PartitionScheme=huge_app,DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default
+    platforms:
+      - platform: esp32:esp32 (2.0.17)
+    libraries:
+      - ESP8266 and ESP32 OLED driver for SSD1306 displays (4.6.2)
+      - FastLED (3.10.3)
+      - ArduinoLog (1.1.1)
+      - AUnit (1.7.1)
+    programmer: esptool
+
   ESP32-S3-WROOM-1-WOKWI:
     notes: targets wowki esp32 s3 simulator.
     fqbn: esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=8M,PartitionScheme=default_8MB,DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default

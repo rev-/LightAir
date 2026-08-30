@@ -498,20 +498,14 @@ int LightAir_LuaGame::l_lib(lua_State* L) {
     }
     lua_pop(L, 1);                                         // nil; keep cache
 
+    // Streamed off the filesystem, never read whole — a ruleset load
+    // compiles the game plus both libraries, and holding all three
+    // sources at once is what a board without PSRAM cannot afford
+    // (see loadLuaFile in LightAir_LuaGameInternal.h).
 #ifdef ESP32
     char path[64];
     snprintf(path, sizeof(path), "%s/%s.lua", LuaDefaults::LIB_DIR, name);
-    File f = LittleFS.open(path, "r");
-    if (!f) return luaL_error(L, "library '%s' not found", name);
-    size_t size = f.size();
-    char* buf = (char*)lua_newuserdatauv(L, size, 0);      // scratch, GC-managed
-    size_t got = f.read((uint8_t*)buf, size);
-    f.close();
-    if (got != size) return luaL_error(L, "library '%s' read error", name);
-    if (luaL_loadbuffer(L, buf, size, name) != LUA_OK)
-        return lua_error(L);                               // message already on top
-    lua_remove(L, -2);                                     // drop scratch buffer
-    lua_call(L, 0, 1);                                     // run chunk -> module
+    if (!LittleFS.exists(path)) return luaL_error(L, "library '%s' not found", name);
 #else
     // Host builds (tests): read from the working directory.  A missing
     // file is reported in the device's words ("library 'x' not found"),
@@ -522,10 +516,16 @@ int LightAir_LuaGame::l_lib(lua_State* L) {
     FILE* probe = fopen(path, "r");
     if (!probe) return luaL_error(L, "library '%s' not found", name);
     fclose(probe);
-    if (luaL_loadfile(L, path) != LUA_OK)
-        return lua_error(L);
-    lua_call(L, 0, 1);
 #endif
+    if (loadLuaFile(L, path) != LUA_OK)
+        return lua_error(L);                               // message already on top
+    lua_call(L, 0, 1);                                     // run chunk -> module
+
+    // The chunk closure and everything the parse allocated behind it are
+    // garbage now, and the ruleset still has a second library and its own
+    // file to compile.  A load is not timing-critical; collect here rather
+    // than carry the peak forward.
+    lua_gc(L, LUA_GCCOLLECT);
 
     lua_pushvalue(L, -1);
     lua_setfield(L, -3, name);                             // cache[name] = module

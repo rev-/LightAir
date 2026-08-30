@@ -942,45 +942,55 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
  * ========================================================= */
 
 // ----------------------------------------------------------------
-// loadChunk — compile the file at `path` into a chunk left on the
-// Lua stack.  Returns LUA_OK, or an error code with the message on
-// the stack (same contract as luaL_loadfile).
+// loadLuaFile — compile the file at `path` into a chunk left on the
+// Lua stack.  Declared in LightAir_LuaGameInternal.h, where the note
+// on streaming and chunk names lives; la.lib() uses it too.
 //
 // On the device this must NOT go through luaL_loadfile: that calls
 // plain fopen(), which resolves against the ESP-IDF VFS, while the
 // Arduino core mounts LittleFS under its own base path.  A LittleFS
 // path such as "/games/flag.lua" is invisible to fopen(), so every
 // game file failed to open and no game ever reached the menu.  Read
-// through the LittleFS object instead — exactly what la.lib() already
-// does for library modules — and compile from the buffer.
+// through the LittleFS object instead.
 // ----------------------------------------------------------------
 #ifdef ESP32
-static int loadChunk(lua_State* L, const char* path) {
-    File f = LittleFS.open(path, "r");
-    if (!f) {
+namespace {
+// One block of source at a time — see loadLuaFile's note in
+// LightAir_LuaGameInternal.h for why this must not be a whole-file buffer.
+struct FileChunkReader {
+    File f;
+    char buf[256];
+
+    static const char* read(lua_State*, void* ud, size_t* size) {
+        FileChunkReader* r = (FileChunkReader*)ud;
+        int n = r->f.read((uint8_t*)r->buf, sizeof(r->buf));
+        if (n <= 0) { *size = 0; return nullptr; }   // EOF, and read errors
+        *size = (size_t)n;                           // stop the parse the same way
+        return r->buf;
+    }
+};
+}  // namespace
+
+int loadLuaFile(lua_State* L, const char* path) {
+    FileChunkReader r;
+    r.f = LittleFS.open(path, "r");
+    if (!r.f) {
         lua_pushfstring(L, "cannot open %s", path);
         return LUA_ERRFILE;
     }
-    size_t size = f.size();
-    // Scratch buffer as a userdatum: GC-managed, so a load error cannot
-    // leak it, and it needs no heap fragmentation-prone malloc/free pair.
-    char*  buf  = (char*)lua_newuserdatauv(L, size ? size : 1, 0);
-    size_t got  = f.read((uint8_t*)buf, size);
-    f.close();
-    if (got != size) {
-        lua_pop(L, 1);                       // drop scratch buffer
-        lua_pushfstring(L, "read error on %s (%d/%d bytes)",
-                        path, (int)got, (int)size);
-        return LUA_ERRFILE;
-    }
-    int rc = luaL_loadbuffer(L, buf, size, path);
-    lua_remove(L, -2);                       // drop scratch buffer, keep result
+    // '@' marks a file source, so errors read "path:line:" — the shape the
+    // menu's failure screen trims to a basename.
+    char name[64];
+    snprintf(name, sizeof(name), "@%s", path);
+    int rc = lua_load(L, FileChunkReader::read, &r, name, "t");
+    r.f.close();
     return rc;
 }
 #else
-// Host builds (tests) read real files from the working directory.
-static int loadChunk(lua_State* L, const char* path) {
-    return luaL_loadfile(L, path);
+// Host builds (tests) read real files from the working directory.  Same
+// text-only mode, and luaL_loadfile already marks the source with '@'.
+int loadLuaFile(lua_State* L, const char* path) {
+    return luaL_loadfilex(L, path, "t");
 }
 #endif
 
@@ -1037,7 +1047,7 @@ bool LightAir_LuaGame::load(const char* path) {
     lua_State* L = _engine.L();
 
     // Compile + run the chunk (its top-level code executes here).
-    if (loadChunk(L, path) != LUA_OK) {
+    if (loadLuaFile(L, path) != LUA_OK) {
         const char* msg = lua_tostring(L, -1);
         Log.errorln("LuaGame: %s: %s", path, msg ? msg : "(no message)");
         setLoadError(msg);
@@ -1103,7 +1113,7 @@ bool LightAir_LuaGame::peekManifest(const char* path, char* nameOut,
     // a missing file, a syntax error and a bad return value need different
     // fixes, and only the first two leave a message on the Lua stack
     // (pcall() pops its own error into lastError()).
-    int rc = loadChunk(L, path);
+    int rc = loadLuaFile(L, path);
     if (rc != LUA_OK) {
         const char* err = lua_tostring(L, -1);
         Log.errorln("LuaGame: cannot load %s: %s", path, err ? err : "(no message)");

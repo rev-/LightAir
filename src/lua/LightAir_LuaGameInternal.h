@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+struct lua_State;
 #include "../game/LightAir_GameOutput.h"
 #include "../input/LightAir_InputTypes.h"
 
@@ -73,3 +74,27 @@ extern const uint8_t kIconCount;
 // unknown.  Shared by the loader (totem_slots / totems keys) and the
 // la.totem_for_role verb.
 int lookupTotemRole(const char* name);
+
+// ---- Compiling a .lua file off LittleFS -------------------------
+//
+// Both the ruleset (LightAir_LuaGame::load) and its libraries
+// (la.lib) come off LittleFS, and both must be STREAMED into the
+// parser rather than read whole.  A ruleset load compiles three
+// files — the game plus std.lua plus projector.lua, ~65 KB of source
+// — and whole-file buffers are garbage only from the moment the
+// parser is done with them, so all three sat in RAM together, on top
+// of the prototypes they were being turned into.  On a board with
+// PSRAM nobody notices; on one without (the N4 projectors) that is
+// the peak that decides whether a game loads at all, and it is why
+// the one ruleset pulling a single library was the one that worked.
+//
+// Streaming caps the source side at one small block.  Chunk names
+// carry Lua's '@' file marker so errors read "game.lua:52: ..."
+// rather than "[string \"/games/game.lua\"]:52: ...", and the mode is
+// text-only: nothing here ever ships precompiled bytecode, and
+// undumping it is an escape from a sandbox that has already had
+// load/loadfile/dofile taken away.
+//
+// Returns a lua_load status with the message on the stack, exactly
+// like luaL_loadfile.  Host builds read the working directory.
+int loadLuaFile(lua_State* L, const char* path);

@@ -450,6 +450,16 @@ Full model, semantics, wire encoding, versioning and failure modes:
   ~80-byte manifests in RAM, not 50 interpreters.  Totems need no files at
   all: their behaviour travels as TotemVM programs in the activation reply
   (§5).
+  Both the ruleset and its libraries are **streamed** into the parser, one
+  256-byte block at a time, never read whole.  A load compiles three files
+  — the game plus `std.lua` plus `projector.lua`, ~65 KB of source — and a
+  whole-file buffer is garbage only once the parser is finished with it, so
+  all three used to sit in RAM together on top of the prototypes they were
+  becoming.  On a board with PSRAM nobody notices; the projectors are an N4
+  part with none, and there that peak is what decides whether a game loads
+  at all.  Chunks are also loaded **text-only**: nothing here ships
+  precompiled Lua, and undumping bytecode is a way out of a sandbox that
+  has already had `load`/`loadfile`/`dofile` removed.
   A realize that fails carries its **reason** back with it —
   `LightAir_LuaGame::loadError()` → the hook's `errOut` →
   `GameManager::lastLoadError()` → the setup menu's failure screen — because

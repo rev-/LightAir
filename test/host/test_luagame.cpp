@@ -28,6 +28,11 @@ static EnlightCalib g_calib;
 static Enlight g_enlight(g_calib);
 Enlight* enlightPtr = &g_enlight;
 
+// lua_Writer for §1d: dumps a compiled chunk to a FILE*.
+static int dumpWriter(lua_State*, const void* p, size_t sz, void* ud) {
+    return (sz == 0 || fwrite(p, sz, 1, (FILE*)ud) == 1) ? 0 : 1;
+}
+
 // ---- fake hardware behind the abstract interfaces ----
 // Records the tray band (the top of the screen) so a test can assert
 // that a ruleset's la.show() reached the glass, and that it left when it
@@ -184,6 +189,27 @@ int main() {
 
         CHECK(shared.load("games/teams.lua"), "a good file still loads");
         CHECK(shared.loadError()[0] == 0, "a successful load clears the reason");
+    }
+
+    // ---- 1d. A ruleset is source, never bytecode --------------------
+    // Nothing in this project ships precompiled Lua, and undumping is a
+    // way straight out of a sandbox that has already had load, loadfile
+    // and dofile taken off it — an uploaded .lua is untrusted input.  So
+    // the loader asks the parser for text only.
+    {
+        const char* path = "test/host/build/binary_chunk.lua";
+        lua_State* T = luaL_newstate();
+        CHECK(luaL_loadstring(T, "return { api = 1 }") == LUA_OK, "dump source compiles");
+        FILE* out = fopen(path, "wb");
+        CHECK(out != nullptr, "dump file opened");
+        lua_dump(T, dumpWriter, out, 0);
+        fclose(out);
+        lua_close(T);
+
+        CHECK(!shared.load(path), "a binary chunk is refused");
+        CHECK(strstr(shared.loadError(), "binary") != nullptr,
+              "and refused for being bytecode, not for being unreadable");
+        remove(path);
     }
 
     // Deep-test freeforall: realize it again on the same instance.

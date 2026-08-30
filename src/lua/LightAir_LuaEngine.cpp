@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #ifdef ESP32
+#include <Arduino.h>
 #include <esp_heap_caps.h>
 #include <ArduinoLog.h>
 #define LUA_LOG_ERR(msg) Log.errorln("Lua: %s", msg)
@@ -27,13 +28,36 @@ void* LightAir_LuaEngine::alloc(void*, void* ptr, size_t, size_t nsize) {
         return nullptr;
     }
 #ifdef ESP32
-    void* p = heap_caps_realloc(ptr, nsize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!p) p = heap_caps_realloc(ptr, nsize, MALLOC_CAP_8BIT);
-    return p;
+    // PSRAM when the board has any: a ruleset and its libraries are a
+    // six-figure count of small allocations, and keeping them out of
+    // internal RAM leaves it for the radio, the display and the stacks.
+    //
+    // Asked ONCE, not per allocation.  Not every board has it — the
+    // projectors run an N4 part with none — and there the SPIRAM attempt
+    // is a guaranteed failure paid on every single Lua allocation, which
+    // is the wrong tax to levy on the hardware that can least afford it.
+    if (psramPresent()) {
+        void* p = heap_caps_realloc(ptr, nsize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (p) return p;                 // exhausted PSRAM: fall through
+    }
+    return heap_caps_realloc(ptr, nsize, MALLOC_CAP_8BIT);
 #else
     return realloc(ptr, nsize);
 #endif
 }
+
+#ifdef ESP32
+bool LightAir_LuaEngine::psramPresent() {
+    static int8_t cached = -1;
+    if (cached < 0) {
+        cached = psramFound() ? 1 : 0;
+        Log.infoln("Lua: allocator using %s (%d B free internal)",
+                   cached ? "PSRAM" : "internal RAM",
+                   (int)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    }
+    return cached != 0;
+}
+#endif
 
 /* =========================================================
  *   LIFECYCLE
