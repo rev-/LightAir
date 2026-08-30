@@ -8,6 +8,7 @@ LightAir_GameStore* LightAir_GameStore::s_instance = nullptr;
 #include <ArduinoLog.h>
 #include <FS.h>
 #include <LittleFS.h>
+#include <esp_heap_caps.h>
 #include "LightAir_LuaGame.h"
 #include "LightAir_GamesBundle.h"
 
@@ -74,6 +75,13 @@ void LightAir_GameStore::seedDefaults() {
  *   MANIFEST SCAN + LAZY REALIZATION
  * ========================================================= */
 
+static void logHeadroom(const char* what, const char* path) {
+    Log.infoln("GameStore: %s %s (psram %d B, heap %d B, largest block %d B)",
+               what, path,
+               (int)ESP.getFreePsram(), (int)ESP.getFreeHeap(),
+               (int)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+}
+
 uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
     if (!_mounted) return 0;
     s_instance = this;
@@ -101,6 +109,9 @@ uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
 
         if (!s_scanner.peekManifest(m.path, m.name, sizeof(m.name), &m.typeId)) {
             Log.errorln("GameStore: skipping %s (bad manifest)", m.path);
+            // A scan that drops files one by one has emptied the menu once
+            // already; say what the device had left when it dropped this one.
+            logHeadroom("after failing", m.path);
             continue;
         }
 
@@ -150,17 +161,19 @@ bool LightAir_GameStore::realize(LightAir_Game& game,
     if (!m) return true;                    // not one of ours (native etc.)
 
     if (!s_loadedGame.loaded() || s_loadedGame.typeId() != m->typeId) {
-        // Log the headroom on the way in: a game that loads on the bench
-        // and refuses on the device is a memory question first, and this
-        // is the line that answers it without a second flash.
-        Log.infoln("GameStore: loading %s (heap %d B, psram %d B)", m->path,
-                   (int)ESP.getFreeHeap(), (int)ESP.getFreePsram());
+        // Log the headroom either side of the load.  A ruleset that loads
+        // on the bench and refuses on the device is a memory question
+        // first, and three numbers answer it without a second flash:
+        // whether PSRAM is there at all (the Lua allocator asks for it
+        // first and falls back silently), how much internal RAM is left,
+        // and the largest single block in it — which is what a state built
+        // from thousands of small allocations actually runs out of.
+        logHeadroom("loading", m->path);
         if (!s_loadedGame.load(m->path)) {
             if (errOut && errCap) snprintf(errOut, errCap, "%s", s_loadedGame.loadError());
             return false;
         }
-        Log.infoln("GameStore: loaded %s (heap %d B, psram %d B)", m->path,
-                   (int)ESP.getFreeHeap(), (int)ESP.getFreePsram());
+        logHeadroom("loaded ", m->path);
     }
     // Copy the full descriptor over the placeholder in place: every
     // pointer inside it targets the shared instance, so the menu's
