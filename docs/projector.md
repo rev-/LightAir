@@ -160,6 +160,19 @@ something better, it is the only choice.
 MSG.SPLASH payload: `[projector id, strength, rssi gate, origin, shooter id]`,
 single-hop.
 
+**One standard profile carries it: `proj.standard.SPLASH`.** Splash is loud,
+in radio traffic and in play, and a field where every projector splashed
+would be chaos rather than tactics — so the burst is a thing you choose to
+pick up, not a property of shining. Its direct hit is a single standard hit;
+the point is the two-band beacon it triggers around whoever it lands on. It
+carries its own icon, its own shine feedback, a long cooldown and a slow
+refill, so it reads and feels different in the hand.
+
+Standard profile ids are **fixed and reserved**, because a projector id
+travels on the wire: a splash beacon names the projector that fired and
+every receiver looks the profile up by that id locally. A game's own
+profiles start above the standard range.
+
 Five guards, each with a test that fails when it is removed:
 
 | Guard | Why |
@@ -213,8 +226,37 @@ pointers stays the projector's.
 | `LightAir_ProjectorCtrl` in C++ | §1 — it would need a wider boundary, not a narrower one |
 | persistence of unlocked projectors across matches | changes the NVS layout and has real fairness implications between players with different play histories |
 
-`games/freeforall.lua` and `games/virus.lua` keep their inline shine loops.
-Neither used `std.shiner`, and the design doc names freeforall "the
-fully-explicit tutorial that uses no library at all" — a guarantee worth
-more than uniformity. They interoperate through the empty-payload rule in
-§3.
+---
+
+## 8. The projector is the only route to Enlight
+
+Every ruleset goes through it, with no exceptions — including
+`freeforall`, which used to be the deliberately library-free tutorial.
+
+Two reasons it has to be all of them. A ruleset that fires or polls on its
+own bypasses the energy cost, the reach, the hit weight and the splash. And
+`la.shine_result()` and `la.shine_lit()` **both poll, and the poll is
+read-and-clear**, so a game calling one while the projector calls the other
+would eat measurements at random — an intermittent fault that would look
+like flaky hardware.
+
+`test/host/test_games.lua` enforces it: every game file is scanned for
+`la.shine*` calls and the suite fails on any that reach Enlight directly.
+
+---
+
+## 9. The recharge clock
+
+The wait is anchored by the trigger release that **follows an accepted
+beam**, and once anchored it runs to completion:
+
+- a press that spends nothing — an empty pool — does **not** re-anchor it,
+  so leaning on a dead trigger cannot push the refill further out;
+- nor does it **block** it: the energy arrives on time even with the
+  trigger held down across the moment it is due;
+- only a press that actually fires restarts the clock, from its own
+  release.
+
+Nothing recharges between an accepted beam and its release, because until
+that release the wait has not begun — otherwise a player who had been idle
+would see the pool refill on the very tick they emptied it.

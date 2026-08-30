@@ -50,7 +50,8 @@ void LightAir_DisplayCtrl::activateBindingSet(uint8_t setId) {
  *   BINDING
  * ========================================================= */
 
-bool LightAir_DisplayCtrl::bindIntVariable(int* variable, IconType icon, uint8_t x, uint8_t y) {
+bool LightAir_DisplayCtrl::bindIntVariable(int* variable, IconType icon, uint8_t x, uint8_t y,
+                                          const int* iconVar) {
     if (y < DisplayDefaults::TRAY_HEIGHT) return false;
 
     BindingSet& set = _sets[_selectedSet];
@@ -59,10 +60,12 @@ bool LightAir_DisplayCtrl::bindIntVariable(int* variable, IconType icon, uint8_t
     VariableBinding& b = set.bindings[set.count++];
     b.variable  = variable;
     b.icon      = icon;
+    b.iconVar   = iconVar;
     b.type      = TYPE_INT;
     b.x         = x;
     b.y         = y;
     b.lastValue = INT32_MIN;
+    b.lastIcon  = -1;
     return true;
 }
 
@@ -74,7 +77,8 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     int triggerValue,
     const int* fillSecs,
     uint8_t barWidth,
-    const int* startMs
+    const int* startMs,
+    const int* iconVar
 ) {
     if (y < DisplayDefaults::TRAY_HEIGHT) return false;
     if (barWidth == 0 || barWidth > DisplayDefaults::BAR_WIDTH) return false;
@@ -85,6 +89,7 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     VariableBinding& b = set.bindings[set.count++];
     b.variable  = variable;
     b.icon      = icon;
+    b.iconVar   = iconVar;
     b.type      = TYPE_BAR;
     b.x         = x;
     b.y         = y;
@@ -95,6 +100,7 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     b.filling   = false;
     b.barWidth  = barWidth;
     b.lastValue = INT32_MIN;
+    b.lastIcon  = -1;
     return true;
 }
 
@@ -107,10 +113,12 @@ bool LightAir_DisplayCtrl::bindStringVariable(const char* str, IconType icon, ui
     VariableBinding& b = set.bindings[set.count++];
     b.strVariable = str;
     b.icon        = icon;
+    b.iconVar     = nullptr;
     b.type        = TYPE_STRING;
     b.x           = x;
     b.y           = y;
     b.lastText[0] = '\0';
+    b.lastIcon    = -1;
     return true;
 }
 
@@ -191,14 +199,19 @@ void LightAir_DisplayCtrl::renderBinding(VariableBinding& b) {
 
 void LightAir_DisplayCtrl::renderInt(VariableBinding& b) {
     int value = *b.variable;
-    if (value == b.lastValue) return;
+    const IconType icon = iconOf(b);
+    // Both have to be watched: a projector switch at unchanged energy moves
+    // the icon and nothing else, and a redraw keyed on the value alone would
+    // leave the old one on the glass.
+    if (value == b.lastValue && (int8_t)icon == b.lastIcon) return;
     b.lastValue = value;
+    b.lastIcon  = (int8_t)icon;
 
     _display.setColor(false);
     _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
-    drawIcon(b.icon, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
+    drawIcon(icon, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
 
     char buf[12];
     snprintf(buf, sizeof(buf), "%d", value);
@@ -322,6 +335,13 @@ void LightAir_DisplayCtrl::drawIcon(IconType icon, uint8_t x, uint8_t y) {
     _display.drawBitmap(x, y, 8, 8, getIconBitmap(icon));
 }
 
+IconType LightAir_DisplayCtrl::iconOf(const VariableBinding& b) const {
+    if (!b.iconVar) return b.icon;
+    const int v = *b.iconVar;
+    if (v < 0 || v > (int)ICON_SPLASH) return b.icon;
+    return (IconType)v;
+}
+
 const uint8_t* LightAir_DisplayCtrl::getIconBitmap(IconType icon) {
     switch (icon) {
         case ICON_LIGHT:     return ICON_LIGHT_BITMAP;
@@ -332,6 +352,7 @@ const uint8_t* LightAir_DisplayCtrl::getIconBitmap(IconType icon) {
         case ICON_ROLE:      return ICON_ROLE_BITMAP;
         case ICON_ENERGY:    return ICON_ENERGY_BITMAP;
         case ICON_DOWN:      return ICON_DOWN_BITMAP;
+        case ICON_SPLASH:    return ICON_SPLASH_BITMAP;
         default:             return ICON_LIGHT_BITMAP;
     }
 }

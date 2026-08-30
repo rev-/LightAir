@@ -558,6 +558,15 @@ void LightAir_LuaGame::registerKernel() {
     }
     lua_setfield(L, -2, "msg");
 
+    // la.icons — the icon registry, so a projector profile can name the icon
+    // its energy cell should carry.  Same shape as la.msg: data, pushed once.
+    lua_newtable(L);
+    for (uint8_t i = 0; i < kIconCount; i++) {
+        lua_pushinteger(L, kIcons[i].val);
+        lua_setfield(L, -2, kIcons[i].name);
+    }
+    lua_setfield(L, -2, "icons");
+
     // la.flag_event
     lua_newtable(L);
     lua_pushinteger(L, FlagEvent::TAKEN);   lua_setfield(L, -2, "TAKEN");

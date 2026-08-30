@@ -10,6 +10,8 @@ la = {
           BASE_BEACON = 0x56, FLAG_BEACON = 0x58,
           BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60 },
   flag_event = { TAKEN = 1, DROPPED = 2, SCORED = 3 },
+  icons = { LIGHT = 0, LIFE = 1, FLAG = 2, HOURGLASS = 3, SCORE = 4,
+            ROLE = 5, ENERGY = 6, DOWN = 7, SPLASH = 8, TIME = 3 },
   colors = { team = {}, player = {} },
   rhythm = {},
 }
@@ -361,6 +363,8 @@ do
   end
 
   local BASE_VARS = { energy = "energy", spent = "energy_spent" }
+  -- The standard catalogue, read once from a throwaway instance.
+  local P_STANDARD = dofile(ROOT .. "lib/projector.lua").standard
   local function mk_vars(e, recharge)
     return { energy = e, energy_spent = 0, start_energy = e,
              recharge_secs = recharge or 10 }
@@ -415,6 +419,43 @@ do
     check(v.energy == 1, "refill", "did not refill after the delay")
   end
 
+  -- ---- pressing an empty trigger neither restarts nor blocks the wait
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = { energy = "energy", spent = "energy_spent",
+                              reload = "reload", reload_secs = "reload_secs" } }
+    local v = mk_vars(1, 10)
+    v.reload, v.reload_secs = 0, 0
+    P.reset(v)
+
+    la.trigger_down = function() return true end
+    P.tick(v)                                   -- the only beam empties the pool
+    la.trigger_down = function() return false end
+    clock = clock + 100;  P.tick(v)             -- release: the wait starts here
+    local anchor = v.reload
+    check(anchor == clock, "empty-press", "the wait did not anchor at the release")
+
+    -- Now lean on a dead trigger for most of the wait: presses and releases
+    -- that spend nothing must not push the refill further out...
+    for _ = 1, 4 do
+      la.trigger_down = function() return true end
+      clock = clock + 1000;  P.tick(v)
+      la.trigger_down = function() return false end
+      clock = clock + 1000;  P.tick(v)
+    end
+    check(v.reload == anchor, "empty-press",
+          "an empty press re-anchored the wait: " .. tostring(v.reload) ..
+          " instead of " .. tostring(anchor))
+    check(v.energy == 0, "empty-press", "refilled early")
+
+    -- ...and must not hold it back either: the energy arrives on time even
+    -- with the trigger held down across the moment it is due.
+    la.trigger_down = function() return true end
+    clock = anchor + 10000;  P.tick(v)
+    check(v.energy == 1, "empty-press",
+          "a held trigger blocked the refill that was due")
+  end
+
   -- ---- ramp climbs one unit at a time ----------------------------
   do
     clock, shine_busy_until = 0, 0
@@ -466,12 +507,14 @@ do
           "the bar clock moved to " .. tostring(v.reload) ..
           "; it must stay at the release instant " .. tostring(release))
 
-    -- Pressing again abandons the reload: with a refill recharge nothing
-    -- comes back until the NEXT release, so a bar left running would fill
-    -- while the pool stayed empty.
+    -- Pressing again does NOT abandon the reload.  An empty trigger cannot
+    -- fire, so it has nothing to restart the wait with, and the bar must
+    -- keep showing the wait that is genuinely still running.
     la.trigger_down = function() return true end
     clock = clock + 100;  P.tick(v)
-    check(v.reload == 0, "bar", "a re-press left the reload bar running")
+    check(v.reload == release, "bar",
+          "a re-press moved the reload bar to " .. tostring(v.reload) ..
+          "; the wait is still the one anchored at " .. tostring(release))
   end
 
   -- ---- inventory: FIFO eviction, and the baseline is structural ---
@@ -623,8 +666,87 @@ do
     check(P.on_splash(v, mine) == nil, "splash", "the emitter splashed itself")
   end
 
+  -- ---- the standard SPLASH profile -------------------------------
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = { energy = "energy", spent = "energy_spent",
+                              icon = "proj_icon", name = "proj_name" },
+                     profiles = { P_STANDARD.SPLASH } }
+    local v = mk_vars(50)
+    v.proj_icon, v.proj_name = 0, ""
+    P.reset(v)
+    la.trigger_down = function() return false end
+
+    local S = P_STANDARD.SPLASH
+    -- Everything a projector needs to be playable, not just a name.
+    for _, field in ipairs({ "id", "name", "icon", "cycles", "cooldown_ms",
+                             "range_m", "cost", "max_energy", "recharge",
+                             "recharge_delay_secs", "ready_ms", "strength",
+                             "target_immunity_ms", "splash", "shine_action" }) do
+      check(S[field] ~= nil, "SPLASH", "the standard profile declares no " .. field)
+    end
+    check(S.splash.bands and #S.splash.bands >= 2, "SPLASH",
+          "the splash profile has no graded bands")
+
+    -- Holding it puts its identity on the LCD.
+    P.grant(v, S.id)
+    check(v.proj_name == "SPLASH", "SPLASH",
+          "the name did not reach the display var: " .. tostring(v.proj_name))
+    check(v.proj_icon == la.icons.SPLASH, "SPLASH",
+          "the icon did not reach the display var: " .. tostring(v.proj_icon))
+
+    -- Switching back to the baseline restores the baseline's identity, so
+    -- the cell never shows the icon of a projector no longer in hand.
+    P.select(v, 0)
+    check(v.proj_icon == la.icons.ENERGY, "SPLASH",
+          "the icon stayed on SPLASH after switching away")
+
+    -- It is the ONLY profile that splashes: a field where everything
+    -- splashed would be chaos rather than tactics.
+    check(P_STANDARD.SPLASH.splash ~= nil, "SPLASH", "SPLASH lost its splash")
+    local others = 0
+    for name, prof in pairs(P_STANDARD) do
+      if name ~= "SPLASH" and prof.splash then others = others + 1 end
+    end
+    check(others == 0, "SPLASH", others .. " other standard profiles declare a splash")
+  end
+
   la.trigger_down = function(n) return false end
-  print("OK   projector     baseline=shiner, refill/ramp, bar clock, FIFO, range, payload, clamps, splash")
+  print("OK   projector     baseline=shiner, refill/ramp, bar clock, FIFO, range, payload, clamps, splash, SPLASH profile")
+end
+
+-- ================================================================
+--   The projector is the ONLY route to Enlight.
+--
+--   A ruleset that starts or polls a burst itself bypasses everything the
+--   projector exists to own: the energy a beam costs, the reach, what the
+--   hit weighs on the wire, and the splash.  Worse, la.shine_result() and
+--   la.shine_lit() both poll, and the poll is read-and-clear — a game
+--   calling one while the projector calls the other would eat measurements
+--   at random.  So the raw optics verbs belong to games/lib/projector.lua
+--   and to nothing else.
+-- ================================================================
+do
+  local RAW = { "la%.shine%s*%(", "la%.shine_lit%s*%(", "la%.shine_result%s*%(",
+                "la%.shine_config%s*%(", "la%.shine_ms%s*%(" }
+  local checked = 0
+  for _, f in ipairs(files) do
+    local fh = assert(io.open(ROOT .. f .. ".lua", "r"))
+    local src = fh:read("a"); fh:close()
+    checked = checked + 1
+    for _, pat in ipairs(RAW) do
+      -- Ignore comment lines: the ban is on calling, not on explaining.
+      for line in src:gmatch("[^\n]+") do
+        if not line:match("^%s*%-%-") and line:match(pat) then
+          failures = failures + 1
+          print(string.format("  FAIL %-12s reaches Enlight directly: %s",
+                              f, line:match("^%s*(.-)%s*$")))
+        end
+      end
+    end
+  end
+  print(string.format("OK   optics        %d game files go through the projector, none direct",
+                      checked))
 end
 
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")

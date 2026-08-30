@@ -62,6 +62,13 @@ struct NamedU8 { const char* name; uint8_t val; };
 int lookupName(const NamedU8* tab, uint8_t n, const char* name);  // -1 = not found
 #define LOOKUP(tab, name) lookupName(tab, sizeof(tab) / sizeof(*tab), name)
 
+// The icon registry, shared across the translation units: LightAir_LuaGame
+// resolves a monitor row's `icon` through it, and LightAir_LuaKernel pushes
+// it whole as la.icons so a projector profile can name the icon its energy
+// cell should carry.  Defined once in LightAir_LuaGame.cpp.
+extern const NamedU8 kIcons[];
+extern const uint8_t kIconCount;
+
 // Totem role name ("BASE", "CP", …) → TotemRoleId constant; -1 if
 // unknown.  Shared by the loader (totem_slots / totems keys) and the
 // la.totem_for_role verb.

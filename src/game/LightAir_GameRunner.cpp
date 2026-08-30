@@ -70,9 +70,9 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
                                         var.barTrigger, var.barFill,
                                         var.barWidth ? var.barWidth
                                                      : DisplayDefaults::BAR_WIDTH,
-                                        var.barStart);
+                                        var.barStart, var.iconVar);
             else if (var.type == VarType::INT)
-                display.bindIntVariable(var.asInt, var.icon, px, py);
+                display.bindIntVariable(var.asInt, var.icon, px, py, var.iconVar);
             else
                 display.bindStringVariable(var.asChars, var.icon, px, py);
         }

@@ -36,12 +36,13 @@ int lookupName(const NamedU8* tab, uint8_t n, const char* name) {
     return -1;
 }
 
-static const NamedU8 kIcons[] = {
+const NamedU8 kIcons[] = {
     { "LIGHT", ICON_LIGHT }, { "LIFE", ICON_LIFE }, { "FLAG", ICON_FLAG },
     { "HOURGLASS", ICON_HOURGLASS }, { "SCORE", ICON_SCORE },
     { "ROLE", ICON_ROLE }, { "ENERGY", ICON_ENERGY }, { "DOWN", ICON_DOWN },
-    { "TIME", ICON_TIME },
+    { "SPLASH", ICON_SPLASH }, { "TIME", ICON_TIME },
 };
+const uint8_t kIconCount = sizeof(kIcons) / sizeof(*kIcons);
 
 static const NamedU8 kRoles[] = {
     { "BASE_O", TotemRoleId::BASE_O }, { "BASE_X", TotemRoleId::BASE_X },
@@ -610,10 +611,27 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
             if (slot < 0) luaL_error(L, "monitor var '%s' not declared", id);
             char iconName[12];
             fieldStr(L, e, "icon", iconName, sizeof(iconName), true);
-            int icon = LOOKUP(kIcons, iconName);
+            int icon = lookupName(kIcons, kIconCount, iconName);
             if (icon < 0) luaL_error(L, "unknown icon '%s'", iconName);
             uint8_t col = (uint8_t)fieldInt(L, e, "col", 0, true);
             uint8_t row = (uint8_t)fieldInt(L, e, "row", 0, true);
+
+            // icon_var names a var holding an la.icons value, read on every
+            // render so the cell can follow runtime state: the energy cell
+            // shows whichever projector is in hand.  Optional.
+            const int* iconVarPtr = nullptr;
+            lua_getfield(L, e, "icon_var");
+            if (lua_isstring(L, -1)) {
+                char ivId[LuaDefaults::MAX_VAR_ID];
+                lua_pop(L, 1);
+                fieldStr(L, e, "icon_var", ivId, sizeof(ivId), true);
+                int iv = findSlot(ivId);
+                if (iv < 0 || _slots[iv].isText)
+                    luaL_error(L, "monitor icon_var '%s' invalid", ivId);
+                iconVarPtr = &_slots[iv].val;
+            } else {
+                lua_pop(L, 1);
+            }
             uint32_t mask = 0;
             lua_getfield(L, e, "states");
             luaL_checktype(L, -1, LUA_TTABLE);
@@ -666,13 +684,14 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
                     _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row,
                     (int)fieldInt(L, e, "bar_at", 0, false),
                     &_slots[fillSlot].val, startPtr,
-                    (uint8_t)fieldInt(L, e, "width", 0, false));
+                    (uint8_t)fieldInt(L, e, "width", 0, false), iconVarPtr);
             } else if (_slots[slot].isText) {
                 _monitorVars[monitorCount] = MonitorVar::Str(
                     _slots[slot].id, _slots[slot].text, mask, (IconType)icon, col, row);
             } else {
                 _monitorVars[monitorCount] = MonitorVar::Int(
-                    _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row);
+                    _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row,
+                    iconVarPtr);
             }
             monitorCount++;
             lua_pop(L, 1);                                 // entry

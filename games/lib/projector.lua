@@ -50,6 +50,11 @@ local active_idx   = 1
 -- ---- Live state --------------------------------------------------
 local was_active   = false
 local release_at   = 0
+-- True between an accepted beam and the trigger release that follows it.
+-- The recharge wait STARTS at that release, so nothing may tick while this
+-- is set — otherwise a player who had been idle would see the pool refill
+-- on the very tick they emptied it.
+local awaiting_release = false
 local ready_at     = 0     -- millis before which trigger() refuses
 local lit_at       = {}    -- target id -> millis of the last accepted hit
 local evicted_name = nil
@@ -111,6 +116,10 @@ end
 --   config vars.  A game that declares no profiles gets this and
 --   behaves as it did before the projector existed.
 -- ================================================================
+-- ICON_ENERGY, resolved once: a profile that names no icon, or names one
+-- the firmware does not carry, keeps the standard energy glyph.
+local ICON_FALLBACK = (la.icons and la.icons.ENERGY) or 0
+
 local BASELINE = {
   id                  = 0,
   name                = "BASE",
@@ -124,6 +133,69 @@ local BASELINE = {
   rssi_min            = 0,
   target_immunity_ms  = 0,
   ready_ms            = 0,
+}
+
+-- ================================================================
+--   STANDARD PROFILES
+--
+--   Ready-made profiles a game can drop straight into its `profiles`
+--   list.  Their ids are FIXED and reserved, because a projector id
+--   travels on the wire: a splash beacon names the projector that fired,
+--   and every receiver looks the profile up by that id locally.  A game's
+--   own profiles should start above this range.
+--
+--     profiles = { proj.standard.SPLASH, { id = 10, name = "MINE", ... } }
+-- ================================================================
+P.standard = {
+  -- SPLASH — the burst projector.  A heavy, slow shot whose point is not
+  -- the direct hit but what it does to everyone standing near the person
+  -- it lands on: the direct hit is a single standard hit, while the
+  -- beacon it triggers hands out two at close range and one further out.
+  --
+  -- It is the ONLY profile that declares a splash.  Splash is loud, in
+  -- radio traffic and in play, and a field where every projector splashed
+  -- would be chaos rather than tactics.
+  SPLASH = {
+    id       = 1,
+    name     = "SPLASH",
+    icon     = "SPLASH",
+
+    -- Optics: a long integration for a heavy shot, and a cooldown that
+    -- makes it a considered shot rather than a held trigger.
+    cycles      = 20,
+    cooldown_ms = 900,
+    range_m     = 12,        -- a burst weapon, not a sniper
+
+    -- Economy: few charges, slow to come back.  The reload bar earns its
+    -- keep on this one.
+    cost                = 2,
+    max_energy          = 8,
+    recharge            = "refill",
+    recharge_delay_secs = 6,
+
+    -- Handling: heavy to bring up after a switch.
+    ready_ms = 600,
+
+    -- Effect.  target_immunity_ms stops the same target absorbing the
+    -- direct hit twice inside one burst's echo.
+    strength           = 1,
+    target_immunity_ms = 1500,
+
+    splash = {
+      on     = "lit",        -- every accepted hit bursts, not just the fatal one
+      -- Graded: RSSI is coarse, so a misread moves a bystander one band
+      -- rather than between hit and nothing.
+      bands  = { { -55, 2 }, { -70, 1 } },
+      strength = 1,          -- what a receiver without the profile falls back to
+    },
+
+    -- A low double thump, so the burst does not sound like the baseline.
+    shine_action = {
+      priority = 2,
+      steps = { { ms = 60, freq = 1400, vib = 200, rgb = { 255, 120, 0 } },
+                { ms = 90, freq =  900, vib = 255, rgb = { 255, 40, 0 } } },
+    },
+  },
 }
 
 -- ================================================================
@@ -247,6 +319,12 @@ local function activate(vars, idx)
                    cooldown_ms = val(vars, p.cooldown_ms, nil) }
   if la.shine_action then la.shine_action(p.shine_action) end
   if var.name then vars[var.name] = p.name or "" end
+  -- The energy cell's icon follows the projector in hand.  Published as an
+  -- la.icons value into an ordinary var, so the display binding reads it
+  -- through a pointer and nothing here reaches into the display layer.
+  if var.icon then
+    vars[var.icon] = (p.icon and la.icons and la.icons[p.icon]) or ICON_FALLBACK
+  end
 
   ready_at = la.now() + val(vars, p.ready_ms, 0)
   publish_reload(vars, 0, p)
@@ -357,6 +435,7 @@ function P.reset(vars)
   active_idx  = 1
   was_active  = false
   release_at  = 0
+  awaiting_release = false
   lit_at      = {}
   evicted_name   = nil
   splash_sent_at = nil
@@ -616,6 +695,7 @@ function P.tick(vars)
     la.ui_enlight(la.shine_ms())
     slots[active_idx].last_shine_at = now
     slots[active_idx].ramp_at       = now
+    awaiting_release                = true
 
     -- A spent "consumed" projector leaves, but never the baseline.
     if p.recharge == "consumed" and get_energy(vars) <= 0 and active_idx ~= 1 then
@@ -624,15 +704,20 @@ function P.tick(vars)
     end
   end
 
-  if was_active and not active_trigger then release_at = now end
-  -- Pressing again abandons a reload in progress: with a "refill" recharge
-  -- nothing comes back until the next release, so a bar left running would
-  -- fill while the pool stayed empty.  Clearing the anchor here is what keeps
-  -- the display honest about a trigger held down through the whole wait.
-  if active_trigger and not was_active then publish_reload(vars, 0, p) end
+  -- The wait is anchored by the release that FOLLOWS a beam.  A press that
+  -- spends nothing — an empty pool — neither re-anchors it nor holds it
+  -- back: once started, the wait runs to completion, so leaning on a dead
+  -- trigger still gets the energy back on time.  Only a press that actually
+  -- fires restarts the clock, and it does so from its own release.
+  if was_active and not active_trigger and awaiting_release then
+    release_at       = now
+    awaiting_release = false
+  end
   was_active = active_trigger
 
-  if not active_trigger then tick_recharge(vars, p, now) end
+  -- Runs whatever the trigger is doing.  The one thing that stops it is a
+  -- beam waiting for its release, because until then the wait has not begun.
+  if not awaiting_release then tick_recharge(vars, p, now) end
 
   -- A projector that just became unavailable hands back to the baseline.
   if active_idx ~= 1 and not available(P.active_id()) then

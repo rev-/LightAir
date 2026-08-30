@@ -107,6 +107,10 @@ struct MonitorVar {
     uint32_t    stateMask;  // bit N → display in state N
     IconType    icon;
     uint8_t     col, row;
+    // Optional: when non-null the icon is read through this on every render,
+    // so it can follow runtime state — the energy cell shows whichever
+    // projector is in hand.  Out-of-range values fall back to `icon`.
+    const int*  iconVar;
     // ---- BAR only ----
     int         barTrigger; // value at which the bar takes over from the number
     const int*  barFill;    // live pointer to the fill duration, in seconds
@@ -119,8 +123,10 @@ struct MonitorVar {
 
     static MonitorVar Int(const char* name, int* value,
                           uint32_t stateMask, IconType icon,
-                          uint8_t col, uint8_t row) {
+                          uint8_t col, uint8_t row,
+                          const int* iconVar = nullptr) {
         MonitorVar v = {};
+        v.iconVar   = iconVar;
         v.name      = name;
         v.type      = VarType::INT;
         v.asInt     = value;
@@ -138,8 +144,9 @@ struct MonitorVar {
                           uint32_t stateMask, IconType icon,
                           uint8_t col, uint8_t row,
                           int trigger, const int* fill,
-                          const int* start = nullptr, uint8_t width = 0) {
-        MonitorVar v = Int(name, value, stateMask, icon, col, row);
+                          const int* start = nullptr, uint8_t width = 0,
+                          const int* iconVar = nullptr) {
+        MonitorVar v = Int(name, value, stateMask, icon, col, row, iconVar);
         v.type       = VarType::BAR;
         v.barTrigger = trigger;
         v.barFill    = fill;

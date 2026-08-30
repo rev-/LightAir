@@ -29,7 +29,8 @@ public:
         int* variable,
         IconType icon,
         uint8_t x,
-        uint8_t y
+        uint8_t y,
+        const int* iconVar = nullptr
     );
 
     /* ================================
@@ -73,7 +74,8 @@ public:
         int triggerValue,
         const int* fillSecs,
         uint8_t barWidth = DisplayDefaults::BAR_WIDTH,
-        const int* startMs = nullptr
+        const int* startMs = nullptr,
+        const int* iconVar = nullptr
     );
 
     bool bindStringVariable(
@@ -114,6 +116,11 @@ private:
             const char* strVariable; // TYPE_STRING
         };
         IconType icon;
+        // When non-null and holding a valid IconType, the icon is read
+        // through this on every render instead of being fixed at bind time —
+        // the energy cell follows whichever projector is in hand.  A negative
+        // or out-of-range value falls back to `icon`.
+        const int* iconVar;
         BindingType type;
         uint8_t  x;
         uint8_t  y;
@@ -122,6 +129,10 @@ private:
         const int* startMs;     // TYPE_BAR: owner's start instant; null = self-start
         uint32_t   fillStart;   // TYPE_BAR: millis() when the fill began
         uint8_t    barWidth;
+        // Last icon actually drawn.  A runtime iconVar can change while the
+        // value does not — switching projector at full energy — and the
+        // redraw is keyed on the value, so the icon has to be watched too.
+        int8_t     lastIcon;
         union {
             int  lastValue;       // TYPE_INT, TYPE_BAR
             char lastText[32];    // TYPE_STRING
@@ -145,6 +156,8 @@ private:
     void renderTray();
 
     void drawIcon(IconType icon, uint8_t x, uint8_t y);
+    // Resolve a binding's icon, honouring a runtime iconVar when it holds one.
+    IconType iconOf(const VariableBinding& b) const;
     const uint8_t* getIconBitmap(IconType icon);
     void drawBar(uint8_t x, uint8_t y, uint8_t width, uint8_t height, float ratio);
 

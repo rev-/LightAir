@@ -32,14 +32,20 @@ local R = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
 local IMMUNITY_MS = 3000
 local PICKUP_RSSI = -57     -- ~2 m: BONUS/MALUS claim gate
 
+-- The projector is the only route to Enlight, for every ruleset: it owns
+-- the trigger, the energy a beam costs, the recharge, the reach and what a
+-- hit weighs on the wire.  Declaring nothing but the baseline gets exactly
+-- the loop this file used to spell out inline — one energy per beam, a full
+-- refill after the configured idle, both read from this game's own config.
+local proj = la.lib("projector")
+proj.define{ vars = { energy = "energy", spent = "energy_spent" } }
+
 -- ---- Private game state -----------------------------------------
 -- Anything that is NOT shown on the LCD, NOT edited in the menu and
 -- NOT part of winner election can live as plain Lua locals.
 local respawn_at         = 0      -- la.now() when respawn fires
 local shone_by           = nil    -- short name of whoever put us down
 local lit_at             = {}     -- [senderId] = la.now() of last accepted lit
-local trigger_was_active = false
-local release_at         = 0
 
 return {
   api     = 1,                    -- binding version this file targets
@@ -114,7 +120,6 @@ return {
   -- config values have been distributed and applied.
   on_begin = function(vars)
     vars.lives     = vars.start_lives
-    vars.energy    = vars.start_energy
     vars.time_left = vars.game_time
     vars.points        = 0
     vars.energy_spent  = 0
@@ -122,8 +127,7 @@ return {
     respawn_at         = 0
     shone_by           = nil
     lit_at             = {}
-    trigger_was_active = false
-    release_at         = 0
+    proj.reset(vars)                -- fills the pool and pushes the optics
     la.ui("GameStart")
   end,
 
@@ -238,28 +242,12 @@ return {
     [S.IN_GAME] = function(vars)
       -- A confirmed lit target → notify it over radio.
       -- Points are only awarded when the target replies R.SHONE.
-      local target = la.shine_lit()          -- player id or nil
-      if target then la.send(target, MSG.LIT) end
+      local target = proj.result(vars)       -- player id or nil
+      if target then la.send(target, MSG.LIT, proj.payload(vars)) end
 
-      -- Fire while the trigger is down and energy remains.
-      local active = la.trigger_down(1)
-      if active and vars.energy > 0 and la.shine() then
-        vars.energy       = vars.energy - 1
-        vars.energy_spent = vars.energy_spent + 1
-        la.ui_enlight(la.shine_ms())
-      end
-
-      -- Release edge starts the recharge cooldown.
-      if trigger_was_active and not active then
-        release_at = la.now()
-      end
-      trigger_was_active = active
-
-      -- Restore full energy once the cooldown has elapsed.
-      if not active and vars.energy < vars.start_energy
-         and la.now() - release_at >= vars.recharge_secs * 1000 then
-        vars.energy = vars.start_energy
-      end
+      -- Trigger, energy, recharge: the projector owns all of it, and its
+      -- baseline profile is the one this ruleset used to spell out here.
+      proj.tick(vars)
     end,
   },
 

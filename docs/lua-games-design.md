@@ -9,7 +9,7 @@ All six rulesets are ported under `games/`, plus two that only exist as Lua
 
 | File | Notes |
 |---|---|
-| `games/freeforall.lua` | the fully-explicit reference — every idiom spelled out |
+| `games/freeforall.lua` | the readable reference — every idiom spelled out except the shine, which goes through the projector like everything else |
 | `games/teams.lua` | teams, friendly fire, point reports, BASE respawn |
 | `games/flag.lua` | flag events, carry background alert, team announce |
 | `games/kingofhill.lua` | per-player CP slots, teamless BASE |
@@ -363,9 +363,12 @@ what goes where:
    or be forked without reflashing firmware — and a game that wants
    different semantics simply doesn't call it.  This is where "easy to
    define new games" comes from: `games/teams.lua` is ~½ the logic of its
-   C++ original because the idioms are one-liners, while
-   `games/freeforall.lua` deliberately uses no library at all and remains
-   the readable, fully-explicit tutorial.
+   C++ original because the idioms are one-liners, and
+   `games/freeforall.lua` stays the readable reference by spelling out
+   everything else.  The one library every ruleset takes is the projector:
+   it is the only route to Enlight, because a ruleset firing or polling on
+   its own would bypass the shine economy and race the projector for a
+   read-and-clear poll.
 
 3. **The game file** — only the rules that make this game *this game*.
 

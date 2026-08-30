@@ -20,7 +20,8 @@
 -- (clean_secs, max); tie-break: most infections caused.
 -- ================================================================
 
-local std = la.lib("std")
+local std  = la.lib("std")
+local proj = la.lib("projector")
 
 local S   = { CLEAN = 0, VIRUS = 1, GAME_END = 2 }
 local MSG = la.msg
@@ -50,31 +51,32 @@ local virus_bg = {
 local virus_set        = {}      -- [playerId] = true once infected
 local virus_count      = 0
 local pending_infected = false   -- a viral lit reached us this cycle
-local last_shine       = 0       -- virus cooldown bookkeeping
+-- The two roles are two projectors.  They differ in exactly two things:
+-- how long Enlight must cool between beams, and the role tag the beam
+-- carries — so the cooldown stops being hand-timed here and becomes the
+-- optics' own, and "is this beam viral" rides the payload field meant for
+-- it instead of colliding with the projector's strength byte.
+--
+-- Both draw on energy_max, which become_virus() lowers for the virus, so
+-- the pool rule the game already had is untouched.
+-- CLEAN is the baseline, so everyone starts holding it; VIRUS is granted
+-- on infection and never given back, which is the shape of the game.
+local P_VIRUS = 11
+proj.define{
+  vars     = { energy = "energy", spent = "energy_spent" },
+  profiles = {
+    { id = 0, name = "CLEAN", cooldown_ms = 0,
+      max_energy = "energy_max", recharge_delay_secs = "recharge_secs",
+      role_tag = 0 },
+    { id = P_VIRUS, name = "VIRUS", cooldown_ms = "virus_cooldown",
+      max_energy = "energy_max", recharge_delay_secs = "recharge_secs",
+      role_tag = 1 },
+  },
+}
 local was_active       = false   -- trigger release edge for recharge
 local release_at       = 0
 
 local function is_virus() return virus_set[la.my_id()] == true end
-
--- Trigger/energy/recharge with a per-shine cooldown; the same code
--- serves both roles because the differences live in two vars:
--- energy_max (full vs a fifth) and the cooldown (0 for clean).
-local function tick_shine(vars, cooldown_ms)
-  local active = la.trigger_down(1)
-  if active and vars.energy > 0
-     and la.now() - last_shine >= cooldown_ms
-     and la.shine() then
-    last_shine  = la.now()
-    vars.energy = vars.energy - 1
-    la.ui_enlight(la.shine_ms())
-  end
-  if was_active and not active then release_at = la.now() end
-  was_active = active
-  if not active and vars.energy < vars.energy_max
-     and la.now() - release_at >= vars.recharge_secs * 1000 then
-    vars.energy = vars.energy_max
-  end
-end
 
 local function note_infected(vars, id)
   if id and not virus_set[id] then
@@ -96,6 +98,7 @@ local function become_virus(vars)
   -- The virus recharges to only a fifth of the others' energy max.
   vars.energy_max = math.max(1, vars.start_energy // 5)
   if vars.energy > vars.energy_max then vars.energy = vars.energy_max end
+  proj.grant(vars, P_VIRUS)       -- longer cooldown, and a viral role tag
   la.background(virus_bg)
   la.show("YOU ARE THE VIRUS!", 0)
   la.ui("RoleChange")
@@ -168,7 +171,6 @@ return {
   time_left_var = "time_left",
 
   on_begin = function(vars)
-    vars.energy     = vars.start_energy
     vars.energy_max = vars.start_energy
     vars.time_left  = vars.game_time
     vars.infections = 0
@@ -177,6 +179,7 @@ return {
     virus_set        = {}
     virus_count      = 0
     pending_infected = false
+    proj.reset(vars)                -- CLEAN in hand, pool full, optics pushed
     last_shine       = 0
     was_active       = false
     release_at       = 0
@@ -199,7 +202,8 @@ return {
       [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
       [MSG.LIT] = function(vars, pkt)
         -- Only a viral lit infects; a clean player's lit has no effect.
-        if pkt.len >= 1 and pkt:byte(1) == 1 then
+        -- Byte 3 is the projector's role tag — byte 1 is its strength.
+        if pkt.len >= 3 and pkt:byte(3) == 1 then
           pending_infected = true
           note_infected(vars, pkt.sender)   -- sender is certainly a virus
           return R.INFECTED
@@ -256,18 +260,17 @@ return {
   },
 
   update = {
+    -- Both roles run the same body: which projector is in hand already
+    -- carries the difference, in the cooldown and in the role tag.
     [S.CLEAN] = function(vars)
-      -- Clean players shine freely (deterrence and decoys) but their
-      -- lit does nothing: payload byte 0 = not viral.
-      local target = la.shine_lit()
-      if target then la.send(target, MSG.LIT, 0) end
-      tick_shine(vars, 0)
+      local target = proj.result(vars)
+      if target then la.send(target, MSG.LIT, proj.payload(vars)) end
+      proj.tick(vars)
     end,
     [S.VIRUS] = function(vars)
-      -- Viral lit: payload byte 1.  Longer cooldown between shines.
-      local target = la.shine_lit()
-      if target then la.send(target, MSG.LIT, 1) end
-      tick_shine(vars, vars.virus_cooldown)
+      local target = proj.result(vars)
+      if target then la.send(target, MSG.LIT, proj.payload(vars)) end
+      proj.tick(vars)
     end,
   },
 

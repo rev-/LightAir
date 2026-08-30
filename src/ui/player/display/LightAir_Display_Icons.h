@@ -15,6 +15,7 @@ enum IconType {
     ICON_ROLE,
     ICON_ENERGY,
     ICON_DOWN,
+    ICON_SPLASH,
     ICON_TIME = ICON_HOURGLASS   // alias — reuses the hourglass CGRAM slot
 };
 
@@ -117,6 +118,21 @@ static const uint8_t ICON_DOWN_BITMAP[8] PROGMEM = {
     0b01011010,
     0b00111100,
     0b00011000
+};
+
+// SPLASH — a burst: a solid core with specks thrown clear of it.  Reads at
+// 8x8 as "this one goes off around you", which is the whole point of the
+// profile that carries it.
+static const uint8_t ICON_SPLASH_BITMAP[8] PROGMEM = {
+
+    0b10010010,
+    0b01000100,
+    0b00111000,
+    0b10111010,
+    0b00111000,
+    0b01000100,
+    0b10010010,
+    0b00000000
 };
 
 #endif
