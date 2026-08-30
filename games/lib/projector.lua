@@ -358,7 +358,8 @@ function P.reset(vars)
   was_active  = false
   release_at  = 0
   lit_at      = {}
-  evicted_name = nil
+  evicted_name   = nil
+  splash_sent_at = nil
 
   slots[1].energy = max_energy(vars, defs[0])
   activate(vars, 1)
@@ -424,6 +425,119 @@ function P.payload(vars)
          P.active_id(),
          val(vars, p.role_tag, 0),
          (gate < 0) and -gate or 0
+end
+
+-- ================================================================
+--   SPLASH
+--
+--   A player who has just absorbed a beam broadcasts a beacon; anyone
+--   near enough absorbs a share of the same shot.  The reach is declared
+--   by the ATTACKER's projector and relayed by the victim, so a
+--   short-range profile splashes tightly and a heavy one does not.
+--
+--   Distance is judged from the RSSI of that beacon, which is coarse —
+--   body shadowing alone is worth 10-20 dB at 2.4 GHz.  That is
+--   acceptable here and nowhere else: a splash radius is meant to be
+--   fuzzy, graded bands degrade by one step rather than between hit and
+--   nothing, and there is no optical measurement to a bystander who was
+--   never aimed at, so RSSI is not a worse choice than something better.
+--
+--   Wire format, MSG.SPLASH, single-hop:
+--     [1] attacker's projector id — lets a bystander find the profile
+--         locally and grade the damage; the flat values below stand in
+--         when it cannot
+--     [2] splash strength, in standard hits
+--     [3] RSSI gate, positive magnitude (55 means -55 dBm)
+--     [4] origin: 1 = a direct optical LIT.  ONLY a direct hit emits;
+--         on_splash never calls emit_splash.  That is what stops one
+--         beam from cascading across a whole field.
+--     [5] the SHOOTER's id, so friendly fire is judged against whoever
+--         fired rather than against the victim who relayed it
+-- ================================================================
+local SPLASH_ORIGIN_DIRECT = 1
+-- nil, not 0: "never sent" has to be distinguishable from "sent at time
+-- zero", or the rate limit would swallow the first beacon of a match.
+local splash_sent_at       = nil
+
+-- Cheapest useful rate limit: one beacon per shot, and never two inside
+-- the same window even if a ruleset calls this twice for one event.
+local SPLASH_MIN_GAP_MS = 250
+
+local function splash_of(id)
+  local p = defs[id]
+  return p and p.splash or nil
+end
+
+-- Bands, when a profile declares them, ARE the reach: the outermost one is
+-- the cutoff, and the flat `rssi` is just the one-band shorthand.  Keeping
+-- one answer for "how far does this splash go" stops the two from
+-- disagreeing, which would gate a bystander out at the flat threshold
+-- before their band was ever consulted.
+local function splash_gate(s)
+  if s.bands and #s.bands > 0 then
+    local weakest = s.bands[1][1]
+    for _, band in ipairs(s.bands) do
+      if band[1] < weakest then weakest = band[1] end
+    end
+    return weakest
+  end
+  return s.rssi or 0
+end
+
+-- Victim side.  `pkt` is the incoming LIT packet and `event` is what just
+-- happened to this player — "lit" for any accepted hit, "shone" for the
+-- one that put them down.  A profile declares which it answers.
+function P.emit_splash(vars, pkt, event)
+  if pkt.len < 2 then return false end
+  local attacker_proj = pkt:byte(2)
+  local s = splash_of(attacker_proj)
+  if not s then return false end
+  if (s.on or "lit") ~= (event or "lit") then return false end
+
+  local now = la.now()
+  if splash_sent_at and (now - splash_sent_at) < SPLASH_MIN_GAP_MS then return false end
+  splash_sent_at = now
+
+  local gate = splash_gate(s)
+  -- Single-hop: la.broadcast, never la.broadcast_relay.  A flooded splash
+  -- would reach the entire field, which is the opposite of a radius.
+  la.broadcast(la.msg.SPLASH,
+               attacker_proj,
+               s.strength or 1,
+               (gate < 0) and -gate or 0,
+               SPLASH_ORIGIN_DIRECT,
+               pkt.sender)
+  return true
+end
+
+-- Bystander side.  Returns how much this player absorbs, or nil for a
+-- beacon that does not reach them.  The second return says why, so a
+-- ruleset can stay quiet rather than reporting a miss.
+function P.on_splash(vars, pkt)
+  if pkt.len < 4 then return nil, "short" end
+  local origin = pkt:byte(4)
+  -- Only a direct optical hit may splash.  A beacon claiming any other
+  -- origin is either a cascade or a stray, and is dropped either way.
+  if origin ~= SPLASH_ORIGIN_DIRECT then return nil, "cascade" end
+  -- Never splash yourself: the emitter already took the direct hit.
+  if pkt.sender == la.my_id() then return nil, "self" end
+
+  -- Graded by distance where the profile says so, flat otherwise.  The
+  -- bands are read locally by attacker projector id rather than sent, so
+  -- a profile can carry as many as it likes without growing the packet;
+  -- the gate on the wire is what a bystander without the profile falls
+  -- back to, and it already carries the outermost band.
+  local s = splash_of(pkt:byte(1))
+  if s and s.bands then
+    for _, band in ipairs(s.bands) do
+      if pkt.rssi >= band[1] then return band[2] end
+    end
+    return nil, "far"
+  end
+
+  local gate = pkt:byte(3)
+  if gate > 0 and pkt.rssi < -gate then return nil, "far" end
+  return pkt:byte(2)
 end
 
 -- ================================================================

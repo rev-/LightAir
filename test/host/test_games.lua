@@ -5,7 +5,7 @@ local ROOT = "games/"
 local clock = 0
 
 la = {
-  msg = { LIT = 0x10, SCORE_COLLECT = 0x12, POINT_REPORT = 0x14,
+  msg = { LIT = 0x10, SCORE_COLLECT = 0x12, POINT_REPORT = 0x14, SPLASH = 0x18,
           FLAG_EVENT = 0x50, CP_BEACON = 0x52, CP_SCORE = 0x54,
           BASE_BEACON = 0x56, FLAG_BEACON = 0x58,
           BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60 },
@@ -507,8 +507,76 @@ do
     check(p.cooldown_ms == 0, "clamp", "cooldown_ms = " .. tostring(p.cooldown_ms))
   end
 
+  -- ---- splash: the attacker's reach, the victim's beacon -----------
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 1, name = "BOOM", max_energy = 5,
+                                    splash = { on = "lit", strength = 2, rssi = -60,
+                                               bands = { { -55, 2 }, { -70, 1 } } } },
+                                  { id = 2, name = "QUIET", max_energy = 5 } } }
+    local v = mk_vars(50)
+    P.reset(v)
+    la.trigger_down = function() return false end
+
+    -- Victim side: a LIT from projector 1 relays that projector's reach.
+    local n0 = #out.radio
+    local lit = mk_pkt{ sender = 9, payload = { 1, 1, 0, 0 } }   -- [strength, proj, role, gate]
+    check(P.emit_splash(v, lit, "lit"), "splash", "a splash profile did not emit")
+    local sent = out.radio[#out.radio]
+    check(sent and sent[2] == la.msg.SPLASH, "splash", "the beacon was not MSG.SPLASH")
+    check(sent and sent[1] == "bcast", "splash",
+          "the beacon was relayed; splash must be single-hop")
+    -- The gate on the wire is the OUTERMOST band (-70), not the flat rssi
+    -- (-60): bands are the reach when a profile declares them, and the byte
+    -- is what a bystander without the profile falls back to, so it has to
+    -- admit everyone the bands would.
+    check(sent and sent[3] == 1 and sent[4] == 2 and sent[5] == 70
+          and sent[6] == 1 and sent[7] == 9, "splash",
+          "beacon payload wrong: " .. table.concat({ tostring(sent[3]), tostring(sent[4]),
+              tostring(sent[5]), tostring(sent[6]), tostring(sent[7]) }, "/"))
+
+    -- A projector with no splash stays silent.
+    clock = clock + 1000
+    local n1 = #out.radio
+    P.emit_splash(v, mk_pkt{ sender = 9, payload = { 1, 2, 0, 0 } }, "lit")
+    check(#out.radio == n1, "splash", "a projector with no splash still emitted")
+
+    -- splash.on gates the event: this profile answers "lit", not "shone".
+    clock = clock + 1000
+    local n2 = #out.radio
+    P.emit_splash(v, lit, "shone")
+    check(#out.radio == n2, "splash", "emitted on an event the profile does not answer")
+
+    -- Rate limit: two calls for one event produce one beacon.
+    clock = clock + 1000
+    local n3 = #out.radio
+    P.emit_splash(v, lit, "lit")
+    P.emit_splash(v, lit, "lit")
+    check(#out.radio == n3 + 1, "splash", "the rate limit let a second beacon through")
+
+    -- Bystander side, graded by distance.
+    local near  = mk_pkt{ sender = 9, rssi = -50, payload = { 1, 2, 60, 1, 4 } }
+    local mid   = mk_pkt{ sender = 9, rssi = -65, payload = { 1, 2, 60, 1, 4 } }
+    local far   = mk_pkt{ sender = 9, rssi = -90, payload = { 1, 2, 60, 1, 4 } }
+    check(P.on_splash(v, near) == 2, "splash", "a close bystander took the wrong band")
+    check(P.on_splash(v, mid)  == 1, "splash", "a mid-range bystander took the wrong band")
+    check(P.on_splash(v, far)  == nil, "splash", "a distant bystander was hit")
+
+    -- THE cascade guard: a beacon that is not a direct optical hit is
+    -- dropped, so one beam cannot chain across a field.
+    local relayed = mk_pkt{ sender = 9, rssi = -50, payload = { 1, 2, 60, 0, 4 } }
+    local absorbed, why = P.on_splash(v, relayed)
+    check(absorbed == nil and why == "cascade", "splash",
+          "a non-direct beacon was absorbed: splash can cascade")
+
+    -- And a player never splashes themselves.
+    local mine = mk_pkt{ sender = la.my_id(), rssi = -40, payload = { 1, 2, 60, 1, 4 } }
+    check(P.on_splash(v, mine) == nil, "splash", "the emitter splashed itself")
+  end
+
   la.trigger_down = function(n) return false end
-  print("OK   projector     baseline=shiner, refill/ramp, bar clock, FIFO, range, payload, clamps")
+  print("OK   projector     baseline=shiner, refill/ramp, bar clock, FIFO, range, payload, clamps, splash")
 end
 
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")
