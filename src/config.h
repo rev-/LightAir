@@ -321,7 +321,12 @@ namespace GameDefaults {
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
     constexpr uint8_t  RADIO_OUT_PAYLOAD = 237;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
-    constexpr uint8_t  MAX_GAMES         = 50;   // max games in the menu (manifests are lightweight)
+    // Max games in the menu.  Each slot costs a manifest plus a
+    // placeholder descriptor whether or not a file fills it, and the
+    // projectors have no PSRAM — every byte of that table is internal RAM
+    // taken from the one Lua state that has to fit beside it.  16 is twice
+    // the stock catalogue, which is room to add without paying for 50.
+    constexpr uint8_t  MAX_GAMES         = 16;
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
     constexpr uint8_t  RADIO_REPLY_PAYLOAD = 237; // max payload bytes per queued reply (0xF1 carries TotemVM programs)
     constexpr uint8_t  MAX_WINNER_VARS   = 2;    // max entries in a winnerVars[] table (primary + tie-breaker)

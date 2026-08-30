@@ -13,8 +13,8 @@ LightAir_GameStore* LightAir_GameStore::s_instance = nullptr;
 #include "LightAir_GamesBundle.h"
 
 // One shared fully-loaded game (the selected one) + one scratch
-// instance for manifest scanning.  ~50 games cost 50 small manifests,
-// not 50 Lua interpreters.
+// instance for manifest scanning.  A full menu costs a table of small
+// manifests, not a table of Lua interpreters.
 static LightAir_LuaGame s_loadedGame;
 static LightAir_LuaGame s_scanner;
 

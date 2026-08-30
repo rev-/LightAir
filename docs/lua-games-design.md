@@ -442,12 +442,15 @@ Full model, semantics, wire encoding, versioning and failure modes:
   and reads each file at boot *only far enough* to extract `api`, `type_id`,
   `name` (`peekManifest`, on a scratch instance — no descriptor, no
   trampoline slot).  It registers one lightweight manifest + placeholder
-  descriptor per file (`GameDefaults::MAX_GAMES = 50`) plus a load hook;
+  descriptor per file (`GameDefaults::MAX_GAMES = 16`) plus a load hook;
   the full game — Lua state, variable slots, totem programs — is realized
   on ONE shared `LightAir_LuaGame` instance only when the menu actually
   selects it (`GameManager::load()`), and reloading a different file on the
-  same instance is how switching games works.  So 50 games on flash cost 50
-  ~80-byte manifests in RAM, not 50 interpreters.  Totems need no files at
+  same instance is how switching games works.  So a menu full of games costs
+  a table of ~80-byte manifests, not a table of interpreters.  The table is
+  sized for the board that has to hold it: the projectors have no PSRAM, so
+  every unused slot is internal RAM taken from the one Lua state sitting
+  beside it.  Totems need no files at
   all: their behaviour travels as TotemVM programs in the activation reply
   (§5).
   Both the ruleset and its libraries are **streamed** into the parser, one

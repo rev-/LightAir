@@ -4,7 +4,7 @@
 
 // ----------------------------------------------------------------
 // LightAir_GameStore — LittleFS-backed store of .lua game files,
-// built to scale to dozens of games.
+// built so the menu scales with the flash, not with RAM.
 //
 //   begin()            mounts LittleFS (formatting a blank partition)
 //                      and seeds the embedded stock games into
@@ -22,8 +22,8 @@
 //                      full game — Lua state, variable slots, totem
 //                      programs — is realized on ONE shared instance
 //                      only when the menu actually selects it
-//                      (GameManager::load()), so 50 games on flash
-//                      cost 50 manifests in RAM, not 50 interpreters.
+//                      (GameManager::load()), so a full menu costs a
+//                      table of manifests, not a table of interpreters.
 //
 // Realized descriptors are copied over their placeholder in place, so
 // menu/runner pointers into the registry stay stable across the lazy
