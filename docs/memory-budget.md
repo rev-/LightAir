@@ -1,28 +1,13 @@
 # RAM budget — where the internal SRAM goes
 
-## The 8 MB is flash. The RAM is 512 KB.
+The projectors are `ESP32-S3-WROOM-1-N8`: 8 MB flash, **no PSRAM**. Every
+allocation the firmware makes — the display bindings, the radio buffers, the
+Lua interpreter, the task stacks — comes out of the same ~512 KB of internal
+SRAM, most of which is already spoken for by the IDF, the WiFi/ESP-NOW stack
+and the FreeRTOS heap before a single LightAir object exists.
 
-Worth stating plainly, because it is the whole shape of the problem.
-`ESP32-S3-WROOM-1-N8` means **8 MB of flash** and, on this part, **no PSRAM**.
-RAM is the 512 KB of SRAM on the die itself, and it is not expandable — the
-flash holds the program and the LittleFS games partition and contributes
-nothing to the budget below.
-
-So the numbers are:
-
-| | size | holds |
-|---|---:|---|
-| flash | 8 MB | 3.3 MB app slot ×2, ~1.5 MB LittleFS. Roomy. |
-| **SRAM** | **512 KB** | IDF + WiFi + FreeRTOS heap + everything here |
-
-Of that 512 KB, a large share is spoken for before any LightAir object exists:
-the IDF, the WiFi/ESP-NOW stack, lwIP, the task stacks. What is left is the
-heap that the display bindings, the radio buffers and the Lua interpreter all
-draw on.
-
-This is the survey of what we spend, what sizes each item, and what can be
-given back — **§1–§4 our own C++, §5 the platform** (WiFi, Bluetooth, lwIP),
-which is where the larger numbers are.
+This is the survey of what *we* spend, what sizes each item, and what can be
+given back.
 
 ---
 
@@ -36,32 +21,14 @@ corrects for that by hand where it matters.
 
 **Not measured here:** the actual `.bss`/`.data` totals and the free heap at
 boot. Those need a target build (`arduino-cli`, `.map`) or the device itself.
-
-The device now reports them. `LightAir.ino` weighs the heap at every boot
-stage, so the platform costs in §5 stop being estimates on the next flash:
-
-```
-mem boot           free ...  largest ...  min ...
-mem enlight        ...
-mem display        ...
-mem radio+wifi     ...          <-- the big one
-mem games scanned  ...
-mem game loaded    ...
-```
-
-`min` is the low-water mark since boot — how close the device actually came
-to the edge, which no static analysis can tell you. Two more lines come from
-the Lua layer:
+Two log lines exist for that now:
 
 ```
 Lua: allocator using internal RAM (N B free internal)
 GameStore: loading /games/x.lua (psram … heap … largest block …)
 ```
 
-Treat this document as the map and those lines as the ground truth. **Nothing
-below is worth acting on before reading them** — the whole memory story so far
-is inference from one game refusing to load, and if `mem radio+wifi` comes back
-at 200 KB free, §5 is not needed at all.
+Treat this document as the map, and those two lines as the ground truth.
 
 ---
 
@@ -198,120 +165,14 @@ declare. Not worth it while §A and §B are on the table.
 
 ---
 
-## 5. The platform — WiFi, Bluetooth, lwIP
+## 4. Summary
 
-This is where the larger numbers live, and where the intuition "import only the
-functions we need" runs into how Arduino builds.
+| | now | after A + B |
+|---|---:|---:|
+| static objects | ~51 KB | **~27 KB** |
+| peak during a game load | ~55 KB | ~55 KB |
 
-### First, the thing that does not work
-
-**`arduino-cli` cannot trim WiFi or Bluetooth at the config level.** The ESP32
-core ships as *prebuilt static libraries* with a frozen `sdkconfig`. The linker
-already discards unreferenced code — `-ffunction-sections -fdata-sections
--Wl,--gc-sections` are core defaults — but that only reclaims **flash**, which
-we have 8 MB of and do not need. The RAM those libraries reserve is fixed by
-`CONFIG_ESP32_WIFI_*`, `CONFIG_LWIP_*` and friends at the time the core was
-compiled, and no compiler flag we can pass reaches them.
-
-Changing those needs a different build system: PlatformIO with a custom
-`sdkconfig`, or ESP-IDF with Arduino as a component. That is a real option, but
-it is a migration, not a setting.
-
-What *is* reachable from inside Arduino is the part WiFi takes at **runtime**,
-and that turns out to be most of it.
-
-### B1 — Bluetooth: verify, don't assume · up to ~40 KB
-
-Confirmed by grep: **the firmware references no Bluetooth at all** — no BLE, no
-`BluetoothSerial`, no `esp_bt_*`. That matters because the BT controller
-reserves a large block of DRAM, and it is only returned to the heap by an
-explicit `esp_bt_controller_mem_release(ESP_BT_MODE_BTDM)`.
-
-Arduino's `initArduino()` is supposed to make that call for us when nothing
-references BT (it tests a weak `btInUse()` symbol). It very probably already
-happens here. **Check `mem boot` before adding anything** — if it comes back
-noticeably higher than the rest of the boot accounts for, the release already
-ran and there is nothing to win. If not, one call in `setup()` is worth tens of
-kilobytes for one line of code.
-
-### B2 — WiFi buffers sized for TCP throughput we never do · est. 25–45 KB
-
-`LightAir_RadioESPNow::begin()` brings WiFi up through Arduino:
-
-```cpp
-WiFi.mode(WIFI_STA);
-WiFi.disconnect();
-...
-esp_now_init();
-```
-
-`WiFi.mode()` calls `esp_wifi_init()` with `WIFI_INIT_CONFIG_DEFAULT()`, which
-is tuned for streaming TCP over an access point: ten static RX buffers of ~1.6 KB
-each, thirty-two dynamic RX, thirty-two TX, and A-MPDU aggregation on in both
-directions with its reorder windows.
-
-**We run ESP-NOW.** Frames are at most 250 bytes, unacknowledged, unaggregated,
-a handful per 10 ms tick. Essentially none of that provisioning is used.
-
-`esp_wifi_init()` takes the config as an argument, so this *is* changeable at
-runtime — but not through `WiFi.mode()`, which passes the defaults and offers no
-hook. It means initialising WiFi at the IDF level in `RadioESPNow::begin()`
-(`esp_wifi_init(&trimmed)` → `esp_wifi_set_mode` → `esp_wifi_start`) instead of
-going through the Arduino class: fewer static/dynamic RX and TX buffers, AMPDU
-off in both directions, `WIFI_STORAGE_RAM` so association state stops touching
-NVS.
-
-*Risk:* Settings → Share games runs a SoftAP and an HTTP server over the same
-WiFi init, and smaller buffers make a file transfer slower. Slower, not broken —
-and see B3, which changes that picture anyway.
-
-### B3 — Gameplay does not need lwIP at all · est. 10–25 KB
-
-ESP-NOW is a link-layer protocol. It needs no IP stack, no DHCP server, no
-sockets — but `WiFi.mode(WIFI_STA)` brings up `esp_netif` and lwIP regardless,
-with their PCB tables and pbuf pools.
-
-The one thing that genuinely needs TCP/IP is **Share games**, and the code
-already keeps it apart: `GameFileServer` is entered from the Settings menu, and
-leaving it **reboots the device** (`"Share games" / "Rebooting..."`). The HTTP
-server and a running match never coexist.
-
-So the split is already there in the product, and only the boot has to follow
-it: come up ESP-NOW-only with no netif, and let Share games be a boot mode that
-brings up `esp_netif` + AP + `WebServer` — where the full-size buffers of B2 are
-also fine, because nothing else is competing for RAM in that mode.
-
-This is the most structural of the three and the one that makes the other two
-easy. It is also the most work.
-
-### B4 — Small change, take it anyway
-
-`esp_wifi_set_ps(WIFI_PS_NONE)` for ESP-NOW: a few KB and better latency, since
-a sleeping radio delays every beacon-aligned frame.
-
----
-
-## 6. Summary
-
-Ranked by return, across both halves:
-
-| | est. saving | effort | risk |
-|---|---:|---|---|
-| B3 no lwIP on the gameplay path | 10–25 KB | high | medium — reshapes the Share-games flow |
-| B2 trim `wifi_init_config_t` | 25–45 KB | medium | low–medium — slower file transfer |
-| A `MAX_SETS` 32→9, `MAX_BINDINGS` 8→4 | 16.8 KB | low | low — needs the `resetBindingSets` fix |
-| B1 release BT memory | 0 or ~40 KB | trivial | none — probably already done |
-| C drop the scanner `LuaGame` | 7.2 KB | low | low |
-| D radio queue depths | ~4 KB | low | medium — dropped packets under load |
-| — shrink `RADIO_MAX_PAYLOAD` | — | — | **rejected**: set by `MAX_PROG = 225` |
-| — shrink `MAX_VARS` / `MAX_MSG_RULES` | 1–2 KB | low | caps what a ruleset may declare |
-
-Our own C++ (A + C) gives ~24 KB for very little work and lowers no limit the
-firmware can actually reach: 9 binding sets is the Lua state ceiling, 4 cells is
-the screen, and the scanner instance is 7 KB of arrays a manifest peek never
-reads. **Do those first** — they are cheap and provably safe.
-
-The platform (B1–B3) is two to three times bigger but costs real work and real
-risk, and none of it is justified yet. Read `mem radio+wifi` and `mem game
-loaded` off a boot log first: they say in one line whether there is a shortage
-at all, and B2/B3 are only worth building if there is.
+A and B together return roughly **24 KB** of internal SRAM, neither of them
+reducing any limit the firmware can actually reach: 9 binding sets is the Lua
+state ceiling, 4 cells is the screen, and the scanner instance is 7 KB of
+arrays that a manifest peek never reads.
