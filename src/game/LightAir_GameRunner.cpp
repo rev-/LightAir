@@ -1,7 +1,13 @@
 #include "LightAir_GameRunner.h"
+#include "../enlight/Enlight.h"
 #include <Arduino.h>
 #include <string.h>
 #include <esp_system.h>
+
+// The optical device, constructed by the sketch once NVS calibration is
+// loaded.  The runner only ever applies the optics a game queued during the
+// LOGIC phase; starting and polling measurements stays with the ruleset.
+extern Enlight* enlightPtr;
 
 /* =========================================================
  *   BEGIN — one-time setup
@@ -622,6 +628,15 @@ void LightAir_GameRunner::activateStateDisplay(uint8_t state) {
 }
 
 void LightAir_GameRunner::flushOutput(const GameOutput& out) {
+    // Projector optics, before anything else: reconfiguring Enlight while a
+    // measurement is in flight corrupts it, and this is the point in the cycle
+    // where nothing has been started yet.  Values arrive already clamped by
+    // the la.shine_config verb.
+    if (enlightPtr) {
+        if (out.optics.hasCycles)   enlightPtr->setRepetitions(out.optics.cycles);
+        if (out.optics.hasCooldown) enlightPtr->setCooldown((int64_t)out.optics.cooldownMs);
+    }
+
     // Radio messages
     for (uint8_t i = 0; i < out.radio.count; i++) {
         const RadioOutMsg& m = out.radio.msgs[i];

@@ -53,6 +53,7 @@ static const NamedU8 kMsgConsts[] = {
     { "LIT",           RadioMsg::MSG_LIT },
     { "SCORE_COLLECT", RadioMsg::MSG_SCORE_COLLECT },
     { "POINT_REPORT",  RadioMsg::MSG_POINT_REPORT },
+    { "SPLASH",        RadioMsg::MSG_SPLASH },
     { "FLAG_EVENT",    RadioMsg::MSG_FLAG_EVENT },
     { "CP_BEACON",     RadioMsg::MSG_CP_BEACON },
     { "CP_SCORE",      RadioMsg::MSG_CP_SCORE },
@@ -273,14 +274,65 @@ static int l_shine_ms(lua_State* L) {
     lua_pushinteger(L, enlightPtr ? (lua_Integer)enlightPtr->cycleTime() : 0);
     return 1;
 }
+// The full result of the last completed measurement, as scalars:
+//     status, id, metres, r, ang = la.shine_result()
+//
+// This supersedes la.shine_lit() for anything that wants to apply a policy
+// to the measurement rather than just take the target: range gating,
+// per-colour correction, distance-graded effects.  Enlight itself gates on
+// nothing but its own calibrated validity floor.
+//
+// Both poll Enlight, and poll() is READ-AND-CLEAR, so a game must use one
+// or the other — never both in the same tick.
+//
+// metres is 0 when the device has no step-1 reference calibration; r/ang
+// are the white-balanced colour coordinates classify() computed, and are
+// meaningful only when status == "player" or "no_hit".
+static const char* const kShineStatusNames[] = {
+    "idle", "running", "low_pow", "no_hit", "player", "near", "cooldown"
+};
+static int l_shine_result(lua_State* L) {
+    if (!enlightPtr) { lua_pushnil(L); return 1; }
+    const EnlightResult r = enlightPtr->poll();
+    const uint8_t s = (uint8_t)r.status;
+    lua_pushstring(L, s < (sizeof(kShineStatusNames) / sizeof(*kShineStatusNames))
+                        ? kShineStatusNames[s] : "idle");
+    lua_pushinteger(L, r.id);
+    lua_pushnumber(L, (lua_Number)enlightPtr->rangeEstM());
+    const EnlightColorCoords c = enlightPtr->colorCoords();
+    lua_pushnumber(L, (lua_Number)c.outr);
+    lua_pushnumber(L, (lua_Number)c.outang);
+    return 5;
+}
+
+// Queue the active projector's optics.  Deferred to the OUTPUT phase (see
+// OpticsOutput) so a switch can never reconfigure Enlight mid-measurement;
+// outside a game tick — on_begin, say — there is nothing in flight and no
+// queue to use, so it applies straight away.
+//
+// The bounds are re-applied here whatever a game file asked for: these are
+// the only projector values that reach the hardware.
 static int l_shine_config(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
-    if (!enlightPtr) return 0;
-    lua_getfield(L, 1, "cooldown_ms");
-    if (lua_isinteger(L, -1)) enlightPtr->setCooldown(lua_tointeger(L, -1));
-    lua_pop(L, 1);
+
     lua_getfield(L, 1, "reps");
-    if (lua_isinteger(L, -1)) enlightPtr->setRepetitions((uint32_t)lua_tointeger(L, -1));
+    if (lua_isinteger(L, -1)) {
+        lua_Integer v = lua_tointeger(L, -1);
+        if (v < ProjectorLimits::MIN_CYCLES) v = ProjectorLimits::MIN_CYCLES;
+        if (v > ProjectorLimits::MAX_CYCLES) v = ProjectorLimits::MAX_CYCLES;
+        if (g_luaCtx.out)       g_luaCtx.out->optics.setCycles((uint16_t)v);
+        else if (enlightPtr)    enlightPtr->setRepetitions((uint32_t)v);
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "cooldown_ms");
+    if (lua_isinteger(L, -1)) {
+        lua_Integer v = lua_tointeger(L, -1);
+        if (v < ProjectorLimits::MIN_COOLDOWN_MS) v = ProjectorLimits::MIN_COOLDOWN_MS;
+        if (v > ProjectorLimits::MAX_COOLDOWN_MS) v = ProjectorLimits::MAX_COOLDOWN_MS;
+        if (g_luaCtx.out)       g_luaCtx.out->optics.setCooldown((uint16_t)v);
+        else if (enlightPtr)    enlightPtr->setCooldown((int64_t)v);
+    }
     lua_pop(L, 1);
     return 0;
 }
@@ -343,18 +395,16 @@ static int l_clear_tray(lua_State* L) {
     if (g_luaCtx.disp) g_luaCtx.disp->clearTray();
     return 0;
 }
-static int l_background(lua_State* L) {
-    if (!g_luaCtx.ui) return 0;
-    if (lua_gettop(L) == 0 || lua_isnil(L, 1)) {
-        g_luaCtx.ui->clearBackground();
-        return 0;
-    }
-    luaL_checktype(L, 1, LUA_TTABLE);
-    LightAir_UICtrl::UIAction a = {};
-    lua_getfield(L, 1, "priority");
+// Read a { priority = n, steps = { {ms,freq,vib,rgb}, ... } } table at the
+// given stack index into a UIAction.  Shared by la.background (a continuous
+// alert) and la.shine_action (the active projector's shine feedback), which
+// differ only in where the finished action is installed.
+static void readUIAction(lua_State* L, int idx, LightAir_UICtrl::UIAction& a) {
+    luaL_checktype(L, idx, LUA_TTABLE);
+    lua_getfield(L, idx, "priority");
     a.priority = (uint8_t)luaL_optinteger(L, -1, 1);
     lua_pop(L, 1);
-    lua_getfield(L, 1, "steps");
+    lua_getfield(L, idx, "steps");
     luaL_checktype(L, -1, LUA_TTABLE);
     int nSteps = (int)lua_rawlen(L, -1);
     if (nSteps > 4) nSteps = 4;
@@ -381,7 +431,36 @@ static int l_background(lua_State* L) {
     }
     a.stepCount = (uint8_t)nSteps;
     lua_pop(L, 1);                                // steps table
+}
+
+static int l_background(lua_State* L) {
+    if (!g_luaCtx.ui) return 0;
+    if (lua_gettop(L) == 0 || lua_isnil(L, 1)) {
+        g_luaCtx.ui->clearBackground();
+        return 0;
+    }
+    LightAir_UICtrl::UIAction a = {};
+    readUIAction(L, 1, a);
     g_luaCtx.ui->setBackground(a);
+    return 0;
+}
+
+// Give the Enlight event this projector's own feedback, or restore the
+// standard one with no argument.  Overriding the slot rather than adding a
+// UIEvent is deliberate: executeStep()'s burst-duration override is keyed on
+// the event value, so a per-projector id would discard the real burst length.
+//
+// Direct, not queued — the same shape as la.background, which also installs a
+// definition rather than emitting an event.
+static int l_shine_action(lua_State* L) {
+    if (!g_luaCtx.ui) return 0;
+    if (lua_gettop(L) == 0 || lua_isnil(L, 1)) {
+        g_luaCtx.ui->setEnlightAction(nullptr);
+        return 0;
+    }
+    LightAir_UICtrl::UIAction a = {};
+    readUIAction(L, 1, a);
+    g_luaCtx.ui->setEnlightAction(&a);
     return 0;
 }
 
@@ -446,7 +525,9 @@ void LightAir_LuaGame::registerKernel() {
         { "key_down", l_key_down }, { "key_state", l_key_state },
         { "key_at", l_key_at },
         { "shine", l_shine }, { "shine_lit", l_shine_lit },
+        { "shine_result", l_shine_result },
         { "shine_ms", l_shine_ms }, { "shine_config", l_shine_config },
+        { "shine_action", l_shine_action },
         { "send", l_send }, { "broadcast", l_broadcast },
         { "broadcast_relay", l_broadcast_relay },
         { "ui", l_ui }, { "ui_enlight", l_ui_enlight },
