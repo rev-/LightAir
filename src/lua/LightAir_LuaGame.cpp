@@ -958,14 +958,18 @@ namespace {
 // One block of source at a time — see loadLuaFile's note in
 // LightAir_LuaGameInternal.h for why this must not be a whole-file buffer.
 struct FileChunkReader {
-    File f;
-    char buf[256];
+    File   f;
+    size_t got = 0;                      // bytes handed to the parser
+    char   buf[256];
 
     static const char* read(lua_State*, void* ud, size_t* size) {
         FileChunkReader* r = (FileChunkReader*)ud;
-        int n = r->f.read((uint8_t*)r->buf, sizeof(r->buf));
-        if (n <= 0) { *size = 0; return nullptr; }   // EOF, and read errors
-        *size = (size_t)n;                           // stop the parse the same way
+        // fs::File::read reports a failure as 0, indistinguishable from
+        // EOF here; loadLuaFile catches it afterwards by the byte count.
+        size_t n = r->f.read((uint8_t*)r->buf, sizeof(r->buf));
+        if (n == 0) { *size = 0; return nullptr; }
+        r->got += n;
+        *size   = n;
         return r->buf;
     }
 };
@@ -978,12 +982,24 @@ int loadLuaFile(lua_State* L, const char* path) {
         lua_pushfstring(L, "cannot open %s", path);
         return LUA_ERRFILE;
     }
+    const size_t want = r.f.size();
     // '@' marks a file source, so errors read "path:line:" — the shape the
     // menu's failure screen trims to a basename.
     char name[64];
     snprintf(name, sizeof(name), "@%s", path);
     int rc = lua_load(L, FileChunkReader::read, &r, name, "t");
     r.f.close();
+    // A short read looks like an early EOF to the parser, and a file cut
+    // after a complete statement then compiles clean — half a ruleset that
+    // reports no error at all.  Compare the byte count on success; on a
+    // failure the parse stopped early by design and the count means
+    // nothing.
+    if (rc == LUA_OK && r.got != want) {
+        lua_pop(L, 1);                   // drop the chunk lua_load pushed
+        lua_pushfstring(L, "read error on %s (%d/%d bytes)",
+                        path, (int)r.got, (int)want);
+        return LUA_ERRFILE;
+    }
     return rc;
 }
 #else
