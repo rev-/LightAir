@@ -11,7 +11,13 @@
 -- Team with the higher CP total wins; tie-break: fewer shone.
 -- ================================================================
 
-local std = la.lib("std")
+local std  = la.lib("std")
+local proj = la.lib("projector")
+
+-- The baseline profile reproduces what std.shiner did here: one
+-- energy per beam, a full refill after the configured idle, both
+-- read from this game's own config vars.
+proj.define{ vars = { energy = "energy", spent = "energy_spent" } }
 
 local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
@@ -32,8 +38,6 @@ local respawn_at    = 0
 local can_respawn   = false
 local shone_by      = nil       -- short name of whoever put us down
 local imm           = std.immunity(3000)
-local shiner        = std.shiner{ energy = "energy", spent = "energy_spent",
-                                  max = "start_energy", recharge = "recharge_secs" }
 
 local function is_opponent(id) return la.team_of(id) ~= my_team end
 local function friendly(pkt)   return pkt.team == my_team and vars.friendly_fire == 0 end
@@ -180,7 +184,7 @@ return {
     can_respawn   = false
     shone_by      = nil
     imm.reset()
-    shiner.reset()
+    proj.reset(vars)
     cp_ids, cp_owner = {}, {}
     for i = 0, 5 do
       local id = la.totem_for_role("CP", i)
@@ -275,11 +279,11 @@ return {
 
   update = {
     [S.IN_GAME] = function(vars)
-      local target = la.shine_lit()
+      local target = proj.result(vars)
       if target and (is_opponent(target) or vars.friendly_fire == 1) then
-        la.send(target, MSG.LIT)
+        la.send(target, MSG.LIT, proj.payload(vars))
       end
-      shiner.tick(vars)
+      proj.tick(vars)
     end,
   },
 

@@ -49,7 +49,13 @@
 --     first turn ended.
 -- ================================================================
 
-local std = la.lib("std")
+local std  = la.lib("std")
+local proj = la.lib("projector")
+
+-- The baseline profile reproduces what std.shiner did here: one
+-- energy per beam, a full refill after the configured idle, both
+-- read from this game's own config vars.
+proj.define{ vars = { energy = "energy", spent = "energy_spent" } }
 
 local S   = { PRE_START = 0, ACTIVE = 1, DOWN = 2, SUB_END = 3 }
 local MSG = la.msg
@@ -68,8 +74,6 @@ local respawn_at  = 0
 local can_respawn = false
 local shone_by    = nil         -- short name of whoever put us down
 local imm         = std.immunity(3000)
-local shiner      = std.shiner{ energy = "energy", spent = "energy_spent",
-                                max = "start_energy", recharge = "recharge_secs" }
 
 local function cp_index(sender)
   for i, id in ipairs(cp_ids) do
@@ -172,7 +176,7 @@ local function welcome(vars)
   can_respawn = false
   shone_by    = nil
   imm.reset()
-  shiner.reset()
+  proj.reset(vars)
   la.clear_tray()
   la.show("Go to a BASE!", 0)
   la.show(string.format("Welcome player %d", vars.counter), 0)
@@ -191,7 +195,7 @@ local function start_turn(vars)
   can_respawn = false
   shone_by    = nil
   imm.reset()
-  shiner.reset()
+  proj.reset(vars)
   la.clear_tray()
   la.show("Play!", 2000)
   la.ui("Up")
@@ -377,9 +381,9 @@ return {
   update = {
     [S.ACTIVE] = function(vars)
       -- Everyone is a valid target: no team check needed.
-      local target = la.shine_lit()
-      if target then la.send(target, MSG.LIT) end
-      shiner.tick(vars)
+      local target = proj.result(vars)
+      if target then la.send(target, MSG.LIT, proj.payload(vars)) end
+      proj.tick(vars)
     end,
   },
 

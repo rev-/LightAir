@@ -290,7 +290,55 @@ do
     failures = failures + 1
     print("  FAIL std          lit_target: on_shone did not name the shooter")
   end
-  print("OK   std           proximity gates, pickup claim, lit_target on_shone")
+  -- A hit weighs what the shooter's projector says, in standard hits, and
+  -- an empty payload still counts as one so a game that sends none keeps
+  -- working against one that does.
+  local strong = std.lit_target{
+    lives = "lives", immunity = std.immunity(0),
+    reply = { taken = 1, shone = 2, friend = 4, immune = 5 },
+  }
+  local sv = { lives = 5 }
+  strong(sv, mk_pkt{ sender = 7, payload = { 3 } })
+  if sv.lives ~= 2 then
+    failures = failures + 1
+    print("  FAIL std          lit_target: strength 3 took " .. (5 - sv.lives) .. " lives")
+  end
+  local ev = { lives = 5 }
+  strong(ev, mk_pkt{ sender = 7 })
+  if ev.lives ~= 4 then
+    failures = failures + 1
+    print("  FAIL std          lit_target: an empty payload did not count as one hit")
+  end
+  -- Lives never go negative, whatever the shooter claims.
+  local ov = { lives = 1 }
+  if strong(ov, mk_pkt{ sender = 7, payload = { 9 } }) ~= 2 or ov.lives ~= 0 then
+    failures = failures + 1
+    print("  FAIL std          lit_target: an overkill hit did not settle at zero/shone")
+  end
+
+  -- The RSSI gate is only honoured by a ruleset that also says how to
+  -- report the refusal: a silent decline reads as broken hardware.
+  local gated = std.lit_target{
+    lives = "lives", immunity = std.immunity(0),
+    reply = { taken = 1, shone = 2, friend = 4, immune = 5, far = 6 },
+  }
+  local gv = { lives = 5 }
+  if gated(gv, mk_pkt{ sender = 7, rssi = -80, payload = { 1, 0, 0, 55 } }) ~= 6
+     or gv.lives ~= 5 then
+    failures = failures + 1
+    print("  FAIL std          lit_target: a hit beyond the shooter's gate was absorbed")
+  end
+  if gated(gv, mk_pkt{ sender = 7, rssi = -40, payload = { 1, 0, 0, 55 } }) ~= 1 then
+    failures = failures + 1
+    print("  FAIL std          lit_target: a hit inside the gate was refused")
+  end
+  local ungated = { lives = 5 }
+  if strong(ungated, mk_pkt{ sender = 7, rssi = -80, payload = { 1, 0, 0, 55 } }) ~= 1 then
+    failures = failures + 1
+    print("  FAIL std          lit_target: gated without a `far` reply to report it")
+  end
+
+  print("OK   std           proximity gates, pickup claim, on_shone, absorption, rssi gate")
 end
 
 -- ================================================================

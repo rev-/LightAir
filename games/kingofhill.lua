@@ -11,7 +11,13 @@
 -- Most CP points wins; tie-break: fewest shone.
 -- ================================================================
 
-local std = la.lib("std")
+local std  = la.lib("std")
+local proj = la.lib("projector")
+
+-- The baseline profile reproduces what std.shiner did here: one
+-- energy per beam, a full refill after the configured idle, both
+-- read from this game's own config vars.
+proj.define{ vars = { energy = "energy", spent = "energy_spent" } }
 
 local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
@@ -30,8 +36,6 @@ local respawn_at  = 0
 local can_respawn = false
 local shone_by    = nil         -- short name of whoever put us down
 local imm         = std.immunity(3000)
-local shiner      = std.shiner{ energy = "energy", spent = "energy_spent",
-                                max = "start_energy", recharge = "recharge_secs" }
 
 local function cp_index(sender)
   for i, id in ipairs(cp_ids) do
@@ -145,7 +149,7 @@ return {
     can_respawn = false
     shone_by    = nil
     imm.reset()
-    shiner.reset()
+    proj.reset(vars)
     cp_ids, cp_owner = {}, {}
     for i = 0, 5 do
       local id = la.totem_for_role("CP", i)
@@ -237,9 +241,9 @@ return {
   update = {
     [S.IN_GAME] = function(vars)
       -- Everyone is a valid target: no team check needed.
-      local target = la.shine_lit()
-      if target then la.send(target, MSG.LIT) end
-      shiner.tick(vars)
+      local target = proj.result(vars)
+      if target then la.send(target, MSG.LIT, proj.payload(vars)) end
+      proj.tick(vars)
     end,
   },
 

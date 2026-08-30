@@ -33,47 +33,6 @@ function std.immunity(window_ms)
 end
 
 -- ----------------------------------------------------------------
--- The trigger/energy/recharge shine idiom shared by every ruleset:
--- shine while the trigger is down and energy remains; on release
--- start a cooldown; after cfg.recharge seconds restore full energy.
---
---   local shiner = std.shiner{ energy = "energy", spent = "energy_spent",
---                              max = "start_energy", recharge = "recharge_secs",
---                              can = function() return true end }  -- optional gate
---   shiner.reset()            -- call from on_begin
---   shiner.tick(vars)         -- call from update; returns trigger state
---
--- All cfg entries are *var ids* resolved through the vars proxy, so
--- config-menu changes apply without re-wiring.
--- ----------------------------------------------------------------
-function std.shiner(cfg)
-  local was_active, release_at = false, 0
-  return {
-    reset = function()
-      was_active, release_at = false, 0
-    end,
-    tick = function(vars)
-      local max    = vars[cfg.max]
-      local active = la.trigger_down(1)
-      if active and vars[cfg.energy] > 0
-         and (cfg.can == nil or cfg.can())
-         and la.shine() then
-        vars[cfg.energy] = vars[cfg.energy] - 1
-        vars[cfg.spent]  = vars[cfg.spent] + 1
-        la.ui_enlight(la.shine_ms())
-      end
-      if was_active and not active then release_at = la.now() end
-      was_active = active
-      if not active and vars[cfg.energy] < max
-         and la.now() - release_at >= vars[cfg.recharge] * 1000 then
-        vars[cfg.energy] = max
-      end
-      return active
-    end,
-  }
-end
-
--- ----------------------------------------------------------------
 -- Standard target-side MSG.LIT handler: the friendly-fire /
 -- immunity / lives ladder used by FFA, Teams, Flag, KoH and Upkeep.
 --
@@ -89,13 +48,42 @@ end
 -- shooter's packet is still in hand — the only moment a game can learn
 -- who put it down (the state rule that follows sees no packet).
 --
+-- ---- What a hit weighs ----
+--
+-- payload[1] is the shooter's projector strength, in STANDARD HITS, and
+-- one standard hit is one life here.  An empty payload comes from a game
+-- that sends none and counts as one, which is what lets a ruleset move to
+-- the projector without every other ruleset moving with it.
+--
+-- payload[4], when present, is the RSSI gate the shooter's projector
+-- declared, as a positive magnitude.  It is a PLAUSIBILITY bound, not the
+-- primary range control: the shooter already gates on a calibrated
+-- optical distance, and RSSI between two moving players is worth 10-20 dB
+-- of body shadowing alone.  Its job is to reject a hit the optics
+-- mis-attributed from across the field, so a game that sets it should set
+-- it loose.  A refusal answers `far` rather than going silent — an
+-- unexplained miss reads as broken hardware.
+--
 -- The returned reply sub-type drives the sender-side on_reply table.
 -- ----------------------------------------------------------------
+function std.absorbed(pkt)
+  return (pkt.len and pkt.len >= 1) and pkt:byte(1) or 1
+end
+
 function std.lit_target(cfg)
   return function(vars, pkt)
     if cfg.friendly and cfg.friendly(pkt) then return cfg.reply.friend end
     if cfg.immunity.active(pkt.sender)   then return cfg.reply.immune end
-    vars[cfg.lives] = vars[cfg.lives] - 1
+    -- Only gate when the game has somewhere to report the refusal.  A
+    -- silent decline is the worst failure this game can have — the shooter
+    -- aimed, hit, and saw nothing — so the gate is available exactly to
+    -- rulesets that also declare how to say "out of range".
+    if cfg.reply.far and pkt.len and pkt.len >= 4 then
+      local gate = pkt:byte(4)
+      if gate > 0 and pkt.rssi < -gate then return cfg.reply.far end
+    end
+    vars[cfg.lives] = vars[cfg.lives] - std.absorbed(pkt)
+    if vars[cfg.lives] < 0 then vars[cfg.lives] = 0 end
     cfg.immunity.mark(pkt.sender)
     if vars[cfg.lives] > 0 then
       la.ui("GotLit")

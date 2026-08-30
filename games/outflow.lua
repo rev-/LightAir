@@ -17,7 +17,8 @@
 -- always meant.
 -- ================================================================
 
-local std = la.lib("std")
+local std  = la.lib("std")
+local proj = la.lib("projector")
 
 local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
@@ -32,6 +33,19 @@ local pending_depleted = false   -- drain zeroed energy this cycle
 local respawn_at       = 0
 local last_drain       = 0
 local drain_interval   = 1000
+
+-- Outflow's projector: energy is ammo AND life total, so it never
+-- refills on its own — it comes back only by eliminating someone or by
+-- respawning.  That is "none" rather than "consumed": the projector must
+-- survive zero so the player can respawn holding it.  The optics are the
+-- ones this game always set by hand.
+proj.define{
+  vars     = { energy = "energy", spent = "energy_spent" },
+  profiles = { { id = 0, name = "OUTFLOW",
+                 cycles = 20, cooldown_ms = 20,
+                 cost = 1, max_energy = "start_energy",
+                 recharge = "none", strength = 1 } },
+}
 
 local function game_over()
   la.show("Game over!", 3000)
@@ -88,7 +102,6 @@ return {
   time_left_var = "time_left",
 
   on_begin = function(vars)
-    vars.energy    = vars.start_energy
     vars.time_left = vars.game_time
     vars.points       = 100
     vars.shone_times  = 0
@@ -100,7 +113,7 @@ return {
     respawn_at       = 0
     last_drain       = la.now()
     drain_interval   = (vars.drain_rate > 0) and (10000 // vars.drain_rate) or 1000
-    la.shine_config{ cooldown_ms = 20, reps = 20 }
+    proj.reset(vars)              -- fills the pool and pushes the optics
     la.ui("GameStart")
   end,
 
@@ -202,16 +215,12 @@ return {
       end
 
       -- A confirmed lit target → notify it over radio.
-      local target = la.shine_lit()
-      if target then la.send(target, MSG.LIT) end
+      local target = proj.result(vars)
+      if target then la.send(target, MSG.LIT, proj.payload(vars)) end
 
-      -- Shine while the trigger is down.  No recharge in Outflow:
-      -- energy only returns by eliminating someone or respawning.
-      if la.trigger_down(1) and vars.energy > 0 and la.shine() then
-        vars.energy       = vars.energy - 1
-        vars.energy_spent = vars.energy_spent + 1
-        la.ui_enlight(la.shine_ms())
-      end
+      -- Shine while the trigger is down; the projector owns the cost and
+      -- the fact that nothing comes back on its own.
+      proj.tick(vars)
 
       -- Depletion from any cause — unless a fatal lit already claimed
       -- this cycle (the two exits stay mutually exclusive).
