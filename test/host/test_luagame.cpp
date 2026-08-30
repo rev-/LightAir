@@ -723,7 +723,7 @@ int main() {
 
         if (owned && selfT && plain) {
             CHECK(owned->barTrigger == 0, "bar_at reached the descriptor");
-            CHECK(owned->barFill && *owned->barFill == 10, "fill_var points at reload_secs");
+            CHECK(owned->barFill && *owned->barFill == 10000, "fill_var points at reload_ms");
             CHECK(owned->barStart && *owned->barStart == 0, "start_var points at reload");
             CHECK(selfT->barStart == nullptr, "no start_var leaves the display self-starting");
             CHECK(selfT->barWidth == 30, "width reached the descriptor");
@@ -735,17 +735,99 @@ int main() {
             // pointers into the slots and not copies taken at load.
             *owned->asInt = 0;
             int* reload     = slotOf(bd, "reload");
-            int* reloadSecs = slotOf(bd, "reload_secs");
+            int* reloadMs   = slotOf(bd, "reload_ms");
             CHECK(reload == owned->barStart, "start_var resolved to the reload slot");
-            CHECK(reloadSecs == owned->barFill, "fill_var resolved to the reload_secs slot");
-            if (reload && reloadSecs && owned->barStart && owned->barFill) {
+            CHECK(reloadMs == owned->barFill, "fill_var resolved to the reload_ms slot");
+            if (reload && reloadMs && owned->barStart && owned->barFill) {
                 *reload = 4321;
-                *reloadSecs = 7;
+                *reloadMs = 7000;
                 CHECK(*owned->barStart == 4321, "the start pointer reads the owner's write");
-                CHECK(*owned->barFill  == 7,    "the fill pointer reads the owner's write");
+                CHECK(*owned->barFill  == 7000, "the fill pointer reads the owner's write");
             } else {
                 CHECK(false, "bar fixture vars reachable through the descriptor");
             }
+        }
+    }
+
+    // ---- 16. A shine action's TOTAL length is the burst, not each note ----
+    // Several projectors have to be tellable apart by their pattern, not by
+    // the pitch of one note — so a multi-step action has to fit inside the
+    // beam rather than stretching to N times its length.
+    {
+        typedef LightAir_UICtrl::UIAction A;
+        const uint16_t burst = 300;
+
+        auto totalOf = [&](const A& a) {
+            uint32_t t = 0;
+            for (uint8_t i = 0; i < a.stepCount; i++)
+                t += LightAir_UICtrl::burstStepMs(a, i, burst);
+            return t;
+        };
+
+        // One note: the whole burst, as before.
+        A one = {}; one.stepCount = 1; one.durations[0] = 10;
+        CHECK(LightAir_UICtrl::burstStepMs(one, 0, burst) == burst,
+              "a single-step action still lasts the whole burst");
+
+        // Three EVEN notes: one burst between them, not three.
+        A three = {}; three.stepCount = 3;
+        three.durations[0] = three.durations[1] = three.durations[2] = 1;
+        CHECK(totalOf(three) == burst, "three even notes total exactly one burst");
+        CHECK(LightAir_UICtrl::burstStepMs(three, 0, burst) == 100,
+              "even notes divide the burst evenly");
+
+        // A declared SHAPE is preserved as a ratio: 1:3 stays 1:3.
+        A shaped = {}; shaped.stepCount = 2;
+        shaped.durations[0] = 1; shaped.durations[1] = 3;
+        CHECK(totalOf(shaped) == burst, "a shaped action totals exactly one burst");
+        CHECK(LightAir_UICtrl::burstStepMs(shaped, 0, burst) == 75 &&
+              LightAir_UICtrl::burstStepMs(shaped, 1, burst) == 225,
+              "the declared durations are kept as a ratio");
+
+        // Rounding must not drift: 3 notes into 100 ms still totals 100.
+        CHECK(LightAir_UICtrl::burstStepMs(three, 0, 100) +
+              LightAir_UICtrl::burstStepMs(three, 1, 100) +
+              LightAir_UICtrl::burstStepMs(three, 2, 100) == 100,
+              "an indivisible burst still totals exactly, with no drift");
+
+        // No shape declared at all: fall back to an even split.
+        A flat = {}; flat.stepCount = 2;
+        CHECK(totalOf(flat) == burst, "zero durations split the burst evenly");
+
+        // A note squeezed out by a tiny burst still advances the ticker.
+        A many = {}; many.stepCount = 4;
+        for (uint8_t i = 0; i < 4; i++) many.durations[i] = 1;
+        for (uint8_t i = 0; i < 4; i++)
+            CHECK(LightAir_UICtrl::burstStepMs(many, i, 2) > 0,
+                  "no step is ever zero-length");
+
+        CHECK(LightAir_UICtrl::burstStepMs(one, 3, burst) == 0,
+              "a step past the end is nothing");
+
+        // ...and that executeStep actually USES it.  Checking the arithmetic
+        // alone would pass even if the call site still handed every step the
+        // whole burst, which is exactly the bug being fixed.
+        {
+            LightAir_UICtrl u2(audio, vib, rgb);
+            A shaped2 = {};
+            shaped2.stepCount   = 2;
+            shaped2.durations[0] = 1;   shaped2.durations[1] = 3;
+            shaped2.soundFreqs[0] = 1000; shaped2.soundFreqs[1] = 500;
+            shaped2.priority    = 2;
+            u2.setEnlightAction(&shaped2);
+
+            hostTicker().lastMs = 0;
+            u2.triggerEnlight(burst);
+            CHECK(hostTicker().lastMs == 75,
+                  "the first note of a 1:3 action is scheduled for its share of "
+                  "the burst, not the whole of it");
+
+            // And the standard single-step action still takes the lot.
+            LightAir_UICtrl u3(audio, vib, rgb);
+            hostTicker().lastMs = 0;
+            u3.triggerEnlight(burst);
+            CHECK(hostTicker().lastMs == burst,
+                  "a single-step action is still scheduled for the whole burst");
         }
     }
 

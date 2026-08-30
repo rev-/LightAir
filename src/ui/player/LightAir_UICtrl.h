@@ -75,6 +75,18 @@ public:
   // a per-projector event id would silently discard the real burst length.
   void setEnlightAction(const UIAction* action);
 
+  // How long step `step` of `action` should last when the action is played
+  // as an Enlight burst of burstMs total.
+  //
+  // The burst length governs the WHOLE action, not each note: a projector
+  // that sounds like two rising ticks has to stay two rising ticks inside
+  // the beam's duration, or several projectors become impossible to tell
+  // apart by anything but pitch.  So the declared durations are read as a
+  // SHAPE — their ratio — and scaled to fit burstMs.
+  //
+  // Public and static so the host suite can check the arithmetic directly.
+  static uint16_t burstStepMs(const UIAction& action, uint8_t step, uint16_t burstMs);
+
   void setBackground(const UIAction& action);
   void clearBackground();
 

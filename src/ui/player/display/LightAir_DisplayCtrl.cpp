@@ -75,7 +75,7 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     uint8_t x,
     uint8_t y,
     int triggerValue,
-    const int* fillSecs,
+    const int* fillMs,
     uint8_t barWidth,
     const int* startMs,
     const int* iconVar
@@ -94,7 +94,7 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     b.x         = x;
     b.y         = y;
     b.trigger   = triggerValue;
-    b.fillSecs  = fillSecs;
+    b.fillMs    = fillMs;
     b.startMs   = startMs;
     b.fillStart = 0;
     b.filling   = false;
@@ -235,7 +235,7 @@ void LightAir_DisplayCtrl::renderBar(VariableBinding& b) {
         b.lastValue = INT32_MIN;      // force the first bar frame to draw
     }
 
-    uint32_t fillMs = b.fillSecs ? (uint32_t)(*b.fillSecs) * 1000u : 0u;
+    const uint32_t fillMs = (b.fillMs && *b.fillMs > 0) ? (uint32_t)*b.fillMs : 0u;
     if (fillMs == 0) return;          // nothing to time — leave the slot as is
 
     // The owner may know when the wait really began — a projector's recharge

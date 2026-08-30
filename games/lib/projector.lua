@@ -79,9 +79,20 @@ local LIM = {
   rssi_min          = { -120, 0 },     -- dBm; 0 = no gate
   target_immunity_ms = { 0, 30000 },
   ready_ms          = { 0,  5000 },
-  recharge_delay_secs = { 0, 60 },
-  recharge_secs     = { 0,  60 },
+  -- Milliseconds, not seconds: a recharge quantised to whole seconds is far
+  -- too coarse to separate a projector that snaps back from one that
+  -- crawls.
+  recharge_delay_ms = { 0, 60000 },
+  recharge_ms       = { 0, 60000 },
   max_owned         = { 1,  8 },
+}
+
+-- Fields that were renamed, and what replaced them.  Named rather than
+-- silently ignored: a profile that keeps the old spelling would otherwise
+-- get the field's default and behave subtly wrong.
+local RETIRED = {
+  recharge_delay_secs = "recharge_delay_ms",
+  recharge_secs       = "recharge_ms",
 }
 
 local function clamp(v, lo, hi)
@@ -90,13 +101,16 @@ local function clamp(v, lo, hi)
   return v
 end
 
--- A profile field is either a literal number or the id of a game var, so
--- that a value the config menu owns (the energy pool, the recharge time)
--- tracks the menu without the profile being rebuilt.  This is the
--- property std.shiner had, kept.
+-- A profile field is a literal number, the id of a game var, or a function
+-- of vars.  The var-id form is what lets a value the config menu owns (the
+-- energy pool, the recharge time) track the menu without the profile being
+-- rebuilt — the property std.shiner had, kept.  The function form covers
+-- the rest: a config var in seconds feeding a field in milliseconds, say.
 local function val(vars, v, dflt)
   if v == nil then return dflt end
-  if type(v) == "string" then return vars[v] or dflt end
+  local t = type(v)
+  if t == "string"   then return vars[v] or dflt end
+  if t == "function" then return v(vars) or dflt end
   return v
 end
 
@@ -126,7 +140,8 @@ local BASELINE = {
   cost                = 1,
   max_energy          = "start_energy",
   recharge            = "refill",
-  recharge_delay_secs = "recharge_secs",
+  -- The menu owns this one in seconds; the projector works in ms.
+  recharge_delay_ms   = function(vars) return (vars.recharge_secs or 0) * 1000 end,
   strength            = 1,
   role_tag            = 0,
   range_m             = 0,
@@ -168,10 +183,10 @@ P.standard = {
 
     -- Economy: few charges, slow to come back.  The reload bar earns its
     -- keep on this one.
-    cost                = 2,
-    max_energy          = 8,
-    recharge            = "refill",
-    recharge_delay_secs = 6,
+    cost              = 2,
+    max_energy        = 8,
+    recharge          = "refill",
+    recharge_delay_ms = 6000,
 
     -- Handling: heavy to bring up after a switch.
     ready_ms = 600,
@@ -189,13 +204,13 @@ P.standard = {
       strength = 1,          -- what a receiver without the profile falls back to
     },
 
-    -- Shine feedback is ONE step, always: for the Enlight event every step
-    -- is stretched to the real burst length, so a two-step action would
-    -- play for twice as long as the beam it belongs to.  ms is only the
-    -- fallback for when no burst length is supplied.
+    -- A punch that flares out: the step ms are a SHAPE, scaled to fit the
+    -- real burst, so what identifies the projector is the pattern rather
+    -- than one note's pitch.  Short and hard, then longer and lower.
     shine_action = {
       priority = 2,
-      steps = { { ms = 10, freq = 1200, vib = 255, rgb = { 255, 120, 0 } } },
+      steps = { { ms = 1, freq = 1400, vib = 255, rgb = { 255, 200, 0 } },
+                { ms = 3, freq =  700, vib = 200, rgb = { 255,  60, 0 } } },
     },
   },
 
@@ -213,18 +228,20 @@ P.standard = {
     cooldown_ms = 60,
     range_m     = 20,
 
-    cost                = 1,
-    max_energy          = 30,
-    recharge            = "ramp",
-    recharge_delay_secs = 2,
-    recharge_secs       = 3,
+    cost              = 1,
+    max_energy        = 30,
+    recharge          = "ramp",
+    recharge_delay_ms = 1500,
+    recharge_ms       = 3000,
 
     ready_ms = 150,
     strength = 1,
 
+    -- Two even rising ticks: light, quick, unmistakably not the heavy ones.
     shine_action = {
       priority = 1,
-      steps = { { ms = 10, freq = 3000, vib = 90, rgb = { 0, 180, 255 } } },
+      steps = { { ms = 1, freq = 2600, vib = 80, rgb = {   0, 180, 255 } },
+                { ms = 1, freq = 3400, vib = 90, rgb = { 120, 220, 255 } } },
     },
   },
 
@@ -241,17 +258,19 @@ P.standard = {
     cooldown_ms = 400,
     range_m     = 0,             -- whatever this device can resolve
 
-    cost                = 1,
-    max_energy          = 20,
-    recharge            = "refill",
-    recharge_delay_secs = 4,
+    cost              = 1,
+    max_energy        = 20,
+    recharge          = "refill",
+    recharge_delay_ms = 4000,
 
     ready_ms = 400,
     strength = 1,
 
+    -- A short chirp then a long held tone: reads as "reaching out".
     shine_action = {
       priority = 1,
-      steps = { { ms = 10, freq = 1500, vib = 150, rgb = { 180, 0, 255 } } },
+      steps = { { ms = 1, freq = 2000, vib = 120, rgb = { 220, 120, 255 } },
+                { ms = 4, freq = 1200, vib = 150, rgb = { 180,   0, 255 } } },
     },
   },
 
@@ -267,17 +286,21 @@ P.standard = {
     cooldown_ms = 900,
     range_m     = 20,
 
-    cost                = 1,
-    max_energy          = 8,
-    recharge            = "refill",
-    recharge_delay_secs = 6,
+    cost              = 1,
+    max_energy        = 8,
+    recharge          = "refill",
+    recharge_delay_ms = 6000,
 
     ready_ms = 400,
     strength = 3,
 
+    -- Three descending notes, evenly spaced: heavy, and nothing else in the
+    -- catalogue has three.
     shine_action = {
       priority = 1,
-      steps = { { ms = 10, freq = 900, vib = 255, rgb = { 255, 80, 0 } } },
+      steps = { { ms = 1, freq = 1000, vib = 255, rgb = { 255, 140, 0 } },
+                { ms = 1, freq =  800, vib = 255, rgb = { 255,  80, 0 } },
+                { ms = 1, freq =  600, vib = 230, rgb = { 200,  30, 0 } } },
     },
   },
 }
@@ -287,7 +310,7 @@ P.standard = {
 --
 --     proj.define{
 --       vars = { energy = "energy", spent = "energy_spent",
---                reload = "reload", reload_secs = "reload_secs" },
+--                reload = "reload", reload_ms = "reload_ms" },
 --       max_owned = 3,
 --       is_available = function(id) return ... end,   -- optional
 --       profiles = { { id = 1, name = "STRONG", ... }, ... },
@@ -310,6 +333,15 @@ function P.define(decl)
   for _, raw in ipairs(cfg.profiles or {}) do
     local p = {}
     for k, v in pairs(raw) do p[k] = v end
+    -- The recharge fields were seconds once and are milliseconds now.  A
+    -- profile still naming the old key would silently get a zero delay, so
+    -- say so at load rather than shipping a projector that never waits.
+    for old, new in pairs(RETIRED) do
+      if p[old] ~= nil then
+        error("projector profile '" .. tostring(p.name or p.id) ..
+              "' uses retired field '" .. old .. "'; use '" .. new .. "'", 0)
+      end
+    end
     local id = p.id or 0
     if id == 0 then
       -- Retune the baseline in place rather than naming a different id:
@@ -365,22 +397,22 @@ local function max_energy(vars, p)  return val(vars, p.max_energy, 0) end
 --   watch a bar complete while nothing came back.
 --
 --   So the projector publishes both halves and owns their timing:
---     reload      — millis at which the recharge clock started, 0 = idle
---     reload_secs — how long this profile's recharge takes, in seconds
+--     reload    — millis at which the recharge clock started, 0 = idle
+--     reload_ms — how long this profile's recharge takes, in milliseconds
 --   Both are ordinary game vars, which is what lets the display bind to
 --   them without the projector reaching into the display layer.
 -- ================================================================
-local function reload_total_secs(vars, p)
-  local delay = val(vars, p.recharge_delay_secs, 0)
+local function reload_total_ms(vars, p)
+  local delay = val(vars, p.recharge_delay_ms, 0)
   if p.recharge == "ramp" then
-    return delay + val(vars, p.recharge_secs, 0)
+    return delay + val(vars, p.recharge_ms, 0)
   end
   return delay
 end
 
 local function publish_reload(vars, started_at, p)
-  if var.reload      then vars[var.reload]      = started_at end
-  if var.reload_secs then vars[var.reload_secs] = reload_total_secs(vars, p) end
+  if var.reload    then vars[var.reload]    = started_at end
+  if var.reload_ms then vars[var.reload_ms] = reload_total_ms(vars, p) end
 end
 
 -- ================================================================
@@ -717,7 +749,7 @@ local function tick_recharge(vars, p, now)
     return
   end
 
-  local delay_ms = val(vars, p.recharge_delay_secs, 0) * 1000
+  local delay_ms = val(vars, p.recharge_delay_ms, 0)
   if (now - release_at) < delay_ms then
     -- Waiting out the idle: the clock started at the release, which is
     -- exactly what the bar must show.
@@ -736,8 +768,8 @@ local function tick_recharge(vars, p, now)
     return
   end
 
-  -- ramp: one unit every recharge_secs / max, stepped in integers.
-  local total_ms = val(vars, p.recharge_secs, 0) * 1000
+  -- ramp: one unit every recharge_ms / max, stepped in integers.
+  local total_ms = val(vars, p.recharge_ms, 0)
   local step_ms  = (max > 0) and (total_ms // max) or 0
   if step_ms < 1 then step_ms = 1 end
   local s = slots[active_idx]

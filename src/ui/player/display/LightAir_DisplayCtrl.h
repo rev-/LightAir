@@ -38,10 +38,15 @@ public:
      *
      * Renders *variable* as a number, except while it sits at
      * triggerValue: then the slot becomes a bar that fills over
-     * *fillSecs seconds, and reverts to the number as soon as the
+     * *fillMs milliseconds, and reverts to the number as soon as the
      * variable leaves the trigger.
      *
-     * fillSecs is a POINTER into the owning config slot, not a copy:
+     * Milliseconds, not seconds: a projector recharge quantised to whole
+     * seconds is far too coarse to separate one that snaps back from one
+     * that crawls, and the bar has to show what the projector is actually
+     * timing.  A game whose own wait is in seconds scales it once.
+     *
+     * fillMs is a POINTER into the owning config slot, not a copy:
      * bindings are built once at game start while the duration
      * (recharge / respawn seconds) stays menu-editable, so the bar must
      * read it live.  It may be null, in which case nothing is drawn
@@ -61,9 +66,9 @@ public:
      * and nothing came back.  Null = self-start, as above.
      *
      * Three shapes cover what the game needs:
-     *   energy  : variable = energy, trigger = 0, fill = rechargeSecs,
-     *             start = the projector's reload anchor
-     *   respawn : variable = a const 0, trigger = 0, fill = respawnSecs
+     *   energy  : variable = energy, trigger = 0, fill = the projector's
+     *             reload_ms, start = its reload anchor
+     *   respawn : variable = a const 0, trigger = 0, fill = respawn ms
      *   simple  : as respawn, with start = null to self-start
      *    =================================== */
     bool bindBarVariable(
@@ -72,7 +77,7 @@ public:
         uint8_t x,
         uint8_t y,
         int triggerValue,
-        const int* fillSecs,
+        const int* fillMs,
         uint8_t barWidth = DisplayDefaults::BAR_WIDTH,
         const int* startMs = nullptr,
         const int* iconVar = nullptr
@@ -125,7 +130,7 @@ private:
         uint8_t  x;
         uint8_t  y;
         int        trigger;     // TYPE_BAR: value at which the bar takes over
-        const int* fillSecs;    // TYPE_BAR: live pointer to the fill duration
+        const int* fillMs;      // TYPE_BAR: live pointer to the fill duration, ms
         const int* startMs;     // TYPE_BAR: owner's start instant; null = self-start
         uint32_t   fillStart;   // TYPE_BAR: millis() when the fill began
         uint8_t    barWidth;

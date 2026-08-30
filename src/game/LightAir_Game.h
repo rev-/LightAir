@@ -113,7 +113,7 @@ struct MonitorVar {
     const int*  iconVar;
     // ---- BAR only ----
     int         barTrigger; // value at which the bar takes over from the number
-    const int*  barFill;    // live pointer to the fill duration, in seconds
+    const int*  barFill;    // live pointer to the fill duration, in ms
     const int*  barStart;   // live pointer to the wait's start instant, in
                             // millis; 0 = at the trigger but not yet waiting.
                             // null = let the display self-start the clock.

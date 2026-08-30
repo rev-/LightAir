@@ -66,10 +66,12 @@ proj.define{
   vars     = { energy = "energy", spent = "energy_spent" },
   profiles = {
     { id = 0, name = "CLEAN", cooldown_ms = 0,
-      max_energy = "energy_max", recharge_delay_secs = "recharge_secs",
+      max_energy = "energy_max",
+      recharge_delay_ms = function(v) return (v.recharge_secs or 0) * 1000 end,
       role_tag = 0 },
     { id = P_VIRUS, name = "VIRUS", cooldown_ms = "virus_cooldown",
-      max_energy = "energy_max", recharge_delay_secs = "recharge_secs",
+      max_energy = "energy_max",
+      recharge_delay_ms = function(v) return (v.recharge_secs or 0) * 1000 end,
       role_tag = 1 },
   },
 }

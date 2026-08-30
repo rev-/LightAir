@@ -178,10 +178,22 @@ with its own icon, shine feedback, optics and economy:
 
 | | id | cycles | cooldown | range | recharge | cost / pool | strength | ready |
 |---|---|---|---|---|---|---|---|---|
-| SPLASH | 1 | 20 | 900 ms | 12 m | refill 6 s | 2 / 8 | 1 + burst | 600 ms |
-| FAST | 2 | 4 | 60 ms | 20 m | ramp 2→3 s | 1 / 30 | 1 | 150 ms |
-| LONG | 3 | 30 | 400 ms | device max | refill 4 s | 1 / 20 | 1 | 400 ms |
-| STRONG | 4 | 15 | 900 ms | 20 m | refill 6 s | 1 / 8 | **3** | 400 ms |
+| SPLASH | 1 | 20 | 900 ms | 12 m | refill 6000 ms | 2 / 8 | 1 + burst | 600 ms |
+| FAST | 2 | 4 | 60 ms | 20 m | ramp 1500→3000 ms | 1 / 30 | 1 | 150 ms |
+| LONG | 3 | 30 | 400 ms | device max | refill 4000 ms | 1 / 20 | 1 | 400 ms |
+| STRONG | 4 | 15 | 900 ms | 20 m | refill 6000 ms | 1 / 8 | **3** | 400 ms |
+
+Every duration a profile declares is in **milliseconds**. Seconds are too
+coarse to separate a projector that snaps back from one that crawls. The
+config menu still edits its own vars in seconds, and a profile that reads
+one scales it with a function field:
+
+```lua
+recharge_delay_ms = function(vars) return vars.recharge_secs * 1000 end
+```
+
+A profile field may be a literal, the id of a game var, or a function of
+vars — the var-id form is what keeps menu-owned values live.
 
 Ids are **fixed and reserved**, because a projector id travels on the wire:
 a splash beacon names the projector that fired and every receiver looks the
@@ -197,13 +209,23 @@ STRONG weighs **three standard hits**, which in a lives game is three lives
 from one beam. One energy per shot, but only eight of them and six seconds
 to get them back.
 
-### Shine feedback is always one step
+### Shine feedback: the burst is the whole action, not each note
 
-For `UIEvent::Enlight` the burst length overrides **every** step's duration
-(`LightAir_UICtrl::executeStep`), not just the first — so a two-step action
-plays for twice as long as the beam it belongs to. Every standard profile
-declares exactly one step, and the host suite fails any that does not. The
-`ms` in that step is only the fallback for when no burst length is supplied.
+A projector has to be recognisable by its **pattern**, not by the pitch of a
+single note — with four in the catalogue, one beep each is not enough to
+tell them apart.
+
+So `LightAir_UICtrl::burstStepMs()` reads a shine action's declared
+durations as a **shape** and scales them to fit the burst: a 1:3 pair inside
+a 300 ms beam plays 75 ms then 225 ms, and the total is exactly the beam.
+Boundaries are computed cumulatively, so integer rounding cannot drift and
+the last step always lands on the burst exactly. No step is ever
+zero-length, or the ticker would stall.
+
+That is a fix, not a constraint: previously each step took the *full* burst,
+so an N-step action ran N times too long. The catalogue's signatures are now
+two rising ticks (FAST), a chirp into a held tone (LONG), three descending
+notes (STRONG), and a punch that flares (SPLASH).
 
 Five guards, each with a test that fails when it is removed:
 

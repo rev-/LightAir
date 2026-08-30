@@ -427,9 +427,9 @@ do
   do
     clock, shine_busy_until = 0, 0
     local P = fresh{ vars = { energy = "energy", spent = "energy_spent",
-                              reload = "reload", reload_secs = "reload_secs" } }
+                              reload = "reload", reload_ms = "reload_ms" } }
     local v = mk_vars(1, 10)
-    v.reload, v.reload_secs = 0, 0
+    v.reload, v.reload_ms = 0, 0
     P.reset(v)
 
     la.trigger_down = function() return true end
@@ -465,7 +465,7 @@ do
     clock, shine_busy_until = 0, 0
     local P = fresh{ vars = BASE_VARS,
                      profiles = { { id = 0, max_energy = 4, recharge = "ramp",
-                                    recharge_delay_secs = 1, recharge_secs = 4 } } }
+                                    recharge_delay_ms = 1000, recharge_ms = 4000 } } }
     local v = { energy = 0, energy_spent = 0 }
     P.reset(v)
     v.energy = 0
@@ -482,9 +482,9 @@ do
   do
     clock, shine_busy_until = 0, 0
     local P = fresh{ vars = { energy = "energy", spent = "energy_spent",
-                              reload = "reload", reload_secs = "reload_secs" } }
+                              reload = "reload", reload_ms = "reload_ms" } }
     local v = mk_vars(1, 10)
-    v.reload, v.reload_secs = 0, 0
+    v.reload, v.reload_ms = 0, 0
     P.reset(v)
 
     la.trigger_down = function() return true end
@@ -500,8 +500,8 @@ do
     check(v.reload == release, "bar",
           "the bar clock is " .. tostring(v.reload) .. ", expected the release " ..
           tostring(release))
-    check(v.reload_secs == 10, "bar",
-          "fill duration = " .. tostring(v.reload_secs) .. " s, expected 10")
+    check(v.reload_ms == 10000, "bar",
+          "fill duration = " .. tostring(v.reload_ms) .. " ms, expected 10000")
     check(zero_at ~= release, "bar", "test is degenerate: no hold before release")
 
     -- The clock is an ANCHOR, not a running value: it must keep reading the
@@ -670,6 +670,17 @@ do
     check(P.on_splash(v, mine) == nil, "splash", "the emitter splashed itself")
   end
 
+  -- ---- a retired field name is named, not silently ignored --------
+  do
+    local ok = pcall(function()
+      fresh{ vars = BASE_VARS,
+             profiles = { { id = 1, name = "OLD", recharge_delay_secs = 5 } } }
+    end)
+    check(not ok, "retired",
+          "a profile using the old seconds field loaded quietly; it would " ..
+          "have got a zero delay and never waited")
+  end
+
   -- ---- the standard SPLASH profile -------------------------------
   do
     clock, shine_busy_until = 0, 0
@@ -685,7 +696,7 @@ do
     -- Everything a projector needs to be playable, not just a name.
     for _, field in ipairs({ "id", "name", "icon", "cycles", "cooldown_ms",
                              "range_m", "cost", "max_energy", "recharge",
-                             "recharge_delay_secs", "ready_ms", "strength",
+                             "recharge_delay_ms", "ready_ms", "strength",
                              "target_immunity_ms", "splash", "shine_action" }) do
       check(S[field] ~= nil, "SPLASH", "the standard profile declares no " .. field)
     end
@@ -711,18 +722,22 @@ do
             key .. " names an icon the firmware does not carry: " .. tostring(prof.icon))
       check(#prof.name <= 8, "standard", key .. "'s name will not fit the cell")
 
-      -- Shine feedback must be ONE step.  For the Enlight event every step
-      -- is stretched to the real burst length, so a two-step action plays
-      -- for twice as long as the beam it belongs to.
-      check(prof.shine_action.steps and #prof.shine_action.steps == 1, "standard",
-            key .. "'s shine_action has " ..
-            tostring(prof.shine_action.steps and #prof.shine_action.steps) ..
-            " steps; the Enlight slot stretches every step to the burst length")
+      -- Shine feedback: the burst governs the action's TOTAL length and the
+      -- declared ms are a shape, so several notes are fine and are in fact
+      -- how a player tells two projectors apart.  What is not fine is a
+      -- shape of all zeros, which throws the ratio away.
+      local steps = prof.shine_action.steps
+      check(steps and #steps >= 1 and #steps <= 4, "standard",
+            key .. "'s shine_action needs 1..4 steps, has " ..
+            tostring(steps and #steps))
+      local shape = 0
+      for _, st in ipairs(steps or {}) do shape = shape + (st.ms or 0) end
+      check(shape > 0, "standard", key .. "'s shine_action declares no shape at all")
 
       -- A ramp needs a duration to ramp over, or it would never fill.
       if prof.recharge == "ramp" then
-        check((prof.recharge_secs or 0) > 0, "standard",
-              key .. " ramps but declares no recharge_secs")
+        check((prof.recharge_ms or 0) > 0, "standard",
+              key .. " ramps but declares no recharge_ms")
       end
     end
 

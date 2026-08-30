@@ -153,6 +153,37 @@ void LightAir_UICtrl::defineCustomAction(
   _customDefined[ci] = true;
 }
 
+// The declared durations are a SHAPE, not a schedule: scale them so the
+// whole action lasts exactly burstMs.  Boundaries are computed cumulatively
+// rather than per step, so integer rounding cannot drift and the last step
+// lands on burstMs exactly.
+uint16_t LightAir_UICtrl::burstStepMs(const UIAction& action,
+                                      uint8_t step, uint16_t burstMs)
+{
+  const uint8_t n = action.stepCount;
+  if (n == 0 || step >= n) return 0;
+
+  uint32_t total = 0;
+  for (uint8_t i = 0; i < n; i++) total += action.durations[i];
+
+  uint32_t prev, next;
+  if (total == 0) {
+    // No shape declared: split the burst evenly.
+    prev = ((uint32_t)burstMs * step)       / n;
+    next = ((uint32_t)burstMs * (step + 1)) / n;
+  } else {
+    uint32_t acc = 0;
+    for (uint8_t i = 0; i < step; i++) acc += action.durations[i];
+    prev = ((uint32_t)burstMs * acc) / total;
+    next = ((uint32_t)burstMs * (acc + action.durations[step])) / total;
+  }
+
+  const uint32_t d = next - prev;
+  // A zero-length step would stall the ticker, so a note squeezed out by a
+  // very short burst still gets a millisecond.
+  return (uint16_t)(d > 0 ? d : 1);
+}
+
 void LightAir_UICtrl::setEnlightAction(const UIAction* action)
 {
   if (action) {
@@ -372,7 +403,7 @@ void LightAir_UICtrl::executeStep()
 
   uint16_t duration =
   (_current.id == UIEvent::Enlight && _current.extraMs > 0)
-    ? _current.extraMs
+    ? burstStepMs(*_current.action, _currentStep, _current.extraMs)
     : _current.action->durations[_currentStep];
 
   if (_audio)
