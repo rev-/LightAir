@@ -32,10 +32,26 @@ function la.trigger_down(n) return false end
 function la.key_down(k, pad) return false end
 function la.key_state(k, pad) return "off" end
 function la.key_at(i) return nil end
-function la.shine() return true end
+-- Enlight stub.  run() refuses while a burst is still in flight, exactly as
+-- the real Enlight::run() does — that refusal is the whole reason energy is
+-- spent inside the `and la.shine()` short-circuit rather than beside it, so a
+-- stub that always accepted would let that bug back in unnoticed.
+local shine_busy_until = 0
+local shine_burst_ms   = 100
+local shine_result     = { status = "no_hit", id = 0, metres = 0, r = 0.5, ang = 0.5 }
+function la.shine()
+  if clock < shine_busy_until then return false end
+  shine_busy_until = clock + shine_burst_ms
+  return true
+end
 function la.shine_lit() return nil end
-function la.shine_ms() return 100 end
+function la.shine_ms() return shine_burst_ms end
 function la.shine_config(t) end
+function la.shine_action(spec) end
+function la.shine_result()
+  return shine_result.status, shine_result.id, shine_result.metres,
+         shine_result.r, shine_result.ang
+end
 function la.send(target, msg, ...) out.radio[#out.radio+1] = { "send", target, msg, ... } end
 function la.broadcast(msg, ...) out.radio[#out.radio+1] = { "bcast", msg, ... } end
 function la.broadcast_relay(msg, ...) out.radio[#out.radio+1] = { "relay", msg, ... } end
@@ -275,6 +291,224 @@ do
     print("  FAIL std          lit_target: on_shone did not name the shooter")
   end
   print("OK   std           proximity gates, pickup claim, lit_target on_shone")
+end
+
+-- ================================================================
+--   projector.lua
+-- ================================================================
+do
+  local function fail(what, msg)
+    failures = failures + 1
+    print(string.format("  FAIL %-12s %s: %s", "projector", what, msg))
+  end
+  local function check(cond, what, msg) if not cond then fail(what, msg) end end
+
+  local function fresh(decl)
+    -- Each case gets its own module instance: the projector holds the
+    -- inventory in upvalues, so a shared one would leak state between cases.
+    package.loaded_projector = nil
+    local P = dofile(ROOT .. "lib/projector.lua")
+    P.define(decl)
+    return P
+  end
+
+  local BASE_VARS = { energy = "energy", spent = "energy_spent" }
+  local function mk_vars(e, recharge)
+    return { energy = e, energy_spent = 0, start_energy = e,
+             recharge_secs = recharge or 10 }
+  end
+
+  -- ---- the baseline reproduces std.shiner ------------------------
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = BASE_VARS }
+    local v = mk_vars(50)
+    P.reset(v)
+    check(v.energy == 50, "baseline", "reset did not fill the pool from start_energy")
+
+    -- Trigger held down across many ticks: one beam, one energy.  Ten ticks
+    -- inside one 100 ms burst is exactly the shape of the old 8-energy bug.
+    la.trigger_down = function() return true end
+    for _ = 1, 10 do P.tick(v); clock = clock + 10 end
+    check(v.energy == 49, "baseline",
+          "held trigger cost " .. (50 - v.energy) .. " energy, expected 1")
+    check(v.energy_spent == 1, "baseline",
+          "spent counter = " .. v.energy_spent .. ", expected 1")
+
+    -- Past the burst, the next tick is allowed to fire again.
+    clock = clock + 200
+    P.tick(v)
+    check(v.energy == 48, "baseline", "a second beam was refused after the burst")
+  end
+
+  -- ---- refill waits for the release, not for the pool hitting 0 ---
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = BASE_VARS }
+    local v = mk_vars(1, 10)          -- one shot, 10 s recharge
+    P.reset(v)
+
+    la.trigger_down = function() return true end
+    P.tick(v)
+    check(v.energy == 0, "refill", "the only beam did not empty the pool")
+
+    -- Still holding, well past the recharge time: nothing comes back,
+    -- because the clock has not started.
+    clock = clock + 30000
+    P.tick(v)
+    check(v.energy == 0, "refill", "refilled while the trigger was still down")
+
+    -- Release, then wait it out.
+    la.trigger_down = function() return false end
+    P.tick(v)
+    clock = clock + 9000;  P.tick(v)
+    check(v.energy == 0, "refill", "refilled before the delay elapsed")
+    clock = clock + 2000;  P.tick(v)
+    check(v.energy == 1, "refill", "did not refill after the delay")
+  end
+
+  -- ---- ramp climbs one unit at a time ----------------------------
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 0, max_energy = 4, recharge = "ramp",
+                                    recharge_delay_secs = 1, recharge_secs = 4 } } }
+    local v = { energy = 0, energy_spent = 0 }
+    P.reset(v)
+    v.energy = 0
+    la.trigger_down = function() return false end
+    clock = clock + 1000;  P.tick(v)      -- delay elapsed, ramp starts
+    clock = clock + 1000;  P.tick(v)
+    check(v.energy > 0 and v.energy < 4, "ramp",
+          "expected a partial pool mid-ramp, got " .. v.energy)
+    clock = clock + 5000;  P.tick(v)
+    check(v.energy == 4, "ramp", "ramp did not reach full, got " .. v.energy)
+  end
+
+  -- ---- the reload bar's clock is the release, not the zero-crossing
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = { energy = "energy", spent = "energy_spent",
+                              reload = "reload", reload_secs = "reload_secs" } }
+    local v = mk_vars(1, 10)
+    v.reload, v.reload_secs = 0, 0
+    P.reset(v)
+
+    la.trigger_down = function() return true end
+    P.tick(v)                              -- empties the pool
+    local zero_at = clock
+    clock = clock + 5000;  P.tick(v)       -- still held
+    check(v.reload == 0, "bar",
+          "the bar clock started at the zero-crossing, not the release")
+
+    la.trigger_down = function() return false end
+    local release = clock
+    P.tick(v)
+    check(v.reload == release, "bar",
+          "the bar clock is " .. tostring(v.reload) .. ", expected the release " ..
+          tostring(release))
+    check(v.reload_secs == 10, "bar",
+          "fill duration = " .. tostring(v.reload_secs) .. " s, expected 10")
+    check(zero_at ~= release, "bar", "test is degenerate: no hold before release")
+
+    -- The clock is an ANCHOR, not a running value: it must keep reading the
+    -- release instant as time passes, or the bar would never appear to fill.
+    clock = clock + 3000;  P.tick(v)
+    check(v.reload == release, "bar",
+          "the bar clock moved to " .. tostring(v.reload) ..
+          "; it must stay at the release instant " .. tostring(release))
+
+    -- Pressing again abandons the reload: with a refill recharge nothing
+    -- comes back until the NEXT release, so a bar left running would fill
+    -- while the pool stayed empty.
+    la.trigger_down = function() return true end
+    clock = clock + 100;  P.tick(v)
+    check(v.reload == 0, "bar", "a re-press left the reload bar running")
+  end
+
+  -- ---- inventory: FIFO eviction, and the baseline is structural ---
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = BASE_VARS, max_owned = 2,
+                     profiles = { { id = 1, name = "A", max_energy = 5 },
+                                  { id = 2, name = "B", max_energy = 5 },
+                                  { id = 3, name = "C", max_energy = 5 } } }
+    local v = mk_vars(50)
+    P.reset(v)
+
+    la.trigger_down = function() return false end
+    P.give(v, 1); clock = clock + 10
+    P.give(v, 2); clock = clock + 10
+    check(P.owned_count() == 3, "inventory",
+          "expected baseline + 2 powered, got " .. P.owned_count())
+    P.give(v, 3)
+    check(P.owns(1) == false, "inventory", "FIFO kept the oldest projector")
+    check(P.owns(2) and P.owns(3), "inventory", "FIFO evicted the wrong slot")
+    check(P.consume_evicted() == "A", "inventory", "eviction did not name what it dropped")
+    check(P.owns(0), "inventory", "the baseline was evicted")
+    check(P.drop(v, 0) == false, "inventory", "the baseline was droppable")
+
+    -- Dropping the projector in hand falls back to the baseline.
+    P.select(v, 3)
+    P.drop(v, 3)
+    check(P.active_id() == 0, "inventory", "dropping the active one did not fall back")
+  end
+
+  -- ---- range policy gates, and fails open when uncalibrated -------
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 0, range_m = 10 } } }
+    local v = mk_vars(50)
+    P.reset(v)
+
+    shine_result = { status = "player", id = 7, metres = 4, r = 0, ang = 0 }
+    check(P.result(v) == 7, "range", "a target inside range was rejected")
+
+    shine_result.metres = 25
+    local id, why = P.result(v)
+    check(id == nil and why == "far", "range", "a target beyond range was accepted")
+
+    -- No reference calibration: metres is 0 and the gate must not fire.
+    shine_result.metres = 0
+    check(P.result(v) == 7, "range", "an uncalibrated device gated on distance")
+
+    shine_result = { status = "no_hit", id = 0, metres = 0, r = 0, ang = 0 }
+    check(P.result(v) == nil, "range", "a miss returned a target")
+  end
+
+  -- ---- payload carries strength, id, role and the rssi gate -------
+  do
+    local P = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 1, name = "S", strength = 3, role_tag = 2,
+                                    rssi_min = -55, max_energy = 5 } } }
+    local v = mk_vars(50)
+    P.reset(v)
+    la.trigger_down = function() return false end
+    P.grant(v, 1)
+    local strength, id, role, gate = P.payload(v)
+    check(strength == 3 and id == 1 and role == 2 and gate == 55, "payload",
+          string.format("got %s/%s/%s/%s, expected 3/1/2/55",
+                        tostring(strength), tostring(id), tostring(role), tostring(gate)))
+  end
+
+  -- ---- clamps bite at load ---------------------------------------
+  do
+    local P = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 1, cycles = 9999, strength = 99,
+                                    cooldown_ms = -5 } } }
+    local v = mk_vars(50)
+    P.reset(v)
+    la.trigger_down = function() return false end
+    P.grant(v, 1)
+    local p = P.active_profile()
+    check(p.cycles == 100, "clamp", "cycles = " .. tostring(p.cycles) .. ", expected 100")
+    check(p.strength == 10, "clamp", "strength = " .. tostring(p.strength) .. ", expected 10")
+    check(p.cooldown_ms == 0, "clamp", "cooldown_ms = " .. tostring(p.cooldown_ms))
+  end
+
+  la.trigger_down = function(n) return false end
+  print("OK   projector     baseline=shiner, refill/ramp, bar clock, FIFO, range, payload, clamps")
 end
 
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")
