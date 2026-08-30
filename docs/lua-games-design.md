@@ -13,11 +13,12 @@ All six rulesets are ported under `games/`, plus two that only exist as Lua
 | `games/teams.lua` | teams, friendly fire, point reports, BASE respawn |
 | `games/flag.lua` | flag events, carry background alert, team announce |
 | `games/kingofhill.lua` | per-player CP slots, teamless BASE |
-| `games/outflow.lua` | energy-only, passive drain, custom Enlight config |
+| `games/outflow.lua` | energy-only, passive drain, a projector that never recharges |
 | `games/upkeep.lua` | CP ownership, text monitor var ("myPts/enemyPts") |
 | `games/virus.lua` | new game: infection tag; uses a custom message id |
 | `games/festasportsasso.lua` | new game: a King of Hill that never ends — 500 s turns inside one endless match, restarted by an admin A+B chord |
 | `games/lib/std.lua` | pure-Lua standard library (see §"API layering") |
+| `games/lib/projector.lua` | the projector object: profile, energy, recharge, range, splash, inventory (see `docs/projector.md`) |
 
 Vocabulary rule: the API and the game files use the project's non-violent
 terms — *shine* (project light), *lit* (be illuminated), *shone*
@@ -273,17 +274,48 @@ as a trigger; the two released states appear in exactly one poll, so a rule
 condition catches a key-up edge with no bookkeeping),
 `la.key_at(i)` → `key, state, keypad` (1-based over the keys the report
 holds this poll, nil past the last one),
-`la.shine()` (start an Enlight burst if allowed → bool),
+`la.shine()` (start an Enlight burst if allowed → bool.  Returns false
+while a burst is in flight or cooling down, which is why every caller
+spends energy *inside* the `and la.shine()` short-circuit and never
+beside it),
 `la.shine_lit()` (confirmed lit target → player id or nil),
-`la.shine_ms()` (burst duration for UI sync),
-`la.shine_config{cooldown_ms, reps}` (Outflow tunes the optics per game).
+`la.shine_result()` → `status, id, metres, r, ang` (the whole
+measurement: `status` is `"player"` / `"no_hit"` / `"low_pow"` / `"near"` /
+`"cooldown"` / `"running"` / `"idle"`, `metres` is the estimated distance
+— 0 when the device has no reference calibration — and `r`/`ang` are the
+white-balanced colour coordinates.  Supersedes `shine_lit` for anything
+applying a policy to the measurement.  Both poll, and the poll is
+read-and-clear, so a game uses one or the other, never both in a tick),
+`la.shine_ms()` (burst duration for UI sync).
+
+Enlight reports a distance and gates on nothing but its own calibrated
+validity floor: range is game policy and lives in
+`games/lib/projector.lua`, which is what lets a profile gate on distance,
+correct for target colour, or grade an effect by range without a firmware
+change for each.
 
 **Outputs (queue, flushed in phase 3)** — `la.broadcast(msg, byte...)`,
 `la.broadcast_relay(msg, byte...)` (mesh flood, resend=2),
 `la.send(target, msg, byte...)`, `la.ui(event)`, `la.ui_enlight(ms)`,
 `la.show(text, ms)`, `la.clear_tray()`,
+`la.shine_config{reps, cooldown_ms}` (the active projector's optics.
+Queued, not applied on the spot: reconfiguring Enlight mid-measurement
+corrupts it, and game logic runs at an arbitrary point in the LOGIC
+phase.  Outside a tick — `on_begin` — there is nothing in flight and no
+queue, so it applies straight away),
 `la.background(spec)` / `la.background()` (set/clear a continuous
-sound+vibration+RGB alert; `spec` is a steps table, see `games/flag.lua`).
+sound+vibration+RGB alert; `spec` is a steps table, see `games/flag.lua`),
+`la.shine_action(spec)` / `la.shine_action()` (give the Enlight event this
+projector's own feedback, or restore the standard one; same steps table as
+`la.background`.  Overriding the slot rather than adding an event is
+deliberate — the runtime burst-duration override is keyed on the event
+value, so a per-projector id would discard the real burst length).
+
+The rule for which of these are queued: **defer what only leaves the
+system, call directly what feeds back into this tick.**  `la.shine()`
+returns the bool that decides whether energy is spent, so queuing it would
+split one decision across two ticks; `la.background` and
+`la.shine_action` install a definition rather than emitting an event.
 No verbs run on totems: totem behaviour is TotemVM data (§5), and totem
 animations are referenced by name inside those programs.
 
@@ -320,11 +352,14 @@ what goes where:
    page, learnable in an afternoon, and stable because policies never live
    here.
 
-2. **The Lua standard library** (`games/lib/std.lua`) — recurring *game
-   patterns* built only out of kernel verbs: the immunity window, the
-   trigger/energy/recharge idiom, the standard lit-handler ladder, BASE
-   respawn gating, team score aggregation, and the five standard totem
-   roles.  It ships as a file next to the games, so it can grow, be fixed,
+2. **The Lua standard library** (`games/lib/std.lua`, and
+   `games/lib/projector.lua` beside it) — recurring *game patterns* built
+   only out of kernel verbs: the immunity window, the standard
+   lit-handler ladder, BASE respawn gating, team score aggregation, and
+   the five standard totem roles.  The projector is the largest of them
+   and has its own file: the profile in hand, the energy a beam costs,
+   how it comes back, how far it reaches, what a hit weighs on the wire,
+   splash, and the inventory.  It ships as a file next to the games, so it can grow, be fixed,
    or be forked without reflashing firmware — and a game that wants
    different semantics simply doesn't call it.  This is where "easy to
    define new games" comes from: `games/teams.lua` is ~½ the logic of its
@@ -339,10 +374,16 @@ Future-proofness falls out of the same rule.  A future game that needs a new
 release.  Only a new *capability* (a new sensor, a new radio primitive)
 needs a kernel verb, and adding one is backward-compatible: the `api` field
 versions the contract, and files can feature-test with
-`if la.background then ... end`.  When a Lua pattern later proves both
-universal and hot enough to matter, it can be promoted to C++ behind the
-same call signature the library already established — `std.shiner` is
-designed as exactly such a promotion candidate.
+`if la.background then ... end`.
+
+The traffic has run the other way too.  `std.shiner` — the
+trigger/energy/recharge idiom — grew into `games/lib/projector.lua` and
+was deleted: the projector's baseline profile reproduces it exactly, so
+the growth cost its callers two lines each.  That is the layering working
+as intended.  A pattern that later proves both universal *and* hot enough
+to matter could still be promoted to C++ behind the signature the library
+established, but nothing has needed it: the projector runs once per 10 ms
+tick against a loop that spin-waits out its own slack.
 
 Historical candidates deliberately *kept out* of the kernel: RSSI proximity
 gating (one comparison), immunity windows (a table and a clock), CP window
