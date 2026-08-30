@@ -189,11 +189,95 @@ P.standard = {
       strength = 1,          -- what a receiver without the profile falls back to
     },
 
-    -- A low double thump, so the burst does not sound like the baseline.
+    -- Shine feedback is ONE step, always: for the Enlight event every step
+    -- is stretched to the real burst length, so a two-step action would
+    -- play for twice as long as the beam it belongs to.  ms is only the
+    -- fallback for when no burst length is supplied.
     shine_action = {
       priority = 2,
-      steps = { { ms = 60, freq = 1400, vib = 200, rgb = { 255, 120, 0 } },
-                { ms = 90, freq =  900, vib = 255, rgb = { 255, 40, 0 } } },
+      steps = { { ms = 10, freq = 1200, vib = 255, rgb = { 255, 120, 0 } } },
+    },
+  },
+
+  -- FAST — a light, quick beam.  Four cycles is a short integration and
+  -- therefore genuinely less gain, so the 20 m reach is the honest limit
+  -- of what it can resolve rather than an arbitrary nerf.  It is the only
+  -- standard profile that ramps: the pool trickles back rather than
+  -- arriving all at once, which suits a projector meant to be held down.
+  FAST = {
+    id       = 2,
+    name     = "FAST",
+    icon     = "FAST",
+
+    cycles      = 4,
+    cooldown_ms = 60,
+    range_m     = 20,
+
+    cost                = 1,
+    max_energy          = 30,
+    recharge            = "ramp",
+    recharge_delay_secs = 2,
+    recharge_secs       = 3,
+
+    ready_ms = 150,
+    strength = 1,
+
+    shine_action = {
+      priority = 1,
+      steps = { { ms = 10, freq = 3000, vib = 90, rgb = { 0, 180, 255 } } },
+    },
+  },
+
+  -- LONG — thirty cycles of integration, and the reach of whatever the
+  -- device can actually see: range_m = 0 leaves the profile out of the way
+  -- and lets the calibrated floor decide.  Slow to bring up, slow between
+  -- beams, and worth it at distance.
+  LONG = {
+    id       = 3,
+    name     = "LONG",
+    icon     = "LONG",
+
+    cycles      = 30,
+    cooldown_ms = 400,
+    range_m     = 0,             -- whatever this device can resolve
+
+    cost                = 1,
+    max_energy          = 20,
+    recharge            = "refill",
+    recharge_delay_secs = 4,
+
+    ready_ms = 400,
+    strength = 1,
+
+    shine_action = {
+      priority = 1,
+      steps = { { ms = 10, freq = 1500, vib = 150, rgb = { 180, 0, 255 } } },
+    },
+  },
+
+  -- STRONG — the heavy hitter: one beam weighs three standard hits, which
+  -- in a lives game is three lives at once.  Eight of them, a long wait
+  -- between, and a long wait to get them back.
+  STRONG = {
+    id       = 4,
+    name     = "STRONG",
+    icon     = "STRONG",
+
+    cycles      = 15,
+    cooldown_ms = 900,
+    range_m     = 20,
+
+    cost                = 1,
+    max_energy          = 8,
+    recharge            = "refill",
+    recharge_delay_secs = 6,
+
+    ready_ms = 400,
+    strength = 3,
+
+    shine_action = {
+      priority = 1,
+      steps = { { ms = 10, freq = 900, vib = 255, rgb = { 255, 80, 0 } } },
     },
   },
 }

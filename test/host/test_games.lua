@@ -10,8 +10,12 @@ la = {
           BASE_BEACON = 0x56, FLAG_BEACON = 0x58,
           BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60 },
   flag_event = { TAKEN = 1, DROPPED = 2, SCORED = 3 },
+  -- Mirrors IconType in src/ui/player/display/LightAir_Display_Icons.h.
+  -- A profile naming an icon that is not here fails the standard-catalogue
+  -- check below, which is what catches this stub drifting from the enum.
   icons = { LIGHT = 0, LIFE = 1, FLAG = 2, HOURGLASS = 3, SCORE = 4,
-            ROLE = 5, ENERGY = 6, DOWN = 7, SPLASH = 8, TIME = 3 },
+            ROLE = 5, ENERGY = 6, DOWN = 7, SPLASH = 8,
+            FAST = 9, LONG = 10, STRONG = 11, TIME = 3 },
   colors = { team = {}, player = {} },
   rhythm = {},
 }
@@ -687,6 +691,40 @@ do
     end
     check(S.splash.bands and #S.splash.bands >= 2, "SPLASH",
           "the splash profile has no graded bands")
+
+    -- The whole standard catalogue has to be playable and self-consistent.
+    local seen_id, seen_name = {}, {}
+    for key, prof in pairs(P_STANDARD) do
+      for _, field in ipairs({ "id", "name", "icon", "cycles", "cooldown_ms",
+                               "range_m", "cost", "max_energy", "recharge",
+                               "ready_ms", "strength", "shine_action" }) do
+        check(prof[field] ~= nil, "standard", key .. " declares no " .. field)
+      end
+      check(prof.id ~= 0, "standard", key .. " claims the baseline id")
+      check(not seen_id[prof.id], "standard",
+            key .. " reuses standard id " .. tostring(prof.id) ..
+            " — ids travel on the wire and must be unique")
+      seen_id[prof.id] = key
+      check(not seen_name[prof.name], "standard", key .. " reuses a name")
+      seen_name[prof.name] = true
+      check(la.icons[prof.icon] ~= nil, "standard",
+            key .. " names an icon the firmware does not carry: " .. tostring(prof.icon))
+      check(#prof.name <= 8, "standard", key .. "'s name will not fit the cell")
+
+      -- Shine feedback must be ONE step.  For the Enlight event every step
+      -- is stretched to the real burst length, so a two-step action plays
+      -- for twice as long as the beam it belongs to.
+      check(prof.shine_action.steps and #prof.shine_action.steps == 1, "standard",
+            key .. "'s shine_action has " ..
+            tostring(prof.shine_action.steps and #prof.shine_action.steps) ..
+            " steps; the Enlight slot stretches every step to the burst length")
+
+      -- A ramp needs a duration to ramp over, or it would never fill.
+      if prof.recharge == "ramp" then
+        check((prof.recharge_secs or 0) > 0, "standard",
+              key .. " ramps but declares no recharge_secs")
+      end
+    end
 
     -- Holding it puts its identity on the LCD.
     P.grant(v, S.id)

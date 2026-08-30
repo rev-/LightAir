@@ -338,7 +338,7 @@ void LightAir_DisplayCtrl::drawIcon(IconType icon, uint8_t x, uint8_t y) {
 IconType LightAir_DisplayCtrl::iconOf(const VariableBinding& b) const {
     if (!b.iconVar) return b.icon;
     const int v = *b.iconVar;
-    if (v < 0 || v > (int)ICON_SPLASH) return b.icon;
+    if (v < 0 || v >= (int)ICON_COUNT) return b.icon;
     return (IconType)v;
 }
 
@@ -353,6 +353,9 @@ const uint8_t* LightAir_DisplayCtrl::getIconBitmap(IconType icon) {
         case ICON_ENERGY:    return ICON_ENERGY_BITMAP;
         case ICON_DOWN:      return ICON_DOWN_BITMAP;
         case ICON_SPLASH:    return ICON_SPLASH_BITMAP;
+        case ICON_FAST:      return ICON_FAST_BITMAP;
+        case ICON_LONG:      return ICON_LONG_BITMAP;
+        case ICON_STRONG:    return ICON_STRONG_BITMAP;
         default:             return ICON_LIGHT_BITMAP;
     }
 }

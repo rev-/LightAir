@@ -16,6 +16,10 @@ enum IconType {
     ICON_ENERGY,
     ICON_DOWN,
     ICON_SPLASH,
+    ICON_FAST,
+    ICON_LONG,
+    ICON_STRONG,
+    ICON_COUNT,                  // real icons above this; not an icon itself
     ICON_TIME = ICON_HOURGLASS   // alias — reuses the hourglass CGRAM slot
 };
 
@@ -133,6 +137,45 @@ static const uint8_t ICON_SPLASH_BITMAP[8] PROGMEM = {
     0b01000100,
     0b10010010,
     0b00000000
+};
+
+// FAST — a forward chevron pair: quick, light, short.
+static const uint8_t ICON_FAST_BITMAP[8] PROGMEM = {
+
+    0b00100010,
+    0b01000100,
+    0b10001000,
+    0b01000100,
+    0b00100010,
+    0b00000000,
+    0b00000000,
+    0b00000000
+};
+
+// LONG — a beam narrowing to a distant point.
+static const uint8_t ICON_LONG_BITMAP[8] PROGMEM = {
+
+    0b00000000,
+    0b11000000,
+    0b01110000,
+    0b00111110,
+    0b01110000,
+    0b11000000,
+    0b00000000,
+    0b00000000
+};
+
+// STRONG — a filled burst: nothing thrown clear, unlike SPLASH.
+static const uint8_t ICON_STRONG_BITMAP[8] PROGMEM = {
+
+    0b00011000,
+    0b00111100,
+    0b01111110,
+    0b11111111,
+    0b11111111,
+    0b01111110,
+    0b00111100,
+    0b00011000
 };
 
 #endif

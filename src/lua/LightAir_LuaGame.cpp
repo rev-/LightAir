@@ -40,7 +40,8 @@ const NamedU8 kIcons[] = {
     { "LIGHT", ICON_LIGHT }, { "LIFE", ICON_LIFE }, { "FLAG", ICON_FLAG },
     { "HOURGLASS", ICON_HOURGLASS }, { "SCORE", ICON_SCORE },
     { "ROLE", ICON_ROLE }, { "ENERGY", ICON_ENERGY }, { "DOWN", ICON_DOWN },
-    { "SPLASH", ICON_SPLASH }, { "TIME", ICON_TIME },
+    { "SPLASH", ICON_SPLASH }, { "FAST", ICON_FAST },
+    { "LONG", ICON_LONG }, { "STRONG", ICON_STRONG }, { "TIME", ICON_TIME },
 };
 const uint8_t kIconCount = sizeof(kIcons) / sizeof(*kIcons);
 

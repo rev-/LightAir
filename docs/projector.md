@@ -160,7 +160,8 @@ something better, it is the only choice.
 MSG.SPLASH payload: `[projector id, strength, rssi gate, origin, shooter id]`,
 single-hop.
 
-**One standard profile carries it: `proj.standard.SPLASH`.** Splash is loud,
+**One of the four standard profiles carries it: `proj.standard.SPLASH`.**
+Splash is loud,
 in radio traffic and in play, and a field where every projector splashed
 would be chaos rather than tactics — so the burst is a thing you choose to
 pick up, not a property of shining. Its direct hit is a single standard hit;
@@ -168,10 +169,41 @@ the point is the two-band beacon it triggers around whoever it lands on. It
 carries its own icon, its own shine feedback, a long cooldown and a slow
 refill, so it reads and feels different in the hand.
 
-Standard profile ids are **fixed and reserved**, because a projector id
-travels on the wire: a splash beacon names the projector that fired and
-every receiver looks the profile up by that id locally. A game's own
-profiles start above the standard range.
+---
+
+## 6. The standard catalogue
+
+Four ready-made profiles a game can drop into its `profiles` list, each
+with its own icon, shine feedback, optics and economy:
+
+| | id | cycles | cooldown | range | recharge | cost / pool | strength | ready |
+|---|---|---|---|---|---|---|---|---|
+| SPLASH | 1 | 20 | 900 ms | 12 m | refill 6 s | 2 / 8 | 1 + burst | 600 ms |
+| FAST | 2 | 4 | 60 ms | 20 m | ramp 2→3 s | 1 / 30 | 1 | 150 ms |
+| LONG | 3 | 30 | 400 ms | device max | refill 4 s | 1 / 20 | 1 | 400 ms |
+| STRONG | 4 | 15 | 900 ms | 20 m | refill 6 s | 1 / 8 | **3** | 400 ms |
+
+Ids are **fixed and reserved**, because a projector id travels on the wire:
+a splash beacon names the projector that fired and every receiver looks the
+profile up by that id locally. A game's own profiles start above this range.
+
+FAST's short reach is not an arbitrary nerf — four cycles is a short
+integration and therefore genuinely less gain, so gating it keeps the
+profile from producing unreliable long-range hits. LONG's `range_m = 0`
+leaves the profile out of the way entirely and lets the calibrated floor
+decide what the device can see.
+
+STRONG weighs **three standard hits**, which in a lives game is three lives
+from one beam. One energy per shot, but only eight of them and six seconds
+to get them back.
+
+### Shine feedback is always one step
+
+For `UIEvent::Enlight` the burst length overrides **every** step's duration
+(`LightAir_UICtrl::executeStep`), not just the first — so a two-step action
+plays for twice as long as the beam it belongs to. Every standard profile
+declares exactly one step, and the host suite fails any that does not. The
+`ms` in that step is only the fallback for when no burst length is supplied.
 
 Five guards, each with a test that fails when it is removed:
 
