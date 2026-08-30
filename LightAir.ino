@@ -29,6 +29,7 @@
 #include "src/tools/EnlightTestMode.h"
 #include "src/tools/GameFileServer.h"
 #include "src/lua/LightAir_GameStore.h"
+#include <esp_heap_caps.h>
 
 // ----------------------------------------------------------------
 // Enlight global pointer
@@ -111,6 +112,26 @@ static GameFileServer       shareServer; // Settings → Share games (WiFi AP)
 static DeviceHardware hw;
 
 // ----------------------------------------------------------------
+// Boot memory checkpoints.
+//
+// These boards have NO PSRAM (see the ESP32-S3-WROOM-1-N8 profile in
+// sketch.yaml): the 8 MB is flash, and every subsystem — WiFi, the
+// display bindings, the radio buffers, the Lua interpreter — competes
+// for the same on-die SRAM.  The only honest way to know what each one
+// costs is to weigh the heap either side of it, so each stage prints a
+// line.  `min` is the low-water mark since boot: the number that says
+// how close the device actually came to the edge, which no static
+// analysis can tell you.  See docs/memory-budget.md.
+// ----------------------------------------------------------------
+static void logHeap(const char* stage) {
+    constexpr uint32_t kCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    Log.infoln("mem %-14s free %6d  largest %6d  min %6d", stage,
+               (int)heap_caps_get_free_size(kCaps),
+               (int)heap_caps_get_largest_free_block(kCaps),
+               (int)heap_caps_get_minimum_free_size(kCaps));
+}
+
+// ----------------------------------------------------------------
 
 
 #ifdef TEST_UNIT
@@ -135,6 +156,7 @@ void _setup() {
     Log.infoln("LightAir id=%u hw=%s\n",
                   cfg.id,
                   hw == DeviceHardware::TOTEM ? "TOTEM" : "PLAYER");
+    logHeap("boot");
 
     if (hw == DeviceHardware::TOTEM) {
         // ------------------------------------------------------------
@@ -155,6 +177,7 @@ void _setup() {
             while (true) delay(1000);
         }
 
+        logHeap("totem ready");
         Log.infoln("Totem ready.");
 
     } else {
@@ -191,10 +214,12 @@ void _setup() {
             Serial.println("Enlight init FAILED — halting");
             while (true) delay(1000);
         }
+        logHeap("enlight");
 
         // Display
         rawDisplay.begin();
         displayCtrl.begin();
+        logHeap("display");
 
         // Input
         keypad.begin();
@@ -212,6 +237,9 @@ void _setup() {
             Log.infoln("Radio init FAILED — halting");
             while (true) delay(1000);
         }
+        // WiFi is started by ESP-NOW inside radio->begin(); this is the
+        // single biggest step of the boot, and the one worth attacking.
+        logHeap("radio+wifi");
 
         // Games are .lua files on LittleFS (seeded from the embedded
         // bundle on first boot); there are no firmware-coded games.
@@ -221,6 +249,7 @@ void _setup() {
             Log.errorln("GameStore: LittleFS unavailable — no games installed");
         else if (gameStore.registerLuaGames(manager) == 0)
             Log.errorln("GameStore: no playable game files in %s", LuaDefaults::GAMES_DIR);
+        logHeap("games scanned");
         LightAir_GameSetupMenu menu(manager, runner,
                                     rawDisplay, input,
                                     InputDefaults::KEYPAD_ID,
@@ -238,6 +267,7 @@ void _setup() {
         runner.begin(menu.selectedGame(), displayCtrl, input, *radio, &playerUi,
                      enlight, gameSensors, 3, &battVolts);
 
+        logHeap("game loaded");
         Log.infoln("Player ready.");
     }
 }
