@@ -240,9 +240,21 @@ bool Enlight::run() {
     _cycleNormScale = 1.0f;
     _active=true;
     _firstCycle=true;
+    _runStartUs=esp_timer_get_time();
     gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,1);
     _afeOn=true;
-    spawnCycle();
+    if (!spawnCycle()) {
+        // Nothing started, so leave no trace of the attempt: the caller must
+        // be free to try again next tick, and must not be charged a beam for
+        // one that never happened.
+        ESP_LOGE(TAG, "run: could not start the cycle task");
+        if (!_afeHold) {
+            gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
+            _afeOn=false;
+        }
+        _active=false;
+        return false;
+    }
     return true;
 }
 
@@ -252,7 +264,30 @@ EnlightRawMeasure Enlight::rawMeasure() const {
 
 EnlightResult Enlight::poll() {
     if (!_active) return {EnlightStatus::IDLE,0};
-    if (!_complete) return {EnlightStatus::RUNNING,0};
+    if (!_complete) {
+        // Backstop.  _active is cleared here and nowhere else, so anything
+        // that stops a run from completing — a lost DMA cycle, a transaction
+        // that never returns — would otherwise refuse every future run() for
+        // the rest of the match.  A ruleset spends energy on an accepted
+        // run(), so that reads to a player as a trigger that worked once and
+        // then died.  Give up on a run that has overrun any plausible
+        // duration, say so, and let the next trigger through.
+        //
+        // The limit is generous — an order of magnitude over the expected
+        // duration — because abandoning a run that is still in flight would
+        // let the next one start a second DMA task on the same ADC device.
+        // Past this point the first task is either gone or wedged for good,
+        // and a wedged device is not made worse by trying again.
+        const int64_t limit = (int64_t)cycleTime() * 4000 + 1000000;  // µs
+        if (esp_timer_get_time() - _runStartUs < limit)
+            return {EnlightStatus::RUNNING,0};
+        ESP_LOGE(TAG, "run did not complete within %lld ms — abandoning it",
+                 (long long)(limit / 1000));
+        taskENTER_CRITICAL(&_mux);
+        _latestResult={EnlightStatus::NO_HIT,0};
+        _complete=true;
+        taskEXIT_CRITICAL(&_mux);
+    }
 
     if (!_resultDelivered) {
         EnlightResult r;
@@ -566,10 +601,33 @@ EnlightResult Enlight::classifyNear() {
 /* ============================================================
  *   spawnCycle() / onCycleDone() / dmaTask()
  * ============================================================ */
-void Enlight::spawnCycle() {
+bool Enlight::spawnCycle() {
     _taskArgs={this};
-    xTaskCreatePinnedToCore(dmaTask,"EnlightDMA",4096,&_taskArgs,
-                            configMAX_PRIORITIES-1,&_taskHandle,EnlightDefaults::TASK_CORE);
+    // A run is a CHAIN of these: each cycle's task starts the next one and
+    // then deletes itself, and the deleted stack only returns to the heap
+    // when the idle task next runs.  So a device short on internal RAM can
+    // fail here mid-chain — and the failure has to be reported, because a
+    // chain that stops silently leaves _complete false forever, which is a
+    // projector that fires exactly once and then never again.
+    return xTaskCreatePinnedToCore(dmaTask,"EnlightDMA",4096,&_taskArgs,
+                                   configMAX_PRIORITIES-1,&_taskHandle,
+                                   EnlightDefaults::TASK_CORE) == pdPASS;
+}
+
+// End of run: classify what the cycles gathered, hand it to poll(), drop the
+// AFE rail unless a sensor read asked to keep it.  Runs on the dmaTask.
+void Enlight::finishRun() {
+    // Leave the AFE rail up if a caller asked to read the sensors on it;
+    // releaseAfe() drops it once they are done.
+    if (!_afeHold) {
+        gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
+        _afeOn=false;
+    }
+    EnlightResult r=classify();
+    taskENTER_CRITICAL(&_mux);
+    _latestResult=r;
+    _complete=true;
+    taskEXIT_CRITICAL(&_mux);
 }
 
 void Enlight::onCycleDone() {
@@ -592,20 +650,18 @@ void Enlight::onCycleDone() {
     }
 
     if (_repsRemaining==0) {
-        // Leave the AFE rail up if a caller asked to read the sensors on it;
-        // releaseAfe() drops it once they are done.
-        if (!_afeHold) {
-            gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
-            _afeOn=false;
-        }
-        EnlightResult r=classify();
-        taskENTER_CRITICAL(&_mux);
-        _latestResult=r;
-        _complete=true;
-        taskEXIT_CRITICAL(&_mux);
+        finishRun();
         return;
     }
-    spawnCycle();
+    if (!spawnCycle()) {
+        // The chain is broken and nothing will ever set _complete.  Close the
+        // run out on the cycles we did get rather than wedging: a short
+        // measurement is a worse reading, a wedged one is a dead trigger.
+        ESP_LOGE(TAG, "cycle task failed with %lu reps left; closing the run short",
+                 (unsigned long)_repsRemaining);
+        _repsRemaining=0;
+        finishRun();
+    }
 }
 
 void Enlight::dmaTask(void* arg) {

@@ -170,7 +170,10 @@ public:
 
     // Set repetitions  = number of DMA cycles before classify.
     // 1 cycle = _periodsPerCycle sine periods (13 at V6R2 defaults = 7.8 ms).
-    void setRepetitions(uint32_t reps) { _repetitions = reps; }
+    // Never zero: _repsRemaining counts down from this and is unsigned, so a
+    // zero-repetition run would wrap past the end-of-run test and never
+    // complete — which poll() can only report as a permanently busy device.
+    void setRepetitions(uint32_t reps) { _repetitions = reps ? reps : 1; }
     uint32_t cycleTime() const { return _repetitions*EnlightDefaults::MS_PER_REP; }
 
     // Non-blocking start
@@ -256,6 +259,9 @@ private:
     //Repetitions
     uint32_t    _repetitions        = 10;
 
+    // millis of the last run() start, for poll()'s stall backstop.
+    int64_t     _runStartUs         = 0;
+
     // Correlator kernel. FAR = goertzTab[idx], NEAR = goertzTab[(idx+_nearOffset)%_goertzPeriod]; no second array.
     int32_t*    _goertzTab  = nullptr;
     uint32_t    _nearOffset = 0;
@@ -322,7 +328,11 @@ private:
     // normalises it back to one DMA cycle so the estimate is independent of
     // the repetition count the active projector chose.
     float         estimateRangeM(float farSum, float baseScale) const;
-    void          spawnCycle();
+    // Start one DMA cycle.  False = the task could not be created, which the
+    // caller must handle rather than ignore — see the note in the .cpp.
+    bool          spawnCycle();
+    // Classify and publish the result of the cycles gathered so far.
+    void          finishRun();
     void          onCycleDone();
     static void   dmaTask(void* arg);
 };
