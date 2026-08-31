@@ -145,6 +145,22 @@ static int l_team_of(lua_State* L)  {
                        ? g_luaCtx.runner->teamOf((uint8_t)luaL_checkinteger(L, 1)) : 0xFF);
     return 1;
 }
+// la.sensor(n) -> the last reading of the n-th analogue sensor, or nil.
+//
+// 1 is the battery divider, in volts; the rest are the NTC channels, in
+// degrees.  The runner reads them on its own cadence around Enlight (they
+// share the AFE rail), so this is a cached value, not a conversion — cheap
+// enough to call every tick.  nil rather than 0 when there is no such
+// sensor, so a ruleset shows "--" instead of a convincing zero.
+static int l_sensor(lua_State* L) {
+    const lua_Integer n = luaL_optinteger(L, 1, 1) - 1;    // la counts from 1
+    if (!g_luaCtx.runner || n < 0 || n >= g_luaCtx.runner->sensorCount()) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushnumber(L, (lua_Number)g_luaCtx.runner->sensorValue((uint8_t)n));
+    return 1;
+}
 static int l_player_count(lua_State* L) {
     lua_pushinteger(L, g_luaCtx.runner ? g_luaCtx.runner->rosterCount() : 0);
     return 1;
@@ -546,6 +562,7 @@ void LightAir_LuaGame::registerKernel() {
     static const Verb kVerbs[] = {
         { "now", l_now }, { "my_id", l_my_id }, { "my_team", l_my_team },
         { "team_of", l_team_of }, { "player_count", l_player_count },
+        { "sensor", l_sensor },
         { "player_short", l_player_short }, { "team_short", l_team_short },
         { "totem_for_role", l_totem_for_role },
         { "trigger_down", l_trigger_down }, { "trigger_state", l_trigger_state },

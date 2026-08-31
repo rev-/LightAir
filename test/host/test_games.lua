@@ -31,6 +31,8 @@ function la.my_id() return 2 end
 function la.my_team() return 0 end
 function la.team_of(id) return id % 2 end
 function la.player_count() return 4 end
+-- 1 = battery volts, 2/3 = NTC degrees; nil past the end of the list.
+function la.sensor(n) return ({ 4.05, 31.0, 29.5 })[n or 1] end
 function la.player_short(id) return "P" .. tostring(id) end
 function la.team_short(t) return ({ [0] = "O", [1] = "X" })[t] or "?" end
 function la.totem_for_role(role, i) return i == 0 and 254 or 0 end
@@ -842,6 +844,67 @@ do
   end
   print(string.format("OK   proj vars     %d rulesets declare every var their projector writes",
                       checked))
+end
+
+-- ================================================================
+--   festasportsasso: the welcome screen is a shooting range
+--
+--   A visitor waiting for a BASE can pull the trigger to learn to aim.
+--   Two things must hold, or the practice interferes with the stand:
+--   the shots cost nothing (the queue can take as long as it likes), and
+--   nothing goes on the radio (a turn already running must not be
+--   touched by somebody practising beside it).
+-- ================================================================
+do
+  local S_PRE, S_ACTIVE = 0, 1
+  local function fail(what, msg)
+    failures = failures + 1
+    print(string.format("  FAIL %-12s %s: %s", "festa trial", what, msg))
+  end
+  local function check(cond, what, msg) if not cond then fail(what, msg) end end
+
+  libcache = {}                       -- a projector of its own for this copy
+  local g = dofile(ROOT .. "festasportsasso.lua")
+  local v = {}
+  for _, c in ipairs(g.config) do v[c.id] = c.default end
+  for _, x in ipairs(g.vars)   do v[x.id] = x.default end
+
+  clock, shine_busy_until = 0, 0
+  g.on_begin(v)
+
+  -- Aim at a player and hold the trigger down across several bursts.
+  la.trigger_down  = function() return true end
+  shine_result.status, shine_result.id = "player", 3
+  local energy0, spent0 = v.energy, v.energy_spent
+  local radio0 = #out.radio
+  local ui0    = #out.ui
+
+  for _ = 1, 6 do g.update[S_PRE](v); clock = clock + 200 end
+
+  check(v.energy == energy0, "trial",
+        "practice cost energy: " .. tostring(energy0) .. " -> " .. tostring(v.energy))
+  check(v.energy_spent == spent0, "trial", "practice moved the spent counter")
+  check(#out.radio == radio0, "trial",
+        (#out.radio - radio0) .. " radio message(s) escaped the welcome screen")
+  check(#out.ui > ui0, "trial", "practice gave the player no feedback at all")
+  check(v.batt ~= "--", "battery", "the welcome screen showed no battery reading")
+
+  -- The contrast: once the turn starts, the same trigger costs energy and
+  -- the hit does reach the target.  Proves the difference is the mode.
+  for _, r in ipairs(g.rules) do
+    if r.from == S_PRE and r.to == S_ACTIVE then r.action(v) end
+  end
+  clock = clock + 1000
+  shine_busy_until = 0
+  local e1, radio1 = v.energy, #out.radio
+  g.update[S_ACTIVE](v)
+  check(v.energy == e1 - 1, "in-game", "a turn's beam did not cost its energy")
+  check(#out.radio > radio1, "in-game", "a turn's hit sent no MSG.LIT")
+
+  la.trigger_down = function() return false end
+  shine_result.status, shine_result.id = "no_hit", 0
+  print("OK   festa trial   free shots, radio-silent, battery shown; "
+        .. "the turn still costs and still sends")
 end
 
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")

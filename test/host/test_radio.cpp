@@ -135,6 +135,45 @@ int main() {
               "timeout carries no measured signal strength");
     }
 
+    // ---- 5. An impossible RSSI must fail proximity gates, not open them ----
+    // Every gate in the rulesets is `pkt.rssi < threshold -> reject` against a
+    // negative threshold, so a 0 reads as "touching the antenna" and opens all
+    // of them at once — a player far from a BASE walks into the game.  A real
+    // frame is negative dBm and no weaker than the radio's floor.
+    {
+        printf("rssi sanity:\n");
+        struct Case { int8_t raw; const char* what; } cases[] = {
+            {    0, "a zero reading"        },
+            {   40, "a positive reading"    },
+            { -120, "a below-the-floor reading" },
+        };
+        for (const Case& c : cases) {
+            LightAir_RadioTestTransport tr;
+            LightAir_Radio radio(tr, /*playerId*/ 2, /*token*/ 0, 0, 0);
+            radio.begin();
+            radio.poll();
+            tr.testRssi = c.raw;
+            tr.push(/*senderId*/ 3, /*role*/ 0, /*team*/ 0,
+                    RadioMsg::MSG_BASE_BEACON, /*token*/ 0, /*timestamp*/ 1000);
+            const RadioReport& rep = radio.poll();
+            CHECK(rep.count == 1, "the packet is still delivered");
+            CHECK(rep.count == 1 && rep.events[0].rssi == RadioDefaults::RSSI_NONE,
+                  c.what);
+        }
+
+        // A plausible reading passes through untouched.
+        LightAir_RadioTestTransport tr;
+        LightAir_Radio radio(tr, /*playerId*/ 2, /*token*/ 0, 0, 0);
+        radio.begin();
+        radio.poll();
+        tr.testRssi = -55;
+        tr.push(/*senderId*/ 3, /*role*/ 0, /*team*/ 0,
+                    RadioMsg::MSG_BASE_BEACON, /*token*/ 0, /*timestamp*/ 1000);
+        const RadioReport& rep = radio.poll();
+        CHECK(rep.count == 1 && rep.events[0].rssi == -55,
+              "a real reading is passed through unchanged");
+    }
+
     printf("\n%s\n", failures ? "RADIO TESTS FAILED" : "RADIO TESTS PASS");
     return failures ? 1 : 0;
 }

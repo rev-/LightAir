@@ -55,8 +55,31 @@ local proj = la.lib("projector")
 -- The baseline profile reproduces what std.shiner did here: one
 -- energy per beam, a full refill after the configured idle, both
 -- read from this game's own config vars.
-proj.define{ vars = { energy = "energy", spent = "energy_spent",
-                      reload = "reload", reload_ms = "reload_ms" } }
+-- TRIAL is the welcome screen's projector: free shots so a first-time
+-- visitor can learn to aim while the queue moves, and no accounting at
+-- all.  cost 0 means the pool is never touched and never runs out, and
+-- recharge "none" means there is nothing to wait for.  It is a separate
+-- profile rather than a flag because the projector already banks a pool
+-- per slot: switching to it leaves the turn's energy exactly where it
+-- was, and switching back restores it.
+local P_TRIAL = 20
+
+proj.define{
+  vars     = { energy = "energy", spent = "energy_spent",
+               reload = "reload", reload_ms = "reload_ms" },
+  profiles = {
+    { id = P_TRIAL, name = "TRIAL", cost = 0, max_energy = "start_energy",
+      recharge = "none", strength = 1, ready_ms = 0 },
+  },
+}
+
+-- Hand the welcome screen its practice projector.  proj.reset() rebuilds
+-- the inventory down to the baseline, so this runs after every reset that
+-- lands us on the welcome screen.
+local function arm_trial(vars)
+  proj.give(vars, P_TRIAL)
+  proj.select(vars, P_TRIAL)
+end
 
 local S   = { PRE_START = 0, ACTIVE = 1, DOWN = 2, SUB_END = 3 }
 local MSG = la.msg
@@ -178,6 +201,7 @@ local function welcome(vars)
   shone_by    = nil
   imm.reset()
   proj.reset(vars)
+  arm_trial(vars)
   la.clear_tray()
   la.show("Go to a BASE!", 0)
   la.show(string.format("Welcome player %d", vars.counter), 0)
@@ -234,6 +258,11 @@ return {
     -- how long it takes.  Both written by projector.lua.
     { id = "reload",       default = 0 },
     { id = "reload_ms",    default = 0 },
+    -- Battery, read on the welcome screen: between turns is the only
+    -- moment anyone looks at a projector without playing it, so it is
+    -- where a flat one has to be caught.  Text, because "4.05V" reads and
+    -- "405" does not.
+    { id = "batt", text = true, len = 8, default = "--" },
     { id = "shone_times",  default = 0   },
     { id = "players_lit",  default = 0   },
     -- <visitors before this one><projector digit>, see the header.
@@ -246,6 +275,8 @@ return {
   monitor = {
     { var = "counter",      icon = "ROLE",   col = 0, row = 0,
       states = { S.PRE_START, S.DOWN, S.SUB_END } },
+    { var = "batt",         icon = "LIGHT",  col = 1, row = 0,
+      states = { S.PRE_START } },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1,
       states = { S.PRE_START, S.ACTIVE, S.DOWN } },
     { var = "lives",        icon = "LIFE",   col = 0, row = 0, states = { S.ACTIVE } },
@@ -390,6 +421,22 @@ return {
   },
 
   update = {
+    -- Welcome screen: aim practice, and the battery.
+    --
+    -- Nothing here reaches the radio.  A visitor learning to aim must not
+    -- be able to touch a turn already in progress, so a hit tells this
+    -- projector and nobody else: no MSG.LIT goes out, and the target
+    -- never learns it was lit.  The feedback is the beam's own UI burst
+    -- (proj.tick plays it on every accepted shot) plus the standard hit
+    -- cue when the beam actually finds a player-coloured target.
+    [S.PRE_START] = function(vars)
+      if proj.result(vars) then la.ui("Taken") end
+      proj.tick(vars)
+
+      local v = la.sensor(1)                      -- 1 = battery divider
+      vars.batt = v and string.format("%.2fV", v) or "--"
+    end,
+
     [S.ACTIVE] = function(vars)
       -- Everyone is a valid target: no team check needed.
       local target = proj.result(vars)

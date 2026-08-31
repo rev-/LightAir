@@ -257,6 +257,13 @@ struct RadioConfig {
 namespace RadioDefaults {
     constexpr uint16_t REPLY_TIMEOUT_MS = 2000;
     constexpr uint8_t  CHANNEL          = 1;
+    // Sanity bounds on a received RSSI.  A real frame is negative dBm and
+    // no weaker than the radio's own floor; anything outside that is a
+    // driver artefact, and the rulesets' proximity gates (`rssi < threshold
+    // -> reject`) would read it as "touching the antenna" and all open at
+    // once.  Out-of-range readings become RSSI_NONE, which fails every gate.
+    constexpr int8_t   RSSI_FLOOR_DBM   = -110;
+    constexpr int8_t   RSSI_NONE        = -128;
 }
 
 // ---------------------------------------------------------------

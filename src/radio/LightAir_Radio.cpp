@@ -293,6 +293,21 @@ const RadioReport& LightAir_Radio::poll() {
         const int kMinLen = (int)offsetof(RadioPacket, payload);
         if (rawLen < kMinLen) continue;  // malformed — skip
 
+        // Proximity gates must FAIL CLOSED on a reading that cannot be real.
+        //
+        // Every gate in the rulesets is `pkt.rssi < threshold -> reject`
+        // against a negative threshold, so a bogus 0 (or any positive value)
+        // reads as "touching the antenna" and opens every one of them at
+        // once: a player far from a BASE walks into the game, a CP counts a
+        // presence nobody is standing at.  On this core the 4.x path
+        // recovers RSSI by reaching behind the driver's payload pointer,
+        // which is exactly the kind of thing that returns nonsense when it
+        // is wrong.  A received frame is always negative dBm and never
+        // below the radio's floor, so anything else becomes an emphatic
+        // "very far" rather than a free pass.
+        if (rawRssi >= 0 || rawRssi < RadioDefaults::RSSI_FLOOR_DBM)
+            rawRssi = RadioDefaults::RSSI_NONE;
+
         RadioPacket pkt = {};
         memcpy(&pkt, rawBuf, rawLen);
         processPacket(pkt, rawRssi);
