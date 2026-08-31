@@ -55,7 +55,8 @@ local proj = la.lib("projector")
 -- The baseline profile reproduces what std.shiner did here: one
 -- energy per beam, a full refill after the configured idle, both
 -- read from this game's own config vars.
-proj.define{ vars = { energy = "energy", spent = "energy_spent" } }
+proj.define{ vars = { energy = "energy", spent = "energy_spent",
+                      reload = "reload", reload_ms = "reload_ms" } }
 
 local S   = { PRE_START = 0, ACTIVE = 1, DOWN = 2, SUB_END = 3 }
 local MSG = la.msg
@@ -228,6 +229,11 @@ return {
     { id = "time_left",    default = 500, countdown_in = { S.ACTIVE, S.DOWN } },
     { id = "points",       default = 0   },
     { id = "energy_spent", default = 0   },
+    -- The projector's reload clock, read by the energy cell's bar:
+    -- reload = millis the wait began (0 = not waiting), reload_ms =
+    -- how long it takes.  Both written by projector.lua.
+    { id = "reload",       default = 0 },
+    { id = "reload_ms",    default = 0 },
     { id = "shone_times",  default = 0   },
     { id = "players_lit",  default = 0   },
     -- <visitors before this one><projector digit>, see the header.
@@ -243,7 +249,12 @@ return {
     { var = "time_left",    icon = "TIME",   col = 0, row = 1,
       states = { S.PRE_START, S.ACTIVE, S.DOWN } },
     { var = "lives",        icon = "LIFE",   col = 0, row = 0, states = { S.ACTIVE } },
-    { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.ACTIVE } },
+    -- Energy, and — while the pool is empty — a bar filling over the
+    -- recharge.  The projector owns both the duration and the instant
+    -- the wait began, because a refill starts at the trigger's RELEASE,
+    -- not when the pool hit zero.
+    { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.ACTIVE },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload" },
     { var = "points",       icon = "SCORE",  col = 1, row = 1,
       states = { S.ACTIVE, S.DOWN, S.SUB_END } },
     -- Stats screen: counter + lit/shone above, energy spent + points below.

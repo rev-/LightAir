@@ -63,7 +63,8 @@ local pending_infected = false   -- a viral lit reached us this cycle
 -- on infection and never given back, which is the shape of the game.
 local P_VIRUS = 11
 proj.define{
-  vars     = { energy = "energy", spent = "energy_spent" },
+  vars     = { energy = "energy", spent = "energy_spent",
+               reload = "reload", reload_ms = "reload_ms" },
   profiles = {
     { id = 0, name = "CLEAN", cooldown_ms = 0,
       max_energy = "energy_max",
@@ -135,6 +136,12 @@ return {
 
   vars = {
     { id = "energy",     default = 50 },
+    { id = "energy_spent", default = 0 },
+    -- The projector's reload clock, read by the energy cell's bar:
+    -- reload = millis the wait began (0 = not waiting), reload_ms =
+    -- how long it takes.  Both written by projector.lua.
+    { id = "reload",       default = 0 },
+    { id = "reload_ms",    default = 0 },
     { id = "energy_max", default = 50 },
     { id = "time_left",  default = 600, countdown_in = { S.CLEAN, S.VIRUS } },
     { id = "clean_left", default = 0  },   -- clean players remaining
@@ -149,7 +156,12 @@ return {
     { var = "role",       icon = "ROLE",   col = 0, row = 0, states = { S.CLEAN } },
     { var = "clean_left", icon = "LIFE",   col = 1, row = 0, states = { S.CLEAN } },
     { var = "time_left",  icon = "TIME",   col = 0, row = 1, states = { S.CLEAN, S.VIRUS } },
-    { var = "energy",     icon = "ENERGY", col = 1, row = 1, states = { S.CLEAN, S.VIRUS } },
+    -- Energy, and — while the pool is empty — a bar filling over the
+    -- recharge.  The projector owns both the duration and the instant
+    -- the wait began, because a refill starts at the trigger's RELEASE,
+    -- not when the pool hit zero.
+    { var = "energy",     icon = "ENERGY", col = 1, row = 1, states = { S.CLEAN, S.VIRUS },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload" },
     -- VIRUS screen
     { var = "role",       icon = "ROLE",   col = 0, row = 0, states = { S.VIRUS } },
     { var = "infections", icon = "SCORE",  col = 1, row = 0, states = { S.VIRUS } },

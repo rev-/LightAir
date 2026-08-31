@@ -17,7 +17,8 @@ local proj = la.lib("projector")
 -- The baseline profile reproduces what std.shiner did here: one
 -- energy per beam, a full refill after the configured idle, both
 -- read from this game's own config vars.
-proj.define{ vars = { energy = "energy", spent = "energy_spent" } }
+proj.define{ vars = { energy = "energy", spent = "energy_spent",
+                      reload = "reload", reload_ms = "reload_ms" } }
 
 local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
@@ -134,6 +135,11 @@ return {
     { id = "time_left",    default = 900, countdown_in = { S.IN_GAME, S.OUT_GAME } },
     { id = "team_points",  default = 0  },              -- my team's CP total (winner var)
     { id = "energy_spent", default = 0  },
+    -- The projector's reload clock, read by the energy cell's bar:
+    -- reload = millis the wait began (0 = not waiting), reload_ms =
+    -- how long it takes.  Both written by projector.lua.
+    { id = "reload",       default = 0 },
+    { id = "reload_ms",    default = 0 },
     { id = "shone_times",  default = 0  },
     -- Text slot: bound to the LCD like an int slot, but a char buffer.
     { id = "score_str",    text = true, len = 8, default = "0/0" },
@@ -141,7 +147,12 @@ return {
 
   monitor = {
     { var = "lives",        icon = "LIFE",   col = 0, row = 0, states = { S.IN_GAME } },
-    { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME } },
+    -- Energy, and — while the pool is empty — a bar filling over the
+    -- recharge.  The projector owns both the duration and the instant
+    -- the wait began, because a refill starts at the trigger's RELEASE,
+    -- not when the pool hit zero.
+    { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload" },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
     { var = "score_str",    icon = "SCORE",  col = 1, row = 1, states = { S.IN_GAME } },
     { var = "game_time",    icon = "TIME",   col = 0, row = 0, states = { S.GAME_END } },

@@ -83,9 +83,12 @@ static int failures = 0;
 } while (0)
 
 // Find a monitor var's backing int by (partial) name.
+// BAR is an INT row that renders as a filling bar while it sits at its
+// trigger value — same `asInt` slot behind it — so both count as a number.
 static int* slotOf(const LightAir_Game& g, const char* name) {
     for (uint8_t i = 0; i < g.monitorCount; i++)
-        if (g.monitorVars[i].type == VarType::INT &&
+        if ((g.monitorVars[i].type == VarType::INT ||
+             g.monitorVars[i].type == VarType::BAR) &&
             strcmp(g.monitorVars[i].name, name) == 0)
             return g.monitorVars[i].asInt;
     return nullptr;
@@ -303,7 +306,11 @@ int main() {
 
     // ---- 6. Behaviour tick: trigger held -> shine, energy drops ----
     int* energy = slotOf(game, "energy");
-    CHECK(energy && *energy == 50, "energy from config");
+    if (!energy) {
+        printf("  FAIL no energy slot — the rest of this block would segfault\n");
+        return ++failures;
+    }
+    CHECK(*energy == 50, "energy from config");
     InputReport inputs = {};
     inputs.buttonCount = 1;
     inputs.buttons[0].id = 0;                              // TRIG_1

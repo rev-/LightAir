@@ -802,6 +802,48 @@ do
                       checked))
 end
 
+-- ================================================================
+--   Every var role a projector is given must be DECLARED
+--
+--   proj.define{ vars = { spent = "energy_spent", ... } } names game vars
+--   the projector writes.  On the device those writes go through the vars
+--   proxy, and writing a name the ruleset never declared is a Lua error —
+--   which aborts the whole update callback for that tick.  Since the
+--   projector writes `spent` on the accepted-shine path, a missing
+--   declaration reads to a player as a trigger that fires once and then
+--   stops: energy drops, and the rest of the tick (recharge included)
+--   never runs again.  virus.lua shipped exactly that.
+--
+--   The harness backs `vars` with a plain table, which accepts anything —
+--   so nothing else here can catch it.  Read the declarations instead.
+-- ================================================================
+do
+  local checked = 0
+  for _, f in ipairs(files) do
+    local fh = assert(io.open(ROOT .. f .. ".lua", "r"))
+    local src = fh:read("a"); fh:close()
+
+    -- The ids the ruleset declares, from its config and vars tables.
+    local declared = {}
+    for id in src:gmatch('{%s*id%s*=%s*"([%w_]+)"') do declared[id] = true end
+
+    -- The var roles handed to proj.define{ vars = { ... } }.
+    local block = src:match('proj%.define%s*{.-vars%s*=%s*{(.-)}')
+    if block then
+      checked = checked + 1
+      for role, id in block:gmatch('([%w_]+)%s*=%s*"([%w_]+)"') do
+        if not declared[id] then
+          failures = failures + 1
+          print(string.format("  FAIL %-12s projector var '%s' = \"%s\" is not declared",
+                              f, role, id))
+        end
+      end
+    end
+  end
+  print(string.format("OK   proj vars     %d rulesets declare every var their projector writes",
+                      checked))
+end
+
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")
 local keys = {}
 for k in pairs(totem_sizes) do keys[#keys+1] = k end

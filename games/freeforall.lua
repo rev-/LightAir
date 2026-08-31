@@ -38,7 +38,8 @@ local PICKUP_RSSI = -57     -- ~2 m: BONUS/MALUS claim gate
 -- the loop this file used to spell out inline — one energy per beam, a full
 -- refill after the configured idle, both read from this game's own config.
 local proj = la.lib("projector")
-proj.define{ vars = { energy = "energy", spent = "energy_spent" } }
+proj.define{ vars = { energy = "energy", spent = "energy_spent",
+                      reload = "reload", reload_ms = "reload_ms" } }
 
 -- ---- Private game state -----------------------------------------
 -- Anything that is NOT shown on the LCD, NOT edited in the menu and
@@ -81,6 +82,11 @@ return {
     { id = "time_left",    default = 900, countdown_in = { S.IN_GAME, S.OUT_GAME } },
     { id = "points",       default = 0  },
     { id = "energy_spent", default = 0  },
+    -- The projector's reload clock, read by the energy cell's bar:
+    -- reload = millis the wait began (0 = not waiting), reload_ms =
+    -- how long it takes.  Both written by projector.lua.
+    { id = "reload",       default = 0 },
+    { id = "reload_ms",    default = 0 },
     { id = "shone_times",  default = 0  },
   },
 
@@ -88,7 +94,12 @@ return {
   monitor = {
     -- in-game screen
     { var = "lives",       icon = "LIFE",   col = 0, row = 0, states = { S.IN_GAME } },
-    { var = "energy",      icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME } },
+    -- Energy, and — while the pool is empty — a bar filling over the
+    -- recharge.  The projector owns both the duration and the instant
+    -- the wait began, because a refill starts at the trigger's RELEASE,
+    -- not when the pool hit zero.
+    { var = "energy",      icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload" },
     { var = "time_left",   icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
     { var = "points",      icon = "SCORE",  col = 1, row = 1, states = { S.IN_GAME } },
     -- end-game screen (config vars can be monitored too)
