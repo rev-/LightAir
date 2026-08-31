@@ -26,6 +26,13 @@ void LightAir_DisplayCtrl::begin() {
  *   SET MANAGEMENT
  * ========================================================= */
 
+void LightAir_DisplayCtrl::resetBindingSets() {
+    _setCount     = 0;
+    _selectedSet  = 0;
+    _activeSet    = 0;
+    _pendingClear = true;
+}
+
 uint8_t LightAir_DisplayCtrl::createBindingSet() {
     if (_setCount >= DisplayDefaults::MAX_SETS) return 255;
     _sets[_setCount].count = 0;

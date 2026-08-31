@@ -898,6 +898,38 @@ int main() {
         }
     }
 
+    // ---- 17. Binding sets belong to one ruleset at a time ------------
+    // GameRunner::begin builds one display binding set per state that shows
+    // anything, plus one to freeze the screen on.  The table is sized to what
+    // a single ruleset needs, so a second begin() must rebuild it rather than
+    // append to the last one's — otherwise a restart, or switching game
+    // without a reboot, silently runs it out and the screen stops updating.
+    {
+        FakeDisplay          raw2;
+        LightAir_DisplayCtrl d2(raw2);
+        FakeAudio            a2; FakeVib v2; FakeRGB r2;
+        LightAir_UICtrl      u2(a2, v2, r2);
+        LightAir_InputCtrl   in2;
+        LightAir_RadioTestTransport tr2;
+        LightAir_Radio       rad2(tr2, 2, 0x42, 0, 0);
+        LightAir_GameRunner  run2;
+
+        CHECK(shared.load("games/festasportsasso.lua"),
+              "festasportsasso loads for the binding-set test");
+        const LightAir_Game& g2 = shared.descriptor();
+
+        run2.begin(g2, d2, in2, rad2, &u2);
+        const uint8_t first = d2.bindingSetCount();
+        CHECK(first > 0 && first <= DisplayDefaults::MAX_SETS,
+              "the first begin built a plausible number of sets");
+
+        // Enough repeats to overflow the table if they accumulated.
+        for (uint8_t i = 0; i < DisplayDefaults::MAX_SETS; i++)
+            run2.begin(g2, d2, in2, rad2, &u2);
+        CHECK(d2.bindingSetCount() == first,
+              "repeated begin() rebuilds the same sets instead of appending");
+    }
+
     printf(failures == 0 ? "\nLUAGAME HOST TESTS PASS\n" : "\n%d FAILURES\n", failures);
     return failures == 0 ? 0 : 1;
 }

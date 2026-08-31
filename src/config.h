@@ -281,8 +281,19 @@ namespace InputDefaults {
 // Display configuration
 // ---------------------------------------------------------------
 namespace DisplayDefaults {
-    constexpr uint8_t MAX_SETS          = 32;
-    constexpr uint8_t MAX_BINDINGS      = 8;
+    // One binding set per game state that shows anything, plus one empty set
+    // the runner freezes the screen with after scoring.  So MAX_SETS is in
+    // practice the cap on how many states may carry a display: 12 leaves room
+    // for 11, against LuaDefaults::MAX_STATES = 8 today.
+    //
+    // The sets are the largest single object in the firmware
+    // (MAX_SETS × MAX_BINDINGS × 76 B) and these boards have no PSRAM, so
+    // both numbers are sized to what a ruleset can reach rather than left
+    // round: the busiest stock game uses 5 sets of 4 bindings.
+    constexpr uint8_t MAX_SETS          = 12;
+    // The content area is CONTENT_HEIGHT / CELL_HEIGHT rows of CELL_COLS
+    // cells — four on this glass — so 6 is already headroom.
+    constexpr uint8_t MAX_BINDINGS      = 6;
     constexpr uint8_t SCREEN_WIDTH      = 128;
     constexpr uint8_t SCREEN_HEIGHT     = 64;
     constexpr uint8_t TRAY_HEIGHT       = 30;

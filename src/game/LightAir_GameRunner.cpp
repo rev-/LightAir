@@ -39,6 +39,9 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     _sensorReadPending   = false;
 
     // -- Build display binding sets from MonitorVar::stateMask --
+    // From zero: the set table belongs to one ruleset at a time, and a second
+    // begin() in the same boot would otherwise append to the last one's.
+    display.resetBindingSets();
 
     // Pass 1: collect unique state indices that need a binding set.
     for (uint8_t v = 0; v < game.monitorCount; v++) {

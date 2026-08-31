@@ -18,7 +18,14 @@ public:
     /* ================================
      *       BINDING SET MANAGEMENT
      *    =================================== */
+    // Drop every set, so a second GameRunner::begin() rebuilds from zero
+    // instead of appending.  The sets are a fixed table sized to what one
+    // ruleset needs; without this a restart in the same boot would run it out.
+    void    resetBindingSets();
     uint8_t createBindingSet();
+    // How many sets exist.  Public so the host suite can assert that a
+    // second GameRunner::begin() rebuilds rather than appends.
+    uint8_t bindingSetCount() const { return _setCount; }
     void selectBindingSet(uint8_t setId);
     void activateBindingSet(uint8_t setId);
 
