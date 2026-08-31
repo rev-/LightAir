@@ -7,14 +7,14 @@
 // built so the menu scales with the flash, not with RAM.
 //
 //   begin()            mounts LittleFS (formatting a blank partition)
-//                      and seeds the embedded stock games into
-//                      /games whenever the on-flash copy differs
-//                      byte-for-byte from the one compiled into the
-//                      firmware — a freshly flashed device is
-//                      playable with no upload step, and a firmware
-//                      update refreshes its stock games.  Stock
-//                      filenames are firmware-owned; custom games
-//                      live under their own filenames.
+//                      and seeds the embedded stock games into /games,
+//                      so a freshly flashed device is playable with no
+//                      upload step.  A ruleset is a FILE and editing it
+//                      is all it takes to change the game: seeding
+//                      remembers the hash of what it wrote, refreshes a
+//                      stock file only while it still matches, and
+//                      leaves an edited one alone for ever after.
+//                      Delete a file to get the stock version back.
 //
 //   registerLuaGames() scans /games/*.lua and registers a lightweight
 //                      MANIFEST per file (name + typeId, ~80 bytes)

@@ -437,8 +437,8 @@ Full model, semantics, wire encoding, versioning and failure modes:
   object — never `luaL_loadfile`/`fopen`, which resolve against the VFS
   base path the Arduino core mounts LittleFS under and cannot see
   `/games/...` at all.
-- **Game store** (`LightAir_GameStore`): mounts FS (seeding the embedded
-  stock games byte-exact on first boot / firmware update), scans `/games`,
+- **Game store** (`LightAir_GameStore`): mounts FS, seeds the embedded stock
+  games, scans `/games`,
   and reads each file at boot *only far enough* to extract `api`, `type_id`,
   `name` (`peekManifest`, on a scratch instance — no descriptor, no
   trampoline slot).  It registers one lightweight manifest + placeholder
@@ -453,6 +453,18 @@ Full model, semantics, wire encoding, versioning and failure modes:
   beside it.  Totems need no files at
   all: their behaviour travels as TotemVM programs in the activation reply
   (§5).
+  **An edited ruleset wins.** A ruleset is a file, and editing that file —
+  over the Share-games upload or straight on the filesystem — has to be all
+  it takes to change the game, or shipping rulesets as files buys nothing and
+  every tweak means a rebuild. So seeding records the hash of what it wrote
+  (NVS, `lightair`/`seed_hash`): a stock file is refreshed from a new firmware
+  only while it still matches that hash, and a file somebody has changed is
+  left alone from then on, logged once as `keeping edited …`. Deleting a file
+  restores the stock copy on the next boot. Editing `games/*.lua` **in the
+  repo** is different — those reach the device through
+  `LightAir_GamesBundle.h`, which `make` regenerates from the wildcard, so
+  build with `make` rather than invoking `arduino-cli` directly.
+
   Both the ruleset and its libraries are **streamed** into the parser, one
   256-byte block at a time, never read whole.  A load compiles three files
   — the game plus `std.lua` plus `projector.lua`, ~65 KB of source — and a
