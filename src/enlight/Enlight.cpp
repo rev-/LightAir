@@ -12,6 +12,8 @@ static const char* TAG = "Enlight";
 
 Enlight::Enlight(const EnlightCalib& cal) : _cal(cal) {}
 Enlight::~Enlight() {
+    // The worker holds a pointer to this object, so it has to go first.
+    if (_taskHandle) { vTaskDelete(_taskHandle); _taskHandle=nullptr; }
     heap_caps_free(_ledTxBuf);
     heap_caps_free(_ledTxBufLow);
     heap_caps_free(_adcTxBuf);
@@ -196,6 +198,27 @@ bool Enlight::begin(spi_device_handle_t adcHandle) {
     _adcTrans.length=_adcBufBytes*8;
     _adcTrans.rxlength=_adcBufBytes*8;
 
+    // The cycle worker, created ONCE and here — at boot, before LittleFS is
+    // scanned and before any Lua state exists, when internal RAM is both
+    // plentiful and unfragmented.  It then waits on a notification for the
+    // rest of the device's life.
+    //
+    // It used to be created per cycle and deleted at the end of each one:
+    // ten task creations per trigger pull, each needing 4 KB of CONTIGUOUS
+    // internal RAM, each freed only when the idle task next ran.  These
+    // boards have no PSRAM, so once a loaded ruleset had filled the heap
+    // with thousands of small Lua allocations there was no 4 KB block left
+    // and every creation failed — silently, at first, which is a trigger
+    // that appears to work once and then never again.
+    _taskArgs={this};
+    if (xTaskCreatePinnedToCore(dmaTask,"EnlightDMA",4096,&_taskArgs,
+                                configMAX_PRIORITIES-1,&_taskHandle,
+                                EnlightDefaults::TASK_CORE) != pdPASS) {
+        _taskHandle=nullptr;
+        ESP_LOGE(TAG,"cannot create the cycle task");
+        return false;
+    }
+
     ESP_LOGI(TAG,"begin() OK  perCycle=%lu  adcConvs=%lu",
              (unsigned long)_periodsPerCycle,(unsigned long)_adcConvsPerCycle);
     return true;
@@ -244,10 +267,10 @@ bool Enlight::run() {
     gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,1);
     _afeOn=true;
     if (!spawnCycle()) {
-        // Nothing started, so leave no trace of the attempt: the caller must
-        // be free to try again next tick, and must not be charged a beam for
-        // one that never happened.
-        ESP_LOGE(TAG, "run: could not start the cycle task");
+        // Only reachable when begin() failed, so the device has no worker at
+        // all.  Leave no trace of the attempt: the caller must be free to try
+        // again, and must not be charged a beam for one that never happened.
+        ESP_LOGE(TAG, "run: no cycle task — begin() did not succeed");
         if (!_afeHold) {
             gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
             _afeOn=false;
@@ -601,17 +624,13 @@ EnlightResult Enlight::classifyNear() {
 /* ============================================================
  *   spawnCycle() / onCycleDone() / dmaTask()
  * ============================================================ */
+// Release the worker for one cycle.  It is already running and blocked on
+// this notification, so nothing is allocated here and this cannot fail for
+// want of memory — which is the whole point of the change (see begin()).
 bool Enlight::spawnCycle() {
-    _taskArgs={this};
-    // A run is a CHAIN of these: each cycle's task starts the next one and
-    // then deletes itself, and the deleted stack only returns to the heap
-    // when the idle task next runs.  So a device short on internal RAM can
-    // fail here mid-chain — and the failure has to be reported, because a
-    // chain that stops silently leaves _complete false forever, which is a
-    // projector that fires exactly once and then never again.
-    return xTaskCreatePinnedToCore(dmaTask,"EnlightDMA",4096,&_taskArgs,
-                                   configMAX_PRIORITIES-1,&_taskHandle,
-                                   EnlightDefaults::TASK_CORE) == pdPASS;
+    if (!_taskHandle) return false;          // begin() never succeeded
+    xTaskNotifyGive(_taskHandle);
+    return true;
 }
 
 // End of run: classify what the cycles gathered, hand it to poll(), drop the
@@ -631,6 +650,12 @@ void Enlight::finishRun() {
 }
 
 void Enlight::onCycleDone() {
+    // Stale wake-up: the run this cycle belonged to was already closed out by
+    // poll()'s stall backstop.  Now that the worker outlives a run, a pending
+    // notification can survive one — and decrementing an unsigned zero below
+    // would wrap and spawn cycles forever.
+    if (_repsRemaining == 0) return;
+
     const uint32_t satBefore = _satCount;
     processAdcCycle();
     _repsRemaining--;
@@ -657,26 +682,34 @@ void Enlight::onCycleDone() {
         // The chain is broken and nothing will ever set _complete.  Close the
         // run out on the cycles we did get rather than wedging: a short
         // measurement is a worse reading, a wedged one is a dead trigger.
-        ESP_LOGE(TAG, "cycle task failed with %lu reps left; closing the run short",
+        ESP_LOGE(TAG, "lost the cycle task with %lu reps left; closing the run short",
                  (unsigned long)_repsRemaining);
         _repsRemaining=0;
         finishRun();
     }
 }
 
+// The cycle worker.  Created once by begin() and never deleted: it sleeps on
+// a notification and runs exactly one DMA cycle per spawnCycle().
+//
+// onCycleDone() calls spawnCycle() for the next cycle of the same run, which
+// notifies this task from inside itself — the notification counter is already
+// 1 by the time the take below runs again, so the loop simply continues.
 void Enlight::dmaTask(void* arg) {
     Enlight* s=static_cast<TaskArgs*>(arg)->self;
-    if (s->_firstCycle) {
-        s->_firstCycle=false;
-        const int64_t t0=esp_timer_get_time();
-        while (esp_timer_get_time()-t0 < (int64_t)EnlightDefaults::AFE_STARTUP_MICROS) {}
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+        if (s->_firstCycle) {
+            s->_firstCycle=false;
+            const int64_t t0=esp_timer_get_time();
+            while (esp_timer_get_time()-t0 < (int64_t)EnlightDefaults::AFE_STARTUP_MICROS) {}
+        }
+        spi_transaction_t& ledTx = s->_useLowPower ? s->_ledTransLow : s->_ledTrans;
+        spi_device_queue_trans(s->_ledDevice,&ledTx,portMAX_DELAY);
+        spi_device_queue_trans(s->_adcDevice,&s->_adcTrans,portMAX_DELAY);
+        spi_transaction_t* r;
+        spi_device_get_trans_result(s->_ledDevice,&r,portMAX_DELAY);
+        spi_device_get_trans_result(s->_adcDevice,&r,portMAX_DELAY);
+        s->onCycleDone();
     }
-    spi_transaction_t& ledTx = s->_useLowPower ? s->_ledTransLow : s->_ledTrans;
-    spi_device_queue_trans(s->_ledDevice,&ledTx,portMAX_DELAY);
-    spi_device_queue_trans(s->_adcDevice,&s->_adcTrans,portMAX_DELAY);
-    spi_transaction_t* r;
-    spi_device_get_trans_result(s->_ledDevice,&r,portMAX_DELAY);
-    spi_device_get_trans_result(s->_adcDevice,&r,portMAX_DELAY);
-    s->onCycleDone();
-    vTaskDelete(NULL);
 }
