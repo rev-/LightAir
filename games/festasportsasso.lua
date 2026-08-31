@@ -61,7 +61,7 @@ local S   = { PRE_START = 0, ACTIVE = 1, DOWN = 2, SUB_END = 3 }
 local MSG = la.msg
 local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
 
-local NEAR_CP_RSSI   = -65      -- ~3 m: CP presence gate
+local NEAR_CP_RSSI   = -60      -- ~2.5 m: CP presence gate
 local NEAR_BASE_RSSI = -57      -- ~2 m: BASE respawn gate
 local PICKUP_RSSI    = -57      -- ~2 m: BONUS/MALUS claim gate
 local CP_NONE        = 0xFF
