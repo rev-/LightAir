@@ -18,7 +18,7 @@ Measured encoded sizes of the five standard roles (reference encoder):
 | Role | bytes | | Role | bytes |
 |---|---|---|---|---|
 | BASE (any team) | 41 | | FLAG | 91 |
-| BONUS / MALUS | 53 | | CP (the worst case) | 191 |
+| BONUS / MALUS | 53 | | CP (the worst case) | 213 |
 
 Budget: 225 bytes of program in the 237-byte 0xF1 payload.  Programs are
 data, so the projector validates (and can even simulate) them at
@@ -139,15 +139,33 @@ totems = {
 `std.totems.base(team)`, `.bonus()`, `.malus()`, `.flag(team)`, `.cp()` —
 so most games write one-liners; `games/freeforall.lua` spells the tables
 out in full as the tutorial.  The CP program in `std.lua` is the acid test:
-the hardest existing role is eight rules / 191 bytes, using ordered `cont`
-rules over one 2 s window (collect presence → attach/score/settle/contest/
-idle → epilogue: clear ACC, beacon owner).  Attaching pays a point
-immediately and starts the emission period, so a capture is felt at once
-and each further period of unchallenged control pays another.  The
-"settle" rule exists because strip backgrounds are sticky: a contest that
-ends without changing the owner is not an event the ring would otherwise
-hear about, so R1 remembers that the contest pattern is up and the rule
-puts the owner's colour back.
+the hardest existing role is nine rules / 213 bytes (12 of the 225-byte
+budget free), using ordered `cont` rules over one 2 s window (collect
+presence → attach/score/release/settle/contest/idle → epilogue: clear
+ACC, beacon owner).  Attaching pays a point immediately and starts the
+emission period, so a capture is felt at once and each further period of
+unchallenged control pays another.
+
+Two rules exist purely to keep the ring honest about who is actually
+there, both relying on **RSSI staying player-side by doctrine** (§0
+point 4): the totem's own presence-collection rule has no RSSI guard at
+all, so an owner going quiet — RSSI dropped, or simply stopped
+replying (a shone player, say) — is invisible to the totem except as an
+empty accumulator.
+- **"release"** (new): an owned, uncontested CP that gets a fully empty
+  window releases to neutral rather than going on broadcasting an owner
+  who is not there. It has to run BEFORE "settle" — register writes are
+  visible to later guards within the same tick, and release's own guard
+  requires R1==0, so if it ran after settle (which itself clears R1) it
+  would fire in the very same window a contest ends, collapsing settle's
+  one-window grace straight into release. Ahead of settle it reads R1 as
+  the tick started with it, so an uncontested owner releases on the very
+  next empty window while a contest that empties out still gets its
+  grace window first.
+- **"settle"** exists because strip backgrounds are sticky: a contest
+  that ends without changing the owner is not an event the ring would
+  otherwise hear about, so R1 remembers that the contest pattern is up
+  and the rule puts the owner's colour back.
 
 Rule shape (authoring):
 
