@@ -77,8 +77,8 @@ gets a proxy**:
 Because config vars are ordinary slots, the flow the user asked for falls out
 naturally:
 
-1. Boot: game store scans `/games/*.lua`, extracts `{name, type_id, path}`
-   manifests for the game list.
+1. Boot: game store scans `/games/stock/*.lua` then `/games/custom/*.lua`,
+   extracts `{name, type_id, path}` manifests for the game list.
 2. DM selects a game → the file is loaded, slots are allocated, `ConfigVar[]`
    is synthesized from the `config` table (name/min/max/step/default).
 3. The existing S4a menu edits the slots; the existing config blob
@@ -432,13 +432,15 @@ Full model, semantics, wire encoding, versioning and failure modes:
 ## 6. Storage and exchange
 
 - **Filesystem**: LittleFS on the existing `default_8MB` partition scheme's
-  SPIFFS partition. Games live in `/games/*.lua` (a few KB each; hundreds fit).
-  Paths are LittleFS-relative, so every read goes through the `LittleFS`
-  object — never `luaL_loadfile`/`fopen`, which resolve against the VFS
-  base path the Arduino core mounts LittleFS under and cannot see
-  `/games/...` at all.
+  SPIFFS partition. Games live under `/games/stock/*.lua` (firmware-owned)
+  and `/games/custom/*.lua` (player-owned); libraries live in `/games/lib/`.
+  A few KB each; hundreds fit. Paths are LittleFS-relative, so every read
+  goes through the `LittleFS` object — never `luaL_loadfile`/`fopen`, which
+  resolve against the VFS base path the Arduino core mounts LittleFS under
+  and cannot see `/games/...` at all.
 - **Game store** (`LightAir_GameStore`): mounts FS, seeds the embedded stock
-  games, scans `/games`,
+  games into `/games/stock` and the libraries into `/games/lib`, scans
+  `/games/stock` then `/games/custom`,
   and reads each file at boot *only far enough* to extract `api`, `type_id`,
   `name` (`peekManifest`, on a scratch instance — no descriptor, no
   trampoline slot).  It registers one lightweight manifest + placeholder
@@ -453,17 +455,19 @@ Full model, semantics, wire encoding, versioning and failure modes:
   beside it.  Totems need no files at
   all: their behaviour travels as TotemVM programs in the activation reply
   (§5).
-  **An edited ruleset wins.** A ruleset is a file, and editing that file —
-  over the Share-games upload or straight on the filesystem — has to be all
-  it takes to change the game, or shipping rulesets as files buys nothing and
-  every tweak means a rebuild. So seeding records the hash of what it wrote
-  (NVS, `lightair`/`seed_hash`): a stock file is refreshed from a new firmware
-  only while it still matches that hash, and a file somebody has changed is
-  left alone from then on, logged once as `keeping edited …`. Deleting a file
-  restores the stock copy on the next boot. Editing `games/*.lua` **in the
-  repo** is different — those reach the device through
-  `LightAir_GamesBundle.h`, which `make` regenerates from the wildcard, so
-  build with `make` rather than invoking `arduino-cli` directly.
+  **The directory *is* the ownership boundary.** `/games/stock` and
+  `/games/lib` have no HTTP write path at all (see below), so nothing can
+  ever be "edited" there in a way seeding needs to detect or protect —
+  every embedded file is simply rewritten on every boot, unconditionally,
+  no hashing. A ruleset a player wants to change lives in `/games/custom`
+  instead, which seeding never touches; editing (or uploading) a file there
+  is all it takes to change the game, and a firmware update can't reach it
+  even by accident. A stock game can't be shadowed by a same-named custom
+  one either: the scan visits `/games/stock` first, and the first file to
+  claim a `type_id` wins. Editing `games/*.lua` **in the repo** is
+  different — those reach the device through `LightAir_GamesBundle.h`,
+  which `make` regenerates from the wildcard, so build with `make` rather
+  than invoking `arduino-cli` directly.
 
   Both the ruleset and its libraries are **streamed** into the parser, one
   256-byte block at a time, never read whole.  A load compiles three files
@@ -491,15 +495,19 @@ Full model, semantics, wire encoding, versioning and failure modes:
   entry (next to Calibration and ID/DM) starts a SoftAP
   (`LightAir-<PLAYERSHORT>`, password `lightair`) + `WebServer.h` on
   `http://192.168.4.1/`, serving one page that both **sends** games (every
-  `/games/*.lua` and `/games/lib/*.lua` listed with a download link, served
-  as a `.lua` attachment) and **receives** them (multipart upload into
-  `/games` or `/games/lib`; name-sanitized, `.lua`-only, 64 KB cap), plus
-  delete for custom files (stock games reseed at boot).  The LCD shows
-  SSID/password/URL and the joined-station count; exiting reboots the
-  device — SoftAP displaced the ESP-NOW radio and the game list may have
-  changed, and a reboot restores the radio and rescans `/games` in one
-  stroke.  Keeping file management strictly pre-game avoids ESP-NOW/AP
-  channel coexistence issues.
+  `/games/custom/*.lua` listed with a download link, served as a `.lua`
+  attachment) and **receives** them (multipart upload into `/games/custom`;
+  name-sanitized, `.lua`-only, 64 KB cap), plus delete.  `/games/stock` and
+  `/games/lib` are never listed, downloadable, uploadable to, or
+  deletable through this server — there is no `d`/directory parameter any
+  more, every route is hardcoded to `/games/custom`, so stock rulesets and
+  libraries are structurally unreachable from here, not just protected by
+  convention.  The LCD shows SSID/password/URL and the joined-station
+  count; exiting reboots the device — SoftAP displaced the ESP-NOW radio
+  and the game list may have changed, and a reboot restores the radio and
+  rescans `/games/stock` + `/games/custom` in one stroke.  Keeping file
+  management strictly pre-game avoids ESP-NOW/AP channel coexistence
+  issues.
 - **Consistency guard (designed, NOT yet implemented)**: the config blob
   would gain the game file's CRC16 after the session token byte, so a
   joiner whose file differs (edited copy, older version) shows "Game file
@@ -548,7 +556,7 @@ Modified:
 | `LightAir_TotemDriver` / `LightAir_TotemUICtrl` | 0xF1 activation is VM-form only (the role manager and native runners are gone); `Control` effect gains the slot-based arg form |
 | 0xF0 beacon / `LightAir_GameSetupMenu` S4c | beacon advertises `[fw api, vmVersion]`; totem-assignment screen checks compatibility at setup time |
 | `LightAir.ino` (repo root — the sketch the Makefile and CI build) | mount FS, construct store/engine, hand them to menu (player path) and driver (totem path) |
-| `src/config.h` | `namespace LuaDefaults { MAX_VARS, MAX_RULES, MAX_MSG_RULES, GAMES_DIR, INSTR_BUDGET, ... }` |
+| `src/config.h` | `namespace LuaDefaults { MAX_VARS, MAX_RULES, MAX_MSG_RULES, STOCK_DIR, CUSTOM_DIR, LIB_DIR, INSTR_BUDGET, ... }` |
 | `Makefile` | extend `SRCS` wildcard so `src/libs/**` participates in dependency tracking (arduino-cli compiles `src/**` regardless) |
 
 Explicitly unchanged: `LightAir_GameRunner.{h,cpp}` (loop, score collection,

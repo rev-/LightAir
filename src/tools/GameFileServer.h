@@ -14,13 +14,18 @@
 // ShareDefaults::AP_PASSWORD) and serves a single web page on
 // http://192.168.4.1/ from which any phone or laptop can:
 //
-//   - DOWNLOAD every .lua game (and /games/lib helper) currently on
-//     the device, as plain .lua file attachments;
-//   - UPLOAD new or updated .lua files into /games (or /games/lib),
-//     which is how games travel from device to device: download from
-//     one, upload to the other;
-//   - DELETE custom games (stock games reappear at next boot via the
-//     embedded-bundle seeding, so deleting them is harmless).
+//   - DOWNLOAD every custom .lua game currently on the device, as plain
+//     .lua file attachments;
+//   - UPLOAD new or updated .lua files into /games/custom, which is how
+//     games travel from device to device: download from one, upload to
+//     the other;
+//   - DELETE a custom game.
+//
+// /games/stock and /games/lib are firmware territory and this server
+// never reaches either: there is no route that lists, downloads,
+// uploads to, or deletes anything there.  Stock games are refreshed by
+// the firmware itself at every boot (LightAir_GameStore::seedDefaults),
+// so there is nothing for this server to protect or restore there.
 //
 // Usage (from LightAir_GameSetupMenu::runShareTool):
 //   start() → loop { handleClient(); poll exit key } → device reboot.

@@ -372,8 +372,10 @@ namespace LuaDefaults {
     constexpr uint8_t  MAX_COUNTDOWNS  = 4;      // vars with countdown_in per game
     constexpr uint8_t  MAX_GAME_NAME   = 16;     // display name buffer (15 + NUL)
     constexpr uint32_t INSTR_BUDGET    = 200000; // Lua instructions per callback
-    constexpr const char* GAMES_DIR    = "/games";
-    constexpr const char* LIB_DIR      = "/games/lib";
+    constexpr const char* GAMES_DIR    = "/games";        // parent, mkdir only
+    constexpr const char* STOCK_DIR    = "/games/stock";   // firmware-owned, HTTP-unreachable
+    constexpr const char* CUSTOM_DIR   = "/games/custom";  // user rulesets, HTTP read/write
+    constexpr const char* LIB_DIR      = "/games/lib";     // firmware-owned, HTTP-unreachable
 }
 
 // ---------------------------------------------------------------

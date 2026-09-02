@@ -43,7 +43,14 @@ parts = [
 
 names = []
 for idx, f in enumerate(files):
-    rel = "/" + f.relative_to(ROOT).as_posix()  # /games/foo.lua
+    # games/lib/foo.lua stays at /games/lib/foo.lua (unreachable from HTTP,
+    # unconditionally reseeded); games/foo.lua ships to /games/stock/foo.lua
+    # so it can never collide with a player's file in /games/custom.
+    rel_src = f.relative_to(ROOT).as_posix()   # games/foo.lua or games/lib/foo.lua
+    if rel_src.startswith("games/lib/"):
+        rel = "/" + rel_src
+    else:
+        rel = "/games/stock/" + rel_src[len("games/"):]
     data = f.read_bytes()
     name = f"kGameFile{idx}"
     names.append((name, rel, len(data)))

@@ -9,13 +9,8 @@ LightAir_GameStore* LightAir_GameStore::s_instance = nullptr;
 #include <FS.h>
 #include <LittleFS.h>
 #include <esp_heap_caps.h>
-#include <nvs.h>
 #include "LightAir_LuaGame.h"
 #include "LightAir_GamesBundle.h"
-
-// Where seedDefaults() remembers what it last wrote (see the note there).
-static const char* kStoreNvsNamespace = "lightair";
-static const char* kSeedHashKey       = "seed_hash";
 
 // ONE LightAir_LuaGame for both jobs.  A full menu costs a table of small
 // manifests, not a table of Lua interpreters.
@@ -43,114 +38,36 @@ bool LightAir_GameStore::begin() {
     }
     _mounted = true;
     LittleFS.mkdir(LuaDefaults::GAMES_DIR);
+    LittleFS.mkdir(LuaDefaults::STOCK_DIR);
+    LittleFS.mkdir(LuaDefaults::CUSTOM_DIR);
     LittleFS.mkdir(LuaDefaults::LIB_DIR);
     seedDefaults();
     return true;
 }
 
-// FNV-1a over a byte range, and over a file.  Used only to answer "has
-// anyone touched this since we wrote it" — not a security property.
-static uint32_t hashBytes(const unsigned char* data, size_t len) {
-    uint32_t h = 2166136261u;
-    for (size_t i = 0; i < len; i++) { h ^= data[i]; h *= 16777619u; }
-    return h;
-}
-
-// 0 when the file does not exist or cannot be read (no content hashes to 0
-// in practice, and an unreadable file should be reseeded anyway).
-static uint32_t hashFile(const char* path) {
-    File f = LittleFS.open(path, "r");
-    if (!f) return 0;
-    uint32_t h = 2166136261u;
-    uint8_t  buf[256];
-    for (;;) {
-        size_t n = f.read(buf, sizeof(buf));
-        if (n == 0) break;
-        for (size_t i = 0; i < n; i++) { h ^= buf[i]; h *= 16777619u; }
-    }
-    f.close();
-    return h;
-}
-
 // ----------------------------------------------------------------
-// Seeding, and who owns a stock game file.
+// Seeding /games/stock and /games/lib — firmware territory.
 //
-// A ruleset is a FILE.  Editing it — over the Settings → Share games
-// upload, or straight on the filesystem — has to be all it takes to change
-// the game, or the whole point of shipping rulesets as files is lost and
-// every tweak means a rebuild.  So seeding must never overwrite an edit.
-//
-// It must also still refresh the stock games on a firmware update, or a
-// device would be stuck for ever on whatever it first booted with.
-//
-// Both, by remembering what we last wrote.  For each embedded file we keep
-// the hash of the bytes we seeded, in NVS:
-//
-//   file missing              -> write it, remember the hash
-//   on-flash hash == ours     -> untouched since we wrote it, so a changed
-//                                bundle may refresh it
-//   on-flash hash != ours     -> somebody edited it.  Leave it alone, and
-//                                say so once on the log.
-//
-// An edited stock game therefore survives firmware updates, and keeps its
-// own version of the ruleset rather than silently getting ours back.  To
-// return one to stock, delete it and reboot.
+// Neither directory has an HTTP write path (see GameFileServer): the
+// only way anything ever lands there is this function.  So there is
+// nothing a player could have edited to preserve, and every embedded
+// file is simply (re)written on every boot.  A custom ruleset lives in
+// /games/custom instead, which this function never touches — editing a
+// file there is what "the game is a file" actually means, and it
+// survives a firmware update untouched because seeding never looks at
+// that directory at all.
 // ----------------------------------------------------------------
 void LightAir_GameStore::seedDefaults() {
-    constexpr uint8_t kMax = sizeof(kEmbeddedGames) / sizeof(*kEmbeddedGames);
-    uint32_t seeded[kMax] = {};
-    size_t   blobLen = sizeof(seeded);
-
-    nvs_handle_t nvs = 0;
-    const bool haveNvs = (nvs_open(kStoreNvsNamespace, NVS_READWRITE, &nvs) == ESP_OK);
-    if (haveNvs && nvs_get_blob(nvs, kSeedHashKey, seeded, &blobLen) != ESP_OK)
-        blobLen = 0;                       // first boot, or the table grew
-    const bool haveHashes = (blobLen == sizeof(seeded));
-    if (!haveHashes) memset(seeded, 0, sizeof(seeded));
-
-    bool dirty = false;
-    uint8_t i = 0;
     for (const EmbeddedGameFile& ef : kEmbeddedGames) {
-        const uint32_t shipped = hashBytes(ef.data, ef.len);
-        const uint32_t onFlash = hashFile(ef.path);
-
-        if (onFlash == shipped) {          // already exactly this version
-            if (seeded[i] != shipped) { seeded[i] = shipped; dirty = true; }
-            i++;
-            continue;
-        }
-        // Present, and not what we last wrote: the player's copy wins.
-        if (onFlash != 0 && haveHashes && seeded[i] != 0 && onFlash != seeded[i]) {
-            Log.infoln("GameStore: keeping edited %s (delete it to restore stock)",
-                       ef.path);
-            i++;
-            continue;
-        }
-
         File f = LittleFS.open(ef.path, "w");
         if (!f) {
             Log.errorln("GameStore: cannot write %s", ef.path);
-            i++;
             continue;
         }
         size_t n = f.write(ef.data, ef.len);
         f.close();
-        if (n != ef.len) {
+        if (n != ef.len)
             Log.errorln("GameStore: short write on %s", ef.path);
-        } else {
-            Log.infoln("GameStore: seeded %s (%d bytes)", ef.path, (int)ef.len);
-            seeded[i] = shipped;
-            dirty = true;
-        }
-        i++;
-    }
-
-    if (haveNvs) {
-        if (dirty || !haveHashes) {
-            nvs_set_blob(nvs, kSeedHashKey, seeded, sizeof(seeded));
-            nvs_commit(nvs);
-        }
-        nvs_close(nvs);
     }
 }
 
@@ -165,19 +82,21 @@ static void logHeadroom(const char* what, const char* path) {
                (int)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 }
 
-uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
-    if (!_mounted) return 0;
-    s_instance = this;
-    _count = 0;
-
-    File dir = LittleFS.open(LuaDefaults::GAMES_DIR);
+// Scans one flat directory of .lua files into _manifests/_count, starting
+// from wherever a previous call (on another directory) left off.  Called
+// once for STOCK_DIR and once for CUSTOM_DIR, stock first: the duplicate-
+// typeId check below then always favours the stock file, so a custom
+// ruleset can never impersonate a stock one, even by reusing its typeId
+// rather than its filename.
+void LightAir_GameStore::scanDir(LightAir_GameManager& mgr, const char* dirPath) {
+    File dir = LittleFS.open(dirPath);
     if (!dir || !dir.isDirectory()) {
-        Log.errorln("GameStore: %s missing", LuaDefaults::GAMES_DIR);
-        return 0;
+        Log.errorln("GameStore: %s missing", dirPath);
+        return;
     }
 
     for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
-        if (f.isDirectory()) continue;                 // skips /games/lib
+        if (f.isDirectory()) continue;
         const char* name = f.name();
         size_t len = strlen(name);
         if (len < 5 || strcmp(name + len - 4, ".lua") != 0) continue;
@@ -187,7 +106,7 @@ uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
         }
 
         Manifest& m = _manifests[_count];
-        snprintf(m.path, sizeof(m.path), "%s/%s", LuaDefaults::GAMES_DIR, name);
+        snprintf(m.path, sizeof(m.path), "%s/%s", dirPath, name);
         f.close();
 
         if (!s_loadedGame.peekManifest(m.path, m.name, sizeof(m.name), &m.typeId)) {
@@ -221,6 +140,15 @@ uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
         }
         _count++;
     }
+}
+
+uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
+    if (!_mounted) return 0;
+    s_instance = this;
+    _count = 0;
+
+    scanDir(mgr, LuaDefaults::STOCK_DIR);
+    scanDir(mgr, LuaDefaults::CUSTOM_DIR);
 
     mgr.setLoadHook(&LightAir_GameStore::realizeHook);
     Log.infoln("GameStore: %d game manifest(s) registered", _count);
