@@ -13,18 +13,18 @@
 -- rules — shine the others, hold the CP totems, respawn at a BASE.
 -- A turn walks through four phases:
 --
---   PRE_START  the welcome screen — "Welcome player <counter>" — while
+--   PRE_START  the welcome screen — "Benvenuto giocatore <counter>" — while
 --              the projector is handed over.  Nothing else works until
 --              a BASE totem respawns its holder, which is both the
 --              visitor's way in and how the staff starts the turn: the
 --              BASE plays its respawn animation, the King of Hill
 --              screen comes up and the turn clock starts at sub_time.
 --   ACTIVE     the King of Hill sub-game, turn clock running.
---   DOWN       shone: "SHONE by <player>" / "GO TO BASE" on the tray
+--   DOWN       shone: "Illuminato da <player>" / "VAI ALLA BASE" on the tray
 --              while the clock keeps running; a BASE brings you back
 --              after respawn_secs — exactly as in King of Hill.
 --   SUB_END    the clock ran out: a frozen stats screen leading with
---              "#<counter> POINTS: <score>" (score = 10 per CP totem
+--              "#<counter> PUNTI: <score>" (score = 10 per CP totem
 --              point plus 1 per player lit this turn).  The A+B chord
 --              (deliberately NOT written on the screen — it is the
 --              staff's key, not the visitor's) starts the next turn.
@@ -144,10 +144,10 @@ local function cp_beacon_handler(send_presence)
       -- Only the two players actually affected by the change learn
       -- about it — the loser and the gainer — not the whole field.
       if owner == my_slot then
-        la.show("Totem acquired", 3000)
+        la.show("Totem vinto!", 3000)
         la.ui("FlagReturn")
       elseif prev == my_slot then
-        la.show("Totem lost", 3000)
+        la.show("Totem perso", 3000)
         la.ui("FlagTaken")
       end
     end
@@ -170,7 +170,7 @@ local function cp_score_handler(vars, pkt)
     vars.points = vars.points + 1
     -- A point is what the visitor is here for: cue it and name the hill
     -- that paid it, instead of letting the score cell tick by unnoticed.
-    la.show(string.format("CP %d +1", idx), 2000)
+    la.show("Totem: +1 punto", 2000)
     la.ui("ControlGain")
   end
 end
@@ -197,8 +197,8 @@ local function go_down(vars)
   vars.shone_times = vars.shone_times + 1
   respawn_at  = la.now() + vars.respawn_secs * 1000
   can_respawn = false
-  la.show("GO TO BASE", 0)
-  la.show("SHONE by " .. (shone_by or "?"), 0)
+  la.show("VAI ALLA BASE", 0)
+  la.show("Illuminato da " .. (shone_by or "?"), 0)
   la.ui("Down")
 end
 
@@ -208,9 +208,9 @@ end
 local function sub_end(vars)
   vars.tally = string.format("%d/%d", vars.players_lit, vars.shone_times)
   la.clear_tray()
-  la.show(string.format("#%d POINTS: %d",
+  la.show(string.format("#%d PUNTI: %d",
                         vars.counter, 10 * vars.points + vars.players_lit), 0)
-  la.show("Time up!", 3000)
+  la.show("Tempo scaduto!", 3000)
   la.ui("EndGame")
 end
 
@@ -237,8 +237,8 @@ local function welcome(vars)
   arm_trial(vars)
   reset_cp_engagement()
   la.clear_tray()
-  la.show("Go to a BASE!", 0)
-  la.show(string.format("Welcome player %d", vars.counter), 0)
+  la.show("Vai a una BASE!", 0)
+  la.show(string.format("Benvenuto giocatore %d", vars.counter), 0)
 end
 
 -- A BASE let the visitor in: this is where the turn actually begins.
@@ -257,7 +257,7 @@ local function start_turn(vars)
   proj.reset(vars)
   reset_cp_engagement()
   la.clear_tray()
-  la.show("Play!", 2000)
+  la.show("Gioca!", 2000)
   la.ui("Up")
 end
 
@@ -409,7 +409,7 @@ return {
   on_reply = {
     [MSG.LIT] = {
       [R.TAKEN]  = counted_lit("Taken"),
-      [R.SHONE]  = counted_lit("Lit", " SHONE!"),
+      [R.SHONE]  = counted_lit("Lit", " ILLUMINATO"),
       [R.DOWN]   = function() la.ui("AlreadyDown") end,
       [R.IMMUNE] = function() la.ui("Immune")      end,
     },
@@ -439,7 +439,7 @@ return {
         shone_by    = nil
         imm.reset()
         la.clear_tray()             -- drop the credit and the instruction
-        la.show("Back in game!", 1000)
+        la.show("Tornato in gioco!", 1000)
         la.ui("Up")
       end },
 
