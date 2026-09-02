@@ -144,10 +144,10 @@ local function cp_beacon_handler(send_presence)
       -- Only the two players actually affected by the change learn
       -- about it — the loser and the gainer — not the whole field.
       if owner == my_slot then
-        la.show(string.format("CP %d: Totem acquired", idx), 3000)
+        la.show("Totem acquired", 3000)
         la.ui("FlagReturn")
       elseif prev == my_slot then
-        la.show(string.format("CP %d: Totem lost", idx), 3000)
+        la.show("Totem lost", 3000)
         la.ui("FlagTaken")
       end
     end
