@@ -6,9 +6,13 @@
 // LightAir_GameStore — LittleFS-backed store of .lua game files,
 // built so the menu scales with the flash, not with RAM.
 //
-//   begin()            mounts LittleFS (formatting a blank partition)
-//                      and seeds the embedded stock games into
-//                      /games/stock, so a freshly flashed device is
+//   begin()            mounts LittleFS (formatting a blank partition),
+//                      and — exactly once per device, ever, gated by an
+//                      NVS flag — fully formats it first to clear out
+//                      whatever a pre-stock/custom firmware left in the
+//                      old flat /games/*.lua layout.  Then it seeds the
+//                      embedded stock games into /games/stock, so a
+//                      freshly flashed (or freshly migrated) device is
 //                      playable with no upload step.  /games/stock and
 //                      /games/lib are firmware territory: seedDefaults()
 //                      overwrites every file there, unconditionally, on

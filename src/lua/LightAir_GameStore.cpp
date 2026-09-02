@@ -9,8 +9,40 @@ LightAir_GameStore* LightAir_GameStore::s_instance = nullptr;
 #include <FS.h>
 #include <LittleFS.h>
 #include <esp_heap_caps.h>
+#include <nvs.h>
 #include "LightAir_LuaGame.h"
 #include "LightAir_GamesBundle.h"
+
+// One-time wipe of whatever LittleFS held under the OLD flat /games/*.lua
+// layout (stock and any hand-uploaded games mixed together, no /custom).
+// This partition holds nothing but games (see the file header), so a full
+// format is safe: NVS — calibration, player id, this very flag — lives on
+// a separate flash region and is untouched by it.  Gated by a persisted
+// flag so it fires exactly once per device, ever; every later boot skips
+// straight past it and /games/custom is never touched again.
+static const char* kStoreNvsNamespace = "lightair";
+static const char* kPurgedKey         = "purged_v1";
+
+static void purgeOnce() {
+    nvs_handle_t nvs = 0;
+    if (nvs_open(kStoreNvsNamespace, NVS_READWRITE, &nvs) != ESP_OK) return;
+
+    uint8_t done = 0;
+    if (nvs_get_u8(nvs, kPurgedKey, &done) == ESP_OK && done) {
+        nvs_close(nvs);
+        return;
+    }
+
+    Log.infoln("GameStore: one-time purge of the pre-stock/custom LittleFS layout");
+    LittleFS.end();
+    LittleFS.format();
+    if (!LittleFS.begin(true))
+        Log.errorln("GameStore: remount after purge failed");
+
+    nvs_set_u8(nvs, kPurgedKey, 1);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
 
 // ONE LightAir_LuaGame for both jobs.  A full menu costs a table of small
 // manifests, not a table of Lua interpreters.
@@ -36,6 +68,7 @@ bool LightAir_GameStore::begin() {
         Log.errorln("GameStore: LittleFS mount failed");
         return false;
     }
+    purgeOnce();
     _mounted = true;
     LittleFS.mkdir(LuaDefaults::GAMES_DIR);
     LittleFS.mkdir(LuaDefaults::STOCK_DIR);
