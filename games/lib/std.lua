@@ -343,6 +343,29 @@ function std.totems.cp()
                {"r", 0, "~=", 0xFF}, {"elapsed", 0, ">=", POINT_MS} },
       run = { {"bcast", MSG.CP_SCORE, {"r", 0}}, {"start", 0},
               {"anim", "Bonus"} } },
+    -- owned, uncontested (R1==0, so NOT the same window a contest just
+    -- settled — see the ordering note below), and now empty: whoever
+    -- held it either left or stopped answering (shone players don't
+    -- reply at all — see the ruleset's cp_beacon_handler).  Release it
+    -- rather than keep broadcasting a holder who is not there.
+    --
+    -- No anim action needed: clearing R0 here makes the "empty AND
+    -- R0==0xFF" rule below true for THIS SAME tick — guards are
+    -- re-evaluated live against the registers as actions run in
+    -- program order — so it plays the idle animation for us.
+    --
+    -- MUST come before the settle rule.  Settle's own action clears
+    -- R1, and since later guards see that write within the same tick,
+    -- a release rule placed after settle would fire in the very same
+    -- window a contest ends — collapsing settle's one-window grace (a
+    -- contest that empties out shows the owner once more, see below)
+    -- straight into release.  Ahead of settle, this rule still reads
+    -- R1 as it was at the START of the tick, so an uncontested owner
+    -- releases on the very next empty window (R1 was already 0) while
+    -- a contest that empties out gets its grace window first.
+    { every = 2000, cont = true,
+      when = { {"acc", "empty"}, {"r", 0, "~=", 0xFF}, {"r", 1, "==", 0} },
+      run = { {"set", 0, 0xFF} } },
     -- contest over — the challenger left, or everyone did: the hill is
     -- back to its owner, so put the owner's colour back on the ring.
     -- Sits BEFORE the contest rule on purpose: a window that is still
@@ -355,7 +378,8 @@ function std.totems.cp()
     { every = 2000, cont = true,
       when = { {"acc", "many"} },
       run = { {"anim", "ControlContest"}, {"set", 1, 1} } },
-    -- empty and never owned: stay visibly unclaimed
+    -- empty and unowned (never held, or just released above): stay
+    -- visibly unclaimed
     { every = 2000, cont = true,
       when = { {"acc", "empty"}, {"r", 0, "==", 0xFF} },
       run = { {"anim", "CPIdle", {"rgb", 80, 80, 80}}, {"set", 1, 0} } },

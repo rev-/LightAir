@@ -373,6 +373,76 @@ int main(int argc, char** argv) {
         CHECK(back && back->g == 0, "abandoned contest falls back to the owner");
     }
 
+    // ================= CP release (owner absent) =================
+    // Reported from the field: an owner who was SHONE, or simply walked
+    // away, stayed painted on the ring and kept being announced as owner
+    // forever — nothing in the program ever cleared R0 on its own, since
+    // every existing rule needs either a new single occupant or an active
+    // contest to react to.  proximity gating is entirely player-side (the
+    // totem's accbit rule has no RSSI guard at all), so the totem cannot
+    // tell "shone" from "walked off" — both just stop sending presence,
+    // which is exactly what this exercises.
+    {
+        printf("CP release:\n");
+        LightAir_TotemVM vm;
+        auto prog = readFile(dir + "/prog_cp.bin");
+        CHECK(vm.load(prog.data(), prog.size()), "load cp");
+        LightAir_TotemOutput out;
+        vm.onActivate(kAct, out);
+
+        // Slot 0 captures it alone, uncontested (r1 never set).
+        out = LightAir_TotemOutput();
+        RadioPacket owner = mkPkt(0x53, 5, 0, {1});
+        vm.onPacket(owner, -40, out);
+        runFor(vm, 2000, out);
+        const RadioOutMsg* b = lastBcast(out, 0x52);
+        CHECK(b && b->payload[0] == 0, "captured by slot 0");
+
+        // Silence for one window: the owner stopped answering (shone, or
+        // simply gone) and nobody else is present either.
+        out = LightAir_TotemOutput();
+        runFor(vm, 2000, out);
+        b = lastBcast(out, 0x52);
+        CHECK(b && b->payload[0] == 0xFF,
+              "an absent, uncontested owner is released on the next empty window");
+        CHECK(countAnim(out, TotemUIEvent::CPIdle) == 1,
+              "and the ring returns to idle");
+
+        // A fresh occupant still has to capture it properly (single,
+        // different from the now-neutral owner) -- release does not skip
+        // the normal capture path.
+        out = LightAir_TotemOutput();
+        RadioPacket newcomer = mkPkt(0x53, 4, 1, {2});
+        vm.onPacket(newcomer, -40, out);
+        runFor(vm, 2000, out);
+        b = lastBcast(out, 0x52);
+        CHECK(b && b->payload[0] == 1, "released hill still captures normally");
+
+        // The contest-settle path gets one extra window of grace: settling
+        // (r1==1 -> restore owner, r1=0) and releasing (r1==0 -> neutral)
+        // are gated so they never both fire on the SAME empty window --
+        // the existing "abandoned contest falls back to the owner" case
+        // must keep holding for exactly one window before release.  Owner
+        // is slot 1 (the newcomer captured above); a second player (slot 2)
+        // contests it, then both leave.
+        out = LightAir_TotemOutput();
+        RadioPacket a = mkPkt(0x53, 4, 1, {2});   // owner, slot 1
+        RadioPacket c = mkPkt(0x53, 6, 0, {3});   // rival, slot 2
+        vm.onPacket(a, -40, out);
+        vm.onPacket(c, -40, out);
+        runFor(vm, 2000, out);                       // contest: r1 = 1
+        out = LightAir_TotemOutput();
+        runFor(vm, 2000, out);                        // window 1: settle
+        b = lastBcast(out, 0x52);
+        CHECK(b && b->payload[0] == 1,
+              "a contest that empties out settles to the owner first");
+        out = LightAir_TotemOutput();
+        runFor(vm, 2000, out);                        // window 2: release
+        b = lastBcast(out, 0x52);
+        CHECK(b && b->payload[0] == 0xFF,
+              "and releases on the following empty window, same as any other");
+    }
+
     // ================= malformed programs =================
     {
         printf("robustness:\n");

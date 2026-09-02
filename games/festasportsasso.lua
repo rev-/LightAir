@@ -85,15 +85,22 @@ local S   = { PRE_START = 0, ACTIVE = 1, DOWN = 2, SUB_END = 3 }
 local MSG = la.msg
 local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
 
-local NEAR_CP_RSSI   = -60      -- ~2.5 m: CP presence gate
-local NEAR_BASE_RSSI = -57      -- ~2 m: BASE respawn gate
-local PICKUP_RSSI    = -57      -- ~2 m: BONUS/MALUS claim gate
-local CP_NONE        = 0xFF
+local NEAR_CP_RSSI      = -60   -- ~2.5 m: CP presence gate, to join or capture
+-- Once counted as present, a CP is held (or contested) at this looser
+-- reach instead — earned, not given: reaching it the first time still
+-- needs NEAR_CP_RSSI.  Applies to anyone who was just present, not only
+-- the recorded owner, so a multi-way contest does not flicker apart on
+-- signal noise near the tight gate while it is still being fought over.
+local NEAR_CP_RSSI_HOLD = -70
+local NEAR_BASE_RSSI    = -57   -- ~2 m: BASE respawn gate
+local PICKUP_RSSI       = -57   -- ~2 m: BONUS/MALUS claim gate
+local CP_NONE           = 0xFF
 
 -- ---- Private state ------------------------------------------------
 local my_slot     = 0           -- player id - 1; set in on_begin
 local cp_ids      = {}          -- [i] = device id of the i-th CP totem
 local cp_owner    = {}          -- [i] = last announced owner slot or CP_NONE
+local cp_engaged  = {}          -- [i] = was our presence counted last window?
 local respawn_at  = 0
 local can_respawn = false
 local shone_by    = nil         -- short name of whoever put us down
@@ -106,8 +113,25 @@ local function cp_index(sender)
   return nil
 end
 
+-- cp_engaged persists on this physical projector across visitors (the
+-- device, not the person, is what the CP totems know) and across a
+-- respawn, so it has to be cleared explicitly wherever a turn or a life
+-- restarts — an un-reset flag would hand a brand-new visitor the loose
+-- gate on a CP the PREVIOUS visitor was holding.
+local function reset_cp_engagement()
+  for i = 1, #cp_engaged do cp_engaged[i] = false end
+end
+
 -- CP beacon: track ownership changes (both playing states); declare
 -- presence by returning slot+1 only when send_presence and close enough.
+--
+-- The totem's own accbit rule has no RSSI guard at all — it counts
+-- whoever replies, full stop (see docs/totem-behavior-handshake.md,
+-- "RSSI is readable, not policy").  Proximity is entirely this
+-- decision: whether to reply, and at what reach.  cp_engaged[idx] is
+-- the hysteresis: fail to answer for ANY reason — too far, or shone
+-- and therefore not sending presence at all — and it drops, so the
+-- next attempt needs the tight gate again.
 local function cp_beacon_handler(send_presence)
   return function(vars, pkt)
     local idx = cp_index(pkt.sender)
@@ -128,9 +152,14 @@ local function cp_beacon_handler(send_presence)
       end
     end
 
-    if send_presence and pkt.rssi >= NEAR_CP_RSSI then
-      return my_slot + 1
+    if not send_presence then
+      cp_engaged[idx] = false
+      return
     end
+
+    local gate = cp_engaged[idx] and NEAR_CP_RSSI_HOLD or NEAR_CP_RSSI
+    cp_engaged[idx] = pkt.rssi >= gate
+    if cp_engaged[idx] then return my_slot + 1 end
   end
 end
 
@@ -206,6 +235,7 @@ local function welcome(vars)
   imm.reset()
   proj.reset(vars)
   arm_trial(vars)
+  reset_cp_engagement()
   la.clear_tray()
   la.show("Go to a BASE!", 0)
   la.show(string.format("Welcome player %d", vars.counter), 0)
@@ -225,6 +255,7 @@ local function start_turn(vars)
   shone_by    = nil
   imm.reset()
   proj.reset(vars)
+  reset_cp_engagement()
   la.clear_tray()
   la.show("Play!", 2000)
   la.ui("Up")
@@ -321,12 +352,13 @@ return {
     -- onto their last digit, so give a stand's projectors ids 1-9.
     vars.counter = vars.played_before * 10 + (la.my_id() % 10)
     welcome(vars)
-    cp_ids, cp_owner = {}, {}
+    cp_ids, cp_owner, cp_engaged = {}, {}, {}
     for i = 0, 5 do
       local id = la.totem_for_role("CP", i)
       if id == 0 then break end
       cp_ids[#cp_ids + 1]     = id
       cp_owner[#cp_owner + 1] = CP_NONE
+      cp_engaged[#cp_engaged + 1] = false
     end
     la.ui("GameStart")
   end,

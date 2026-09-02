@@ -24,10 +24,16 @@ local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
 local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
 
-local NEAR_CP_RSSI   = -65
-local NEAR_BASE_RSSI = -57
-local PICKUP_RSSI    = -57      -- ~2 m: BONUS/MALUS claim gate
-local CP_NONE        = 0xFF
+local NEAR_CP_RSSI      = -65   -- CP presence gate, to join or capture
+-- Once counted as present, a CP is held (or contested) at this looser
+-- reach instead — earned, not given: reaching it the first time still
+-- needs NEAR_CP_RSSI.  Applies to anyone who was just present, not only
+-- the recorded owner, so a multi-way contest does not flicker apart on
+-- signal noise near the tight gate while it is still being fought over.
+local NEAR_CP_RSSI_HOLD = -75
+local NEAR_BASE_RSSI    = -57
+local PICKUP_RSSI       = -57   -- ~2 m: BONUS/MALUS claim gate
+local CP_NONE           = 0xFF
 
 -- ---- Private state ------------------------------------------------
 local my_team       = 0
@@ -35,6 +41,7 @@ local team_o_points = 0
 local team_x_points = 0
 local cp_ids        = {}
 local cp_owner      = {}
+local cp_engaged    = {}        -- [i] = was our presence counted last window?
 local respawn_at    = 0
 local can_respawn   = false
 local shone_by      = nil       -- short name of whoever put us down
@@ -50,6 +57,12 @@ local function cp_index(sender)
   return nil
 end
 
+-- cp_engaged persists across a respawn, so it has to be cleared
+-- explicitly wherever a life restarts — see reset sites below.
+local function reset_cp_engagement()
+  for i = 1, #cp_engaged do cp_engaged[i] = false end
+end
+
 local function refresh_score_str(vars)
   local mine  = (my_team == 0) and team_o_points or team_x_points
   local other = (my_team == 0) and team_x_points or team_o_points
@@ -58,6 +71,14 @@ local function refresh_score_str(vars)
 end
 
 -- CP beacon: track ownership (both states); presence reply IN_GAME only.
+--
+-- The totem's own accbit rule has no RSSI guard at all — it counts
+-- whoever replies, full stop (see docs/totem-behavior-handshake.md,
+-- "RSSI is readable, not policy").  Proximity is entirely this
+-- decision: whether to reply, and at what reach.  cp_engaged[idx] is
+-- the hysteresis: fail to answer for ANY reason — too far, or shone
+-- and therefore not sending presence at all — and it drops, so the
+-- next attempt needs the tight gate again.
 local function cp_beacon_handler(send_presence)
   return function(vars, pkt)
     local idx = cp_index(pkt.sender)
@@ -74,7 +95,14 @@ local function cp_beacon_handler(send_presence)
       end
     end
 
-    if send_presence and pkt.rssi >= NEAR_CP_RSSI then
+    if not send_presence then
+      cp_engaged[idx] = false
+      return
+    end
+
+    local gate = cp_engaged[idx] and NEAR_CP_RSSI_HOLD or NEAR_CP_RSSI
+    cp_engaged[idx] = pkt.rssi >= gate
+    if cp_engaged[idx] then
       return my_team + 1        -- 1 = team O present, 2 = team X present
     end
   end
@@ -196,12 +224,13 @@ return {
     shone_by      = nil
     imm.reset()
     proj.reset(vars)
-    cp_ids, cp_owner = {}, {}
+    cp_ids, cp_owner, cp_engaged = {}, {}, {}
     for i = 0, 5 do
       local id = la.totem_for_role("CP", i)
       if id == 0 then break end
       cp_ids[#cp_ids + 1]     = id
       cp_owner[#cp_owner + 1] = CP_NONE
+      cp_engaged[#cp_engaged + 1] = false
     end
     refresh_score_str(vars)
     la.ui("GameStart")
@@ -282,6 +311,7 @@ return {
         can_respawn = false
         shone_by    = nil
         imm.reset()
+        reset_cp_engagement()
         la.clear_tray()             -- drop the credit and the instruction
         la.show("Back in game!", 1000)
         la.ui("Up")
