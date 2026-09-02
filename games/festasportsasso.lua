@@ -115,12 +115,16 @@ local function cp_beacon_handler(send_presence)
 
     local owner = pkt:byte(1)
     if owner ~= cp_owner[idx] then
+      local prev = cp_owner[idx]
       cp_owner[idx] = owner
-      if owner == CP_NONE then
-        la.show(string.format("CP %d neutral", idx), 3000)
-      else
-        la.show(string.format("CP %d -> P%d!", idx, owner + 1), 3000)
-        la.ui(owner == my_slot and "FlagReturn" or "FlagTaken")
+      -- Only the two players actually affected by the change learn
+      -- about it — the loser and the gainer — not the whole field.
+      if owner == my_slot then
+        la.show(string.format("CP %d: Totem acquired", idx), 3000)
+        la.ui("FlagReturn")
+      elseif prev == my_slot then
+        la.show(string.format("CP %d: Totem lost", idx), 3000)
+        la.ui("FlagTaken")
       end
     end
 
