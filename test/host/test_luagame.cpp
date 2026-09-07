@@ -719,8 +719,8 @@ int main() {
         CHECK(fs.winnerVarCount == 2 && *fs.winnerVars[1].value == 1,
               "shone_times counted");
         disp.update();
-        CHECK(!strcmp(rawDisp.tray[0], "SHONE by RED"), "down screen credits the shiner");
-        CHECK(!strcmp(rawDisp.tray[1], "GO TO BASE"), "...and what to do about it");
+        CHECK(!strcmp(rawDisp.tray[0], "Illuminato da RED"), "down screen credits the shiner");
+        CHECK(!strcmp(rawDisp.tray[1], "VAI ALLA BASE"), "...and what to do about it");
 
         // The turn clock runs out while down: stats screen, frozen.
         *clock = 0;
@@ -735,7 +735,7 @@ int main() {
         // point landed in this script, so the score is players_lit alone.
         g_millis += 3001;
         disp.update();
-        CHECK(!strcmp(rawDisp.tray[0], "#2 POINTS: 1"),
+        CHECK(!strcmp(rawDisp.tray[0], "#2 PUNTI: 1"),
               "stats screen leads with player number and turn score");
 
         // The scoring formula itself: 10 per CP totem point, 1 per player
@@ -751,7 +751,7 @@ int main() {
         if (over) over->onTransition(disp, out);
         g_millis += 3001;
         disp.update();
-        CHECK(!strcmp(rawDisp.tray[0], "#2 POINTS: 53"),
+        CHECK(!strcmp(rawDisp.tray[0], "#2 PUNTI: 53"),
               "score = 10*totem points + players lit");
 
         // Only the staff's A+B chord starts the next visitor.

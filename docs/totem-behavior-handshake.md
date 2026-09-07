@@ -91,9 +91,13 @@ actions*:
    existing `TotemUIEvent` set by id, with a color *source* (constant RGB,
    team-of-value, player-of-sender, team-of-sender, or raw args) and an
    optional team rhythm.  New visuals need firmware (they are hardware
-   anyway); new behaviours never do.  One renderer addition: the `Control`
-   effect gains a slot-based arg form (`0xFE, slot`) that does the
-   team-vs-player color mapping internally, so the VM needs no arithmetic.
+   anyway); new behaviours never do.  Two renderer additions: the `Control`
+   effect gains a slot-based arg form (`0xFE, slot`, for team CP games) and
+   a second one (`0xFD, slot`, for teamless CP games — see
+   `std.totems.cp()`'s `opts.teamless`) that both do the team-vs-player
+   color mapping internally, so the VM needs no arithmetic; and
+   `ControlScore`, a one-shot sparkle burst using the same arg forms, for
+   "this CP just paid a point" distinct from `Control`'s steady hold fill.
 
 Value operands anywhere a value is accepted: literal, `R n`,
 `PAYLOAD[i]` (1-based, like `pkt:byte(i)` in game files), `ACC.LOW`,
@@ -289,5 +293,5 @@ In order of preference:
 | `src/lua/LightAir_TotemEncoder.cpp` (serializer) | walks a role's data table → program bytes; validates limits at load; `{"cfg"}` sites recorded and patched with the live config value when the program is fetched at reply time |
 | `LightAir_GameRunner::replyToTotemBeacon` | sends the 0xF1 reply `[role][session][timeLeft][vmVersion][progLen][program]` when `game->totemProgram` provides a program for the role; sends **no reply** otherwise (there is no short form — a role without a program leaves the totem IDLE) |
 | `LightAir_TotemDriver` | accepts VM-form 0xF1 only (native runners and the role manager are deleted); routes packets to the VM RSSI-aware (`onPacket`) |
-| `LightAir_TotemUICtrl` | `Control` effect: slot-based arg form (`0xFE, slot`) |
+| `LightAir_TotemUICtrl` | `Control`/`ControlScore` effects: slot-based arg forms (`0xFE, slot` for team CP games; `0xFD, slot` for teamless ones, since 0xFE's slots 0/1 collide with player ids 1/2 there) |
 | 0xF0 beacon | carries `[fw api, vmVersion]`; the S4c menu compatibility check is still TODO |

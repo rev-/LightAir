@@ -491,7 +491,7 @@ return {
   },
 
   totems = {
-    CP    = std.totems.cp(),
+    CP    = std.totems.cp{ teamless = true },
     BASE  = std.totems.base("any"),
     BONUS = std.totems.bonus(),
     MALUS = std.totems.malus(),

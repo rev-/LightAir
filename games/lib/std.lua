@@ -303,14 +303,26 @@ function std.totems.flag(team)
   } }
 end
 
--- ---- CP: control point (Upkeep: teams 0/1; KoH: slots 0-15). ------
+-- ---- CP: control point (Upkeep: teams 0/1; KoH/festa: slots 0-15). ------
 -- R0 = owner slot (0xFF = neutral).  ACC accumulates presence bits
 -- from reply sub-types 1..16 during each 2 s window; the window
 -- rules then run in order (cont) and the epilogue clears ACC and
 -- beacons the owner.  T0 times unchallenged control (10 s = point).
-function std.totems.cp()
+--
+-- opts.teamless (default false): the wire value in R0 means something
+-- different depending on the caller — a real team index (0/1) for a team
+-- game, or player_id-1 for a teamless one — and the totem itself cannot
+-- tell them apart, since both are just "whatever R0 holds" (see
+-- cp_beacon_handler in the teamless rulesets).  That ambiguity is fatal
+-- for the two lowest player slots: id 1 and id 2 read as team O/X.  Rather
+-- than have the renderer guess, teamless callers get a different, never-
+-- team args sentinel (0xFD, see TotemUIEvent::Control's doc comment in
+-- LightAir_TotemUIOutput.h) baked into their own copy of this program, so
+-- the receiver never has to choose between the two readings.
+function std.totems.cp(opts)
   local MSG = la.msg
   local POINT_MS = 10000        -- one point per emission period
+  local SLOT_ARGS = (opts and opts.teamless) and 0xFD or 0xFE
   -- R1 = 1 while the ring is showing the contest pattern.  Strip
   -- backgrounds are sticky — whatever was applied last keeps playing —
   -- so a hill that stops being contested has to be told, or it goes on
@@ -335,14 +347,17 @@ function std.totems.cp()
       when = { {"acc", "single"}, {"low", "~=", {"r", 0}} },
       run = { {"set", 0, {"low"}}, {"set", 1, 0}, {"start", 0},
               {"bcast", MSG.CP_SCORE, {"r", 0}},
-              {"anim", "Control", {"args", 0xFE, {"r", 0}}} } },
+              {"anim", "Control", {"args", SLOT_ARGS, {"r", 0}}} } },
     -- still the same lone owner one period later: another point, and
-    -- the next period starts here.
+    -- the next period starts here.  The colour is the owner's own —
+    -- not a flat green — so this reads as "you scored", not "a bonus
+    -- fired"; ControlScore's sparkle burst (vs. Control's steady
+    -- wipe/fill) is what makes it a distinct, momentary event.
     { every = 2000, cont = true,
       when = { {"acc", "single"}, {"low", "==", {"r", 0}},
                {"r", 0, "~=", 0xFF}, {"elapsed", 0, ">=", POINT_MS} },
       run = { {"bcast", MSG.CP_SCORE, {"r", 0}}, {"start", 0},
-              {"anim", "Bonus"} } },
+              {"anim", "ControlScore", {"args", SLOT_ARGS, {"r", 0}}} } },
     -- owned, uncontested (R1==0, so NOT the same window a contest just
     -- settled — see the ordering note below), and now empty: whoever
     -- held it either left or stopped answering (shone players don't
@@ -373,7 +388,7 @@ function std.totems.cp()
     -- applied in a tick ever reaches the LEDs.
     { every = 2000, cont = true,
       when = { {"r", 1, "==", 1}, {"r", 0, "~=", 0xFF} },
-      run = { {"anim", "Control", {"args", 0xFE, {"r", 0}}}, {"set", 1, 0} } },
+      run = { {"anim", "Control", {"args", SLOT_ARGS, {"r", 0}}}, {"set", 1, 0} } },
     -- contested: hold the current owner, show the contest
     { every = 2000, cont = true,
       when = { {"acc", "many"} },
