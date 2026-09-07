@@ -85,15 +85,24 @@ local S   = { PRE_START = 0, ACTIVE = 1, DOWN = 2, SUB_END = 3 }
 local MSG = la.msg
 local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
 
-local NEAR_CP_RSSI      = -60   -- ~2.5 m: CP presence gate, to join or capture
+-- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
+-- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).  NEAR_CP_RSSI is
+-- deliberately set far tighter than that curve alone would need for a
+-- ~0.5 m join: a body stepping between totem and projector attenuates the
+-- link by roughly a constant number of dB, and on this curve's steep,
+-- close-in slope that same fixed dB loss maps to a much smaller change in
+-- effective distance than it would out at a "reasonable" join range — so
+-- pinning the join gate close in makes accidental capture-by-obstruction
+-- far less likely.
+local NEAR_CP_RSSI      = -40   -- ~0.5 m: CP presence gate, to join or capture
 -- Once counted as present, a CP is held (or contested) at this looser
 -- reach instead — earned, not given: reaching it the first time still
 -- needs NEAR_CP_RSSI.  Applies to anyone who was just present, not only
 -- the recorded owner, so a multi-way contest does not flicker apart on
 -- signal noise near the tight gate while it is still being fought over.
-local NEAR_CP_RSSI_HOLD = -70
-local NEAR_BASE_RSSI    = -57   -- ~2 m: BASE respawn gate
-local PICKUP_RSSI       = -57   -- ~2 m: BONUS/MALUS claim gate
+local NEAR_CP_RSSI_HOLD = -61.5 -- ~6 m: keep contesting/holding out to here
+local NEAR_BASE_RSSI    = -52   -- ~2 m: BASE respawn gate
+local PICKUP_RSSI       = -52   -- ~2 m: BONUS/MALUS claim gate
 local CP_NONE           = 0xFF
 
 -- ---- Private state ------------------------------------------------

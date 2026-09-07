@@ -922,9 +922,9 @@ end
 -- ================================================================
 do
   local cases = {
-    { file = "festasportsasso", tight = -60, hold = -70 },
-    { file = "kingofhill",      tight = -65, hold = -75 },
-    { file = "upkeep",          tight = -65, hold = -75 },
+    { file = "festasportsasso", tight = -40,   hold = -61.5 },
+    { file = "kingofhill",      tight = -55.5, hold = -65.5 },
+    { file = "upkeep",          tight = -55.5, hold = -65.5 },
   }
 
   for _, case in ipairs(cases) do

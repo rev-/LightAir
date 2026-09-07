@@ -36,7 +36,9 @@ local MSG_INFECTED = 0x16
 -- Reply sub-types for MSG.LIT.
 local R = { NOEFFECT = 1, INFECTED = 2, VIRUS = 3 }
 
-local PICKUP_RSSI = -57         -- ~2 m: BONUS/MALUS claim gate
+-- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
+-- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
+local PICKUP_RSSI = -52         -- ~2 m: BONUS/MALUS claim gate
 
 -- Continuous red pulse + soft vibration on the infected device.
 local virus_bg = {

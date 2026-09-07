@@ -30,7 +30,9 @@ local MSG = la.msg          -- MSG.LIT, MSG.SCORE_COLLECT, MSG.BONUS_BEACON, ...
 local R = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
 
 local IMMUNITY_MS = 3000
-local PICKUP_RSSI = -57     -- ~2 m: BONUS/MALUS claim gate
+-- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
+-- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
+local PICKUP_RSSI = -52     -- ~2 m: BONUS/MALUS claim gate
 
 -- The projector is the only route to Enlight, for every ruleset: it owns
 -- the trigger, the energy a beam costs, the recharge, the reach and what a

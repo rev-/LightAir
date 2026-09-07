@@ -24,15 +24,18 @@ local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
 local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
 
-local NEAR_CP_RSSI      = -65   -- ~3 m: CP presence gate, to join or capture
+-- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
+-- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
+local NEAR_CP_RSSI      = -55.5 -- ~3 m: CP presence gate, to join or capture
 -- Once counted as present, a CP is held (or contested) at this looser
 -- reach instead — earned, not given: reaching it the first time still
 -- needs NEAR_CP_RSSI.  Applies to anyone who was just present, not only
 -- the recorded owner, so a multi-way contest does not flicker apart on
 -- signal noise near the tight gate while it is still being fought over.
-local NEAR_CP_RSSI_HOLD = -75
-local NEAR_BASE_RSSI    = -57   -- ~2 m: BASE respawn gate
-local PICKUP_RSSI       = -57   -- ~2 m: BONUS/MALUS claim gate
+-- Kept at the same 10 dB margin below NEAR_CP_RSSI as before recalibration.
+local NEAR_CP_RSSI_HOLD = -65.5 -- ~9 m
+local NEAR_BASE_RSSI    = -52   -- ~2 m: BASE respawn gate
+local PICKUP_RSSI       = -52   -- ~2 m: BONUS/MALUS claim gate
 local CP_NONE           = 0xFF
 
 -- ---- Private state ------------------------------------------------

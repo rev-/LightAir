@@ -26,9 +26,11 @@ local MSG = la.msg
 local FE  = la.flag_event                -- TAKEN / DROPPED / SCORED
 local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
 
-local NEAR_BASE_RSSI = -57               -- ~2 m: base proximity (respawn + scoring)
-local FLAG_RSSI      = -62               -- ~3-4 m: flag pickup zone
-local PICKUP_RSSI    = -57               -- ~2 m: BONUS/MALUS claim gate
+-- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
+-- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
+local NEAR_BASE_RSSI = -52               -- ~2 m: base proximity (respawn + scoring)
+local FLAG_RSSI      = -56.9             -- ~3-4 m: flag pickup zone
+local PICKUP_RSSI    = -52               -- ~2 m: BONUS/MALUS claim gate
 
 -- Continuous carry alert: slow cyan pulse + gentle vibration, tone
 -- 500 Hz above the LIT feedback so the two never sound alike.
