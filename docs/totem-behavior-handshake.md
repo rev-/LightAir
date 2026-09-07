@@ -143,33 +143,60 @@ totems = {
 `std.totems.base(team)`, `.bonus()`, `.malus()`, `.flag(team)`, `.cp()` —
 so most games write one-liners; `games/freeforall.lua` spells the tables
 out in full as the tutorial.  The CP program in `std.lua` is the acid test:
-the hardest existing role is nine rules / 213 bytes (12 of the 225-byte
-budget free), using ordered `cont` rules over one 2 s window (collect
-presence → attach/score/release/settle/contest/idle → epilogue: clear
-ACC, beacon owner).  Attaching pays a point immediately and starts the
-emission period, so a capture is felt at once and each further period of
-unchallenged control pays another.
+the hardest existing role is nine rules / 199 bytes (26 of the 225-byte
+budget free), using ordered `cont` rules over one 2 s window.
 
-Two rules exist purely to keep the ring honest about who is actually
-there, both relying on **RSSI staying player-side by doctrine** (§0
-point 4): the totem's own presence-collection rule has no RSSI guard at
-all, so an owner going quiet — RSSI dropped, or simply stopped
-replying (a shone player, say) — is invisible to the totem except as an
-empty accumulator.
-- **"release"** (new): an owned, uncontested CP that gets a fully empty
-  window releases to neutral rather than going on broadcasting an owner
-  who is not there. It has to run BEFORE "settle" — register writes are
-  visible to later guards within the same tick, and release's own guard
-  requires R1==0, so if it ran after settle (which itself clears R1) it
-  would fire in the very same window a contest ends, collapsing settle's
-  one-window grace straight into release. Ahead of settle it reads R1 as
-  the tick started with it, so an uncontested owner releases on the very
-  next empty window while a contest that empties out still gets its
-  grace window first.
-- **"settle"** exists because strip backgrounds are sticky: a contest
-  that ends without changing the owner is not an event the ring would
-  otherwise hear about, so R1 remembers that the contest pattern is up
-  and the rule puts the owner's colour back.
+CP owners are conquered, not merely occupied: the one payload byte a
+presence reply carries is one of two disjoint kinds, decided entirely
+player-side (RSSI stays player-side by doctrine, §0 point 4) —
+- **"conquest"** (sub-type 1..16, the replying player's own slot): I am
+  within the *tight* ring, trying to take this hill.  Feeds `ACC` via
+  `accbit` exactly as any other role's presence collection.  Exactly one
+  distinct conquest sender each window takes (or keeps) the hill,
+  regardless of who else is holding it — an owner merely holding never
+  blocks a lone challenger, who has to physically reach the tight ring.
+  Two or more distinct conquest senders contest it instead: no owner
+  change, no point paid.
+- **"hold"** (the reserved sub-type 17, never 0 — see the note below):
+  I *am* the recorded owner, within the looser hold ring, at any
+  distance inside it — standing right at the totem does not upgrade
+  this to a conquest reply.  Never touches `ACC`; it only proves the
+  owner is still around, via a dedicated register, so an uncontested
+  owner keeps scoring without needing to win a tight-range contest
+  every period.  Not validated against the sender's identity or team:
+  a stray hold from a just-deposed owner can't corrupt a capture
+  (capture only ever reads `ACC`) and self-corrects within one
+  broadcast cycle.
+
+17 rather than 0: `RadioOutput::reply()` (`src/game/LightAir_RadioOutput.h`)
+treats `subType == 0` as "send no payload at all", which the totem would
+then read back as -1 (`V_PAYLOAD`'s own bounds check) — 0 cannot
+silently carry a real value on this wire, so the reserved marker has to
+be non-zero.
+
+Collection needs no length or range guard on either rule: `accbit`'s own
+runtime already rejects anything outside 1..16
+(`LightAir_TotemVM.cpp`), and a missing payload byte reads as -1 from
+the VM's own bounds check, which fails every comparison on its own — a
+guard here would only repeat a check the action, or the next rule's
+guard, already makes.
+
+Release — an owned CP that gets a fully empty window (no conquest, no
+hold) — releases to neutral rather than going on broadcasting an owner
+who is not there.  It is **not** gated on the contest flag: with no
+dedicated "settle" rule, nothing else is guaranteed to clear a leftover
+contest flag when a hill goes fully silent (no conqueror to trigger
+capture, no holder to trigger the hold-sustain tick), so gating release
+on it would leave a CP that was contested and then abandoned stuck
+forever.  Release's own action still falls through into the "empty and
+unowned" rule within the same tick (clearing the contest flag as a side
+effect, same trick as before), so a genuinely abandoned hill needs no
+grace window — there is nobody left to show one to.  A CP that stays
+*held* through a contest is unaffected: release is separately gated on
+"no hold reply this window", so it never fires while the owner keeps
+holding, contest or not; the leftover contest flag then clears itself
+whenever the hold-sustain tick next comes due, at most one scoring
+period later.
 
 Rule shape (authoring):
 

@@ -33,16 +33,18 @@ local NEAR_CP_RSSI      = -55.5 -- ~3 m: CP presence gate, to join or capture
 -- the recorded owner, so a multi-way contest does not flicker apart on
 -- signal noise near the tight gate while it is still being fought over.
 -- Kept at the same 10 dB margin below NEAR_CP_RSSI as before recalibration.
-local NEAR_CP_RSSI_HOLD = -65.5 -- ~9 m
+local NEAR_CP_RSSI_HOLD = -65.5 -- ~9 m: keep scoring out to here once owned
 local NEAR_BASE_RSSI    = -52   -- ~2 m: BASE respawn gate
 local PICKUP_RSSI       = -52   -- ~2 m: BONUS/MALUS claim gate
 local CP_NONE           = 0xFF
+-- Reserved reply sub-type for "hold" (see std.totems.cp() for why 17 and
+-- not 0).  Conquest replies keep using the plain slot+1 encoding (1-16).
+local CP_HOLD           = 17
 
 -- ---- Private state ------------------------------------------------
 local my_slot     = 0           -- player id - 1; set in on_begin
 local cp_ids      = {}          -- [i] = device id of the i-th CP totem
 local cp_owner    = {}          -- [i] = last announced owner slot or CP_NONE
-local cp_engaged  = {}          -- [i] = was our presence counted last window?
 local respawn_at  = 0
 local can_respawn = false
 local shone_by    = nil         -- short name of whoever put us down
@@ -55,22 +57,18 @@ local function cp_index(sender)
   return nil
 end
 
--- cp_engaged persists across a respawn, so it has to be cleared
--- explicitly wherever a life restarts — see reset sites below.
-local function reset_cp_engagement()
-  for i = 1, #cp_engaged do cp_engaged[i] = false end
-end
-
--- CP beacon: track ownership changes (both states); declare presence
--- by returning slot+1 only when send_presence and close enough.
---
--- The totem's own accbit rule has no RSSI guard at all — it counts
--- whoever replies, full stop (see docs/totem-behavior-handshake.md,
--- "RSSI is readable, not policy").  Proximity is entirely this
--- decision: whether to reply, and at what reach.  cp_engaged[idx] is
--- the hysteresis: fail to answer for ANY reason — too far, or shone
--- and therefore not sending presence at all — and it drops, so the
--- next attempt needs the tight gate again.
+-- CP beacon: track ownership changes (both states), and answer with
+-- exactly one of two reply kinds — never both — matching whichever role
+-- applies right now:
+--   * the recorded owner replies "hold" while within the (looser)
+--     NEAR_CP_RSSI_HOLD reach, at ANY distance inside it — standing right
+--     at the totem does not upgrade this to a conquest reply.  Easy
+--     stealing is deliberate: only combat (shining a challenger before
+--     they get a clean window) defends a held hill, not proximity.
+--   * anyone else replies "conquest" only within the tight NEAR_CP_RSSI
+--     reach.  No hysteresis, no memory of past presence: each beacon is
+--     answered fresh from the current RSSI alone, so there is nothing to
+--     reset between lives or respawns.
 local function cp_beacon_handler(send_presence)
   return function(vars, pkt)
     local idx = cp_index(pkt.sender)
@@ -87,14 +85,13 @@ local function cp_beacon_handler(send_presence)
       end
     end
 
-    if not send_presence then
-      cp_engaged[idx] = false
-      return
-    end
+    if not send_presence then return end
 
-    local gate = cp_engaged[idx] and NEAR_CP_RSSI_HOLD or NEAR_CP_RSSI
-    cp_engaged[idx] = pkt.rssi >= gate
-    if cp_engaged[idx] then return my_slot + 1 end
+    if owner == my_slot then
+      if pkt.rssi >= NEAR_CP_RSSI_HOLD then return CP_HOLD end
+    elseif pkt.rssi >= NEAR_CP_RSSI then
+      return my_slot + 1
+    end
   end
 end
 
@@ -190,13 +187,12 @@ return {
     shone_by    = nil
     imm.reset()
     proj.reset(vars)
-    cp_ids, cp_owner, cp_engaged = {}, {}, {}
+    cp_ids, cp_owner = {}, {}
     for i = 0, 5 do
       local id = la.totem_for_role("CP", i)
       if id == 0 then break end
       cp_ids[#cp_ids + 1]   = id
       cp_owner[#cp_owner + 1] = CP_NONE
-      cp_engaged[#cp_engaged + 1] = false
     end
     la.ui("GameStart")
   end,
@@ -273,7 +269,6 @@ return {
         can_respawn = false
         shone_by    = nil
         imm.reset()
-        reset_cp_engagement()
         la.clear_tray()             -- drop the credit and the instruction
         la.show("Back in game!", 1000)
         la.ui("Up")

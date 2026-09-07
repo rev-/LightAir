@@ -268,6 +268,13 @@ int main(int argc, char** argv) {
     }
 
     // ================= CP =================
+    // Conquest/hold split: a "conquest" reply (sub-type 1..16, the
+    // replying player's own slot) feeds the totem's ACC and drives
+    // capture/contest; a "hold" reply (the reserved sub-type 17) never
+    // touches ACC and only proves the recorded owner is still around,
+    // via R2, which the hold-sustain rule reads.  See std.totems.cp()
+    // for why 17 rather than 0 (RadioOutput::reply() treats subType==0
+    // as "no payload at all", so 0 cannot carry a real value here).
     {
         printf("CP:\n");
         LightAir_TotemVM vm;
@@ -283,9 +290,10 @@ int main(int argc, char** argv) {
         const RadioOutMsg* b = lastBcast(out, 0x52);
         CHECK(b && b->payload[0] == 0xFF, "neutral beacon");
 
-        // One team-1 player present (sub-type 2) -> owner = slot 1, and
-        // the capture pays a point at once: waiting a whole emission
-        // period before anything happens reads as "nothing happened".
+        // One team-1 player present (sub-type 2, "conquest") -> owner =
+        // slot 1, and the capture pays a point at once: waiting a whole
+        // emission period before anything happens reads as "nothing
+        // happened".
         out = LightAir_TotemOutput();
         RadioPacket pres = mkPkt(0x53, 4, 1, {2});
         vm.onPacket(pres, -40, out);
@@ -298,14 +306,15 @@ int main(int argc, char** argv) {
         CHECK(countBcast(out, 0x54) == 1, "capture scores immediately");
         CHECK(cap && cap->payload[0] == 1, "capture point goes to the new owner");
 
-        // Held alone from there: the period runs from the capture, so the
+        // Held alone from there via "hold" replies (sub-type 17, not
+        // conquest -- a real owner never sends conquest, see
+        // cp_beacon_handler): the period runs from the capture, so the
         // next point lands 10 s later and no sooner.
-        // Fresh output per window: the driver flushes every tick.
         int scores = 0, scoreSlot = -1, firstScoreWindow = -1;
         for (int w = 0; w < 6; w++) {
             out = LightAir_TotemOutput();
-            RadioPacket p2 = mkPkt(0x53, 4, 1, {2});
-            vm.onPacket(p2, -40, out);
+            RadioPacket hold = mkPkt(0x53, 4, 1, {17});
+            vm.onPacket(hold, -40, out);
             runFor(vm, 2000, out);
             if (countBcast(out, 0x54)) {
                 if (firstScoreWindow < 0) firstScoreWindow = w;
@@ -317,60 +326,69 @@ int main(int argc, char** argv) {
         CHECK(firstScoreWindow == 4, "one emission period after the capture");
         CHECK(scoreSlot == 1, "score for slot 1");
 
-        // Contested window: both sub-types -> contest anim, owner held.
+        // Two distinct conquest senders, NEITHER the recorded owner
+        // (slot 1 is still holding elsewhere but sends no conquest this
+        // window): a real contest -- no ownership change, no point.
         out = LightAir_TotemOutput();
-        RadioPacket pa = mkPkt(0x53, 4, 1, {2});
-        RadioPacket pb = mkPkt(0x53, 5, 0, {1});
-        vm.onPacket(pa, -40, out);
-        vm.onPacket(pb, -40, out);
+        RadioPacket riv1 = mkPkt(0x53, 5, 0, {1});   // slot 0
+        RadioPacket riv2 = mkPkt(0x53, 6, 0, {3});   // slot 2
+        vm.onPacket(riv1, -40, out);
+        vm.onPacket(riv2, -40, out);
         runFor(vm, 2000, out);
         CHECK(countAnim(out, TotemUIEvent::ControlContest) == 1, "contest anim");
+        CHECK(countBcast(out, 0x54) == 0, "contested window pays no point");
         b = lastBcast(out, 0x52);
-        CHECK(b && b->payload[0] == 1, "owner held while contested");
+        CHECK(b && b->payload[0] == 1, "owner beacon unchanged while contested");
 
-        // A contested hill left to one player: the other one's game ended,
-        // so their device stopped answering the beacon.  The hill must
-        // attach to whoever is still standing on it.
+        // Easy stealing: exactly one conquest sender takes the hill on
+        // the spot, even in the SAME window the recorded owner sends
+        // hold -- an owner merely holding never blocks a lone challenger,
+        // however close they are (see cp_beacon_handler's own doc: only
+        // combat, not proximity, defends a held hill).
         out = LightAir_TotemOutput();
-        RadioPacket alone = mkPkt(0x53, 5, 0, {1});      // slot 0 only
+        RadioPacket ownerHold = mkPkt(0x53, 4, 1, {17});  // slot 1, holding
+        RadioPacket steal     = mkPkt(0x53, 6, 0, {3});   // slot 2, conquest
+        vm.onPacket(ownerHold, -40, out);
+        vm.onPacket(steal, -40, out);
+        runFor(vm, 2000, out);
+        b = lastBcast(out, 0x52);
+        CHECK(b && b->payload[0] == 2, "a lone challenger steals it outright");
+        CHECK(countBcast(out, 0x54) == 1, "and the steal pays its point");
+
+        // A contest that resolves to a single conqueror who ISN'T the
+        // recorded owner: an ordinary capture, same as the very first one.
+        out = LightAir_TotemOutput();
+        RadioPacket c1 = mkPkt(0x53, 5, 0, {1});
+        RadioPacket c2 = mkPkt(0x53, 4, 1, {2});
+        vm.onPacket(c1, -40, out);
+        vm.onPacket(c2, -40, out);
+        runFor(vm, 2000, out);                        // contest
+        out = LightAir_TotemOutput();
+        RadioPacket alone = mkPkt(0x53, 5, 0, {1});   // only slot 0 left
         vm.onPacket(alone, -40, out);
         runFor(vm, 2000, out);
         b = lastBcast(out, 0x52);
-        CHECK(b && b->payload[0] == 0, "contest resolved to the last player present");
+        CHECK(b && b->payload[0] == 0, "contest resolved to the last conqueror present");
         CHECK(countBcast(out, 0x54) == 1, "and the takeover pays its point");
 
-        // The same thing where the hill ends up back with the player who
-        // already owned it.  No owner change, so nothing re-attaches —
-        // but the ring still has to stop showing the contest pattern.
-        // Backgrounds are sticky on the strip: whatever was applied last
-        // keeps playing until something replaces it.
+        // Fully abandoned right after a contest -- no conqueror AND no
+        // hold, the owner's own device having gone quiet too (shone, or
+        // walked off).  Must release on the very next empty window: with
+        // the dedicated "settle" rule gone, nothing else is guaranteed to
+        // clear a leftover contest flag, so release must not wait on it
+        // (see std.totems.cp()'s release rule).
         out = LightAir_TotemOutput();
-        RadioPacket own = mkPkt(0x53, 5, 0, {1});     // owner, slot 0
-        RadioPacket rival = mkPkt(0x53, 4, 1, {2});   // challenger, slot 1
-        vm.onPacket(own, -40, out);
-        vm.onPacket(rival, -40, out);
-        runFor(vm, 2000, out);
-        CHECK(countAnim(out, TotemUIEvent::ControlContest) == 1, "contested again");
-
+        RadioPacket x1 = mkPkt(0x53, 5, 0, {1});
+        RadioPacket x2 = mkPkt(0x53, 4, 1, {2});
+        vm.onPacket(x1, -40, out);
+        vm.onPacket(x2, -40, out);
+        runFor(vm, 2000, out);                        // contest, R1 set
         out = LightAir_TotemOutput();
-        RadioPacket left = mkPkt(0x53, 5, 0, {1});    // the rival's game ended
-        vm.onPacket(left, -40, out);
-        runFor(vm, 2000, out);
-        const TotemUICmd* back = lastAnim(out, TotemUIEvent::Control);
-        CHECK(back && back->r == 0xFE && back->g == 0,
-              "contest over: the ring goes back to the owner's colour");
-        CHECK(countAnim(out, TotemUIEvent::ControlContest) == 0, "and stops contesting");
-
-        // Everyone walks off a hill that was contested: it is still owned,
-        // so the ring shows its owner rather than staying in the contest.
-        out = LightAir_TotemOutput();
-        vm.onPacket(own, -40, out);
-        vm.onPacket(rival, -40, out);
-        runFor(vm, 2000, out);
-        out = LightAir_TotemOutput();
-        runFor(vm, 2000, out);                        // nobody present
-        back = lastAnim(out, TotemUIEvent::Control);
-        CHECK(back && back->g == 0, "abandoned contest falls back to the owner");
+        runFor(vm, 2000, out);                        // nobody at all, incl. no hold
+        b = lastBcast(out, 0x52);
+        CHECK(b && b->payload[0] == 0xFF,
+              "a contest that goes fully silent releases on the very next window");
+        CHECK(countAnim(out, TotemUIEvent::CPIdle) == 1, "and the ring returns to idle");
     }
 
     // ================= CP release (owner absent) =================
@@ -418,29 +436,45 @@ int main(int argc, char** argv) {
         b = lastBcast(out, 0x52);
         CHECK(b && b->payload[0] == 1, "released hill still captures normally");
 
-        // The contest-settle path gets one extra window of grace: settling
-        // (r1==1 -> restore owner, r1=0) and releasing (r1==0 -> neutral)
-        // are gated so they never both fire on the SAME empty window --
-        // the existing "abandoned contest falls back to the owner" case
-        // must keep holding for exactly one window before release.  Owner
-        // is slot 1 (the newcomer captured above); a second player (slot 2)
-        // contests it, then both leave.
+        // A held hill survives being contested by others without
+        // releasing, even though nothing now clears the leftover contest
+        // flag on its own (the dedicated "settle" rule is gone): release
+        // is gated on R2==0 (no hold reply this window), so it simply
+        // never fires while the owner keeps holding, contest or not.
+        // Owner is slot 1 (the newcomer captured above); two OTHER
+        // players (slots 0 and 2) contest it while slot 1 keeps holding.
         out = LightAir_TotemOutput();
-        RadioPacket a = mkPkt(0x53, 4, 1, {2});   // owner, slot 1
-        RadioPacket c = mkPkt(0x53, 6, 0, {3});   // rival, slot 2
-        vm.onPacket(a, -40, out);
-        vm.onPacket(c, -40, out);
-        runFor(vm, 2000, out);                       // contest: r1 = 1
+        RadioPacket contestA = mkPkt(0x53, 6, 0, {3});   // slot 2, conquest
+        RadioPacket contestB = mkPkt(0x53, 5, 0, {1});   // slot 0, conquest
+        RadioPacket ownHold  = mkPkt(0x53, 4, 1, {17});  // slot 1, hold
+        vm.onPacket(contestA, -40, out);
+        vm.onPacket(contestB, -40, out);
+        vm.onPacket(ownHold, -40, out);
+        runFor(vm, 2000, out);
+        CHECK(countAnim(out, TotemUIEvent::ControlContest) == 1,
+              "a held hill can still be contested by others");
+
         out = LightAir_TotemOutput();
-        runFor(vm, 2000, out);                        // window 1: settle
+        RadioPacket stillHold = mkPkt(0x53, 4, 1, {17});
+        vm.onPacket(stillHold, -40, out);
+        runFor(vm, 2000, out);
         b = lastBcast(out, 0x52);
         CHECK(b && b->payload[0] == 1,
-              "a contest that empties out settles to the owner first");
-        out = LightAir_TotemOutput();
-        runFor(vm, 2000, out);                        // window 2: release
-        b = lastBcast(out, 0x52);
-        CHECK(b && b->payload[0] == 0xFF,
-              "and releases on the following empty window, same as any other");
+              "the owner is not released just because a contest flag was left set");
+
+        // Keep holding until the score period elapses: the hold-sustain
+        // rule fires normally once due, clearing the leftover contest
+        // flag as a side effect (see std.totems.cp()'s R1 comment) --
+        // the earlier contest cost no points and delayed nothing.
+        int scores2 = 0;
+        for (int w = 0; w < 4; w++) {
+            out = LightAir_TotemOutput();
+            RadioPacket h = mkPkt(0x53, 4, 1, {17});
+            vm.onPacket(h, -40, out);
+            runFor(vm, 2000, out);
+            scores2 += countBcast(out, 0x54);
+        }
+        CHECK(scores2 == 1, "holding through a contest still scores once the period elapses");
     }
 
     // ================= malformed programs =================

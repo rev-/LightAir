@@ -908,23 +908,24 @@ do
 end
 
 -- ================================================================
---   CP presence hysteresis (festasportsasso, kingofhill, upkeep)
+--   CP conquest/hold replies (festasportsasso, kingofhill, upkeep)
 --
 --   The totem's own accbit rule has no RSSI guard at all -- proximity
 --   is entirely the REPLYING PLAYER's decision (see std.totems.cp()
 --   and docs/totem-behavior-handshake.md, "RSSI is readable, not
---   policy").  A CP is joined at a tight gate, then held -- as owner
---   OR as one of several contestants -- at a looser one, so a signal
---   hovering right at the tight boundary does not flicker in and out
---   of a contest.  Losing presence for ANY reason (weak signal, or a
---   shone player who stops sending presence at all) drops the hold
---   and the tight gate is required again.
+--   policy").  Each beacon is answered fresh from the CURRENT RSSI
+--   alone, with no memory of past presence: a non-owner replies
+--   "conquest" only within the tight ring; the recorded owner replies
+--   "hold" anywhere within the (looser) hold ring, at any distance
+--   inside it -- easy stealing is deliberate, so proximity never
+--   upgrades an owner's hold into a conquest.
 -- ================================================================
 do
+  local CP_HOLD = 17
   local cases = {
-    { file = "festasportsasso", tight = -40,   hold = -61.5 },
-    { file = "kingofhill",      tight = -55.5, hold = -65.5 },
-    { file = "upkeep",          tight = -55.5, hold = -65.5 },
+    { file = "festasportsasso", tight = -40,   hold = -61.5, owner_arg = 1 },
+    { file = "kingofhill",      tight = -55.5, hold = -65.5, owner_arg = 1 },
+    { file = "upkeep",          tight = -55.5, hold = -65.5, owner_arg = 0 },
   }
 
   for _, case in ipairs(cases) do
@@ -943,46 +944,47 @@ do
     g.on_begin(v)
 
     local msg = la.msg.CP_BEACON
-    local function pkt(rssi)
-      return mk_pkt{ msg = msg, payload = { 0xFF }, sender = 254, rssi = rssi }
+    local function pkt(owner, rssi)
+      return mk_pkt{ msg = msg, payload = { owner }, sender = 254, rssi = rssi }
     end
 
     -- Find the two CP_BEACON states by behaviour, not by hardcoding the
-    -- ruleset's state enum: a strong signal answers in the "in play"
-    -- state and stays silent in the "down/eliminated" one.
+    -- ruleset's state enum: a strong signal on an unowned beacon answers
+    -- with a conquest reply in the "in play" state and stays silent in
+    -- the "down/eliminated" one.
     local presence_h, down_h
     for _, handlers in pairs(g.on_message) do
       local h = handlers[msg]
       if h then
-        if h(v, pkt(-20)) then presence_h = h else down_h = h end
+        if h(v, pkt(0xFF, -20)) then presence_h = h else down_h = h end
       end
     end
     check(presence_h ~= nil, "setup", "no state ever answers CP presence")
     check(down_h     ~= nil, "setup", "no track-only (down) state found")
 
-    -- Discovery itself joined the CP (strong signal); start clean, which
-    -- also exercises that a fresh on_begin (new match, or festasportsasso's
-    -- next visitor) does not carry hysteresis over.
-    g.on_begin(v)
+    -- Not the owner (beacon says unassigned): conquest only within the
+    -- tight ring, nothing at all just inside the looser one.
+    check(presence_h(v, pkt(0xFF, case.tight)) == case.owner_arg + 1,
+          "conquest", "the tight gate itself did not answer conquest")
+    check(presence_h(v, pkt(0xFF, case.hold + 2)) == nil,
+          "conquest", "loose range answered right after a tight-range contact "
+                    .. "-- there must be no hysteresis left")
 
-    check(presence_h(v, pkt(case.hold + 2)) == nil,
-          "join", "a signal only within the loose gate joined on first contact")
-    check(presence_h(v, pkt(case.tight)) ~= nil,
-          "join", "the tight gate itself did not join")
-    check(presence_h(v, pkt(case.hold + 2)) ~= nil,
-          "hold", "hysteresis did not hold a weaker signal right after joining")
-    check(presence_h(v, pkt(case.hold - 5)) == nil,
-          "drop", "a signal below the loose gate still held")
-    check(presence_h(v, pkt(case.hold + 2)) == nil,
-          "drop", "hysteresis survived a full drop -- rejoining needs the tight gate")
+    -- I already own it: hold anywhere in the loose ring, standing right
+    -- at the totem included -- proximity never upgrades it to conquest.
+    check(presence_h(v, pkt(case.owner_arg, case.tight)) == CP_HOLD,
+          "hold", "owner standing at the totem did not reply hold")
+    check(presence_h(v, pkt(case.owner_arg, case.hold + 2)) == CP_HOLD,
+          "hold", "owner at the edge of the hold ring did not reply hold")
+    check(presence_h(v, pkt(case.owner_arg, case.hold - 5)) == nil,
+          "hold", "owner outside the hold ring still replied")
 
-    presence_h(v, pkt(case.tight))            -- rejoin
-    down_h(v, pkt(-20))                       -- shone: no presence at all
-    check(presence_h(v, pkt(case.hold + 2)) == nil,
-          "shone", "going through the down state kept hysteresis")
+    -- Shone: no reply at all, regardless of range or ownership.
+    check(down_h(v, pkt(case.owner_arg, case.tight)) == nil,
+          "shone", "the down state answered a beacon")
   end
 
-  print("OK   cp hysteresis  tight gate to join, looser reach to hold, drop on any lapse")
+  print("OK   cp conquest/hold  tight-ring conquest, owner-only hold, no RSSI memory")
 end
 
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")

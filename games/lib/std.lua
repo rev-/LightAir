@@ -304,10 +304,40 @@ function std.totems.flag(team)
 end
 
 -- ---- CP: control point (Upkeep: teams 0/1; KoH/festa: slots 0-15). ------
--- R0 = owner slot (0xFF = neutral).  ACC accumulates presence bits
--- from reply sub-types 1..16 during each 2 s window; the window
--- rules then run in order (cont) and the epilogue clears ACC and
--- beacons the owner.  T0 times unchallenged control (10 s = point).
+-- R0 = owner slot (0xFF = neutral).  R2 = "a valid hold reply arrived
+-- this window", cleared every epilogue.  Two disjoint reply kinds share
+-- MSG.CP_BEACON's one payload byte:
+--
+--   sub-type 1..16   "conquest" — the sender is within the tight ring,
+--                    trying to take this hill.  Feeds ACC via accbit
+--                    exactly as before.  No range/length guard on this
+--                    rule: accbit's own runtime already rejects anything
+--                    outside 1..16 (LightAir_TotemVM.cpp), and a missing
+--                    payload byte reads as -1 from the VM's own bounds
+--                    check, which fails that range on its own — a guard
+--                    here would only ever repeat a check the action
+--                    already makes.
+--   sub-type 17       "hold" — the sender IS the current owner (never
+--                    sent by anyone else; see cp_beacon_handler in the
+--                    callers), within the looser hold ring.  Never
+--                    touches ACC — it only proves the owner is still
+--                    around, via R2, so an uncontested owner keeps
+--                    scoring without needing to be a "conquest" sender
+--                    every window.  17 rather than 0: RadioOutput::reply()
+--                    (src/game/LightAir_RadioOutput.h) treats subType==0
+--                    as "send no payload at all", which the totem would
+--                    then read back as -1, never matching — 0 silently
+--                    cannot carry a real value on this wire.  Not
+--                    validated against the sender's identity or team on
+--                    purpose: a stray hold from a just-deposed owner
+--                    can't corrupt a capture (capture only ever looks at
+--                    ACC) and self-corrects within one broadcast cycle.
+--
+-- Exactly one conquest sender each window takes (or keeps) ownership,
+-- regardless of any hold senders present — an owner merely holding never
+-- blocks a lone challenger, who must physically reach the tight ring to
+-- take it.  Two or more distinct conquest senders contest the hill
+-- instead: no ownership change, no point paid.
 --
 -- opts.teamless (default false): the wire value in R0 means something
 -- different depending on the caller — a real team index (0/1) for a team
@@ -327,68 +357,61 @@ function std.totems.cp(opts)
   -- backgrounds are sticky — whatever was applied last keeps playing —
   -- so a hill that stops being contested has to be told, or it goes on
   -- alternating team colours as if it were still being fought over.
-  -- Only a *change* of owner re-attaches on its own, and the common
-  -- ending of a contest (the challenger leaves, the owner stays) is not
-  -- a change of owner.
+  -- Cleared by whichever rule next repaints the ring for real (capture,
+  -- or the hold-sustained scoring tick below) rather than by a dedicated
+  -- "settle" rule: capture already clears it on the spot, and the
+  -- hold-sustain tick recurs every window for as long as the owner keeps
+  -- sending "hold", so R1 can't get stuck past one scoring period even
+  -- when a contest ends with the same owner still holding and the score
+  -- tick isn't due yet.
   return { vm = 1, states = { {
     { enter = true,                       -- registers start at zero, so
       run = { {"set", 0, 0xFF}, {"start", 0},   -- only R0 needs setting
               {"anim", "CPIdle", {"rgb", 80, 80, 80}} } },
-    -- collect presence replies: sub-type 1..16 -> ACC bit 0..15
+    -- collect "conquest" replies into ACC.
     { reply = MSG.CP_BEACON, cont = true,
-      when = { {"len", ">=", 1}, {"p", 1, ">=", 1}, {"p", 1, "<=", 16} },
       run = { {"accbit", {"p", 1}} } },
-    -- single occupant, different from owner: attach, pay for the
-    -- capture at once and start the emission period from this moment.
-    -- Taking a hill is the achievement; making the new owner wait a
-    -- whole period before anything happens reads as "nothing happened".
-    -- Actions run in order, so {"r",0} here is the owner just set.
+    -- collect "hold": any reply carrying the reserved 17 sub-type.
+    { reply = MSG.CP_BEACON, cont = true,
+      when = { {"p", 1, "==", 17} },
+      run = { {"set", 2, 1} } },
+    -- single conqueror, different from the recorded owner: takes it,
+    -- regardless of any hold senders present.  Actions run in order, so
+    -- {"r",0} here is the owner just set.
     { every = 2000, cont = true,
       when = { {"acc", "single"}, {"low", "~=", {"r", 0}} },
       run = { {"set", 0, {"low"}}, {"set", 1, 0}, {"start", 0},
               {"bcast", MSG.CP_SCORE, {"r", 0}},
               {"anim", "Control", {"args", SLOT_ARGS, {"r", 0}}} } },
-    -- still the same lone owner one period later: another point, and
-    -- the next period starts here.  The colour is the owner's own —
-    -- not a flat green — so this reads as "you scored", not "a bonus
-    -- fired"; ControlScore's sparkle burst (vs. Control's steady
+    -- no conqueror this window, but the owner is still holding: pay
+    -- another point once the period elapses.  Colour is the owner's
+    -- own — not a flat green — so this reads as "you scored", not "a
+    -- bonus fired"; ControlScore's sparkle burst (vs. Control's steady
     -- wipe/fill) is what makes it a distinct, momentary event.
     { every = 2000, cont = true,
-      when = { {"acc", "single"}, {"low", "==", {"r", 0}},
+      when = { {"acc", "empty"}, {"r", 2, "==", 1},
                {"r", 0, "~=", 0xFF}, {"elapsed", 0, ">=", POINT_MS} },
-      run = { {"bcast", MSG.CP_SCORE, {"r", 0}}, {"start", 0},
+      run = { {"set", 1, 0}, {"bcast", MSG.CP_SCORE, {"r", 0}}, {"start", 0},
               {"anim", "ControlScore", {"args", SLOT_ARGS, {"r", 0}}} } },
-    -- owned, uncontested (R1==0, so NOT the same window a contest just
-    -- settled — see the ordering note below), and now empty: whoever
-    -- held it either left or stopped answering (shone players don't
-    -- reply at all — see the ruleset's cp_beacon_handler).  Release it
-    -- rather than keep broadcasting a holder who is not there.
+    -- neither a conqueror nor a hold this window: genuinely abandoned
+    -- (shone players don't reply at all — see the ruleset's
+    -- cp_beacon_handler).  Release it rather than keep broadcasting a
+    -- holder who is not there.
+    --
+    -- Not gated on R1: with Settle gone, nothing else is guaranteed to
+    -- clear a leftover contest flag when a hill goes fully silent (no
+    -- conqueror to trigger Capture, no holder to trigger the hold-sustain
+    -- tick) — gating release on R1==0 here would leave it stuck showing
+    -- the contest pattern forever.  Genuinely abandoned means release
+    -- right away; there is nobody left to show a grace window to.
     --
     -- No anim action needed: clearing R0 here makes the "empty AND
     -- R0==0xFF" rule below true for THIS SAME tick — guards are
-    -- re-evaluated live against the registers as actions run in
-    -- program order — so it plays the idle animation for us.
-    --
-    -- MUST come before the settle rule.  Settle's own action clears
-    -- R1, and since later guards see that write within the same tick,
-    -- a release rule placed after settle would fire in the very same
-    -- window a contest ends — collapsing settle's one-window grace (a
-    -- contest that empties out shows the owner once more, see below)
-    -- straight into release.  Ahead of settle, this rule still reads
-    -- R1 as it was at the START of the tick, so an uncontested owner
-    -- releases on the very next empty window (R1 was already 0) while
-    -- a contest that empties out gets its grace window first.
+    -- re-evaluated live against the registers as actions run in program
+    -- order — so it plays the idle animation, AND clears R1, for us.
     { every = 2000, cont = true,
-      when = { {"acc", "empty"}, {"r", 0, "~=", 0xFF}, {"r", 1, "==", 0} },
+      when = { {"acc", "empty"}, {"r", 2, "==", 0}, {"r", 0, "~=", 0xFF} },
       run = { {"set", 0, 0xFF} } },
-    -- contest over — the challenger left, or everyone did: the hill is
-    -- back to its owner, so put the owner's colour back on the ring.
-    -- Sits BEFORE the contest rule on purpose: a window that is still
-    -- contested simply overwrites this, and only the last background
-    -- applied in a tick ever reaches the LEDs.
-    { every = 2000, cont = true,
-      when = { {"r", 1, "==", 1}, {"r", 0, "~=", 0xFF} },
-      run = { {"anim", "Control", {"args", SLOT_ARGS, {"r", 0}}}, {"set", 1, 0} } },
     -- contested: hold the current owner, show the contest
     { every = 2000, cont = true,
       when = { {"acc", "many"} },
@@ -400,7 +423,7 @@ function std.totems.cp(opts)
       run = { {"anim", "CPIdle", {"rgb", 80, 80, 80}}, {"set", 1, 0} } },
     -- window epilogue: open the next window, beacon the owner
     { every = 2000,
-      run = { {"accclr"}, {"bcast", MSG.CP_BEACON, {"r", 0}} } },
+      run = { {"accclr"}, {"set", 2, 0}, {"bcast", MSG.CP_BEACON, {"r", 0}} } },
   } } }
 end
 

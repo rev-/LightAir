@@ -100,16 +100,18 @@ local NEAR_CP_RSSI      = -40   -- ~0.5 m: CP presence gate, to join or capture
 -- needs NEAR_CP_RSSI.  Applies to anyone who was just present, not only
 -- the recorded owner, so a multi-way contest does not flicker apart on
 -- signal noise near the tight gate while it is still being fought over.
-local NEAR_CP_RSSI_HOLD = -61.5 -- ~6 m: keep contesting/holding out to here
+local NEAR_CP_RSSI_HOLD = -61.5 -- ~6 m: keep scoring out to here once owned
 local NEAR_BASE_RSSI    = -52   -- ~2 m: BASE respawn gate
 local PICKUP_RSSI       = -52   -- ~2 m: BONUS/MALUS claim gate
 local CP_NONE           = 0xFF
+-- Reserved reply sub-type for "hold" (see std.totems.cp() for why 17 and
+-- not 0).  Conquest replies keep using the plain slot+1 encoding (1-16).
+local CP_HOLD           = 17
 
 -- ---- Private state ------------------------------------------------
 local my_slot     = 0           -- player id - 1; set in on_begin
 local cp_ids      = {}          -- [i] = device id of the i-th CP totem
 local cp_owner    = {}          -- [i] = last announced owner slot or CP_NONE
-local cp_engaged  = {}          -- [i] = was our presence counted last window?
 local respawn_at  = 0
 local can_respawn = false
 local shone_by    = nil         -- short name of whoever put us down
@@ -122,25 +124,18 @@ local function cp_index(sender)
   return nil
 end
 
--- cp_engaged persists on this physical projector across visitors (the
--- device, not the person, is what the CP totems know) and across a
--- respawn, so it has to be cleared explicitly wherever a turn or a life
--- restarts — an un-reset flag would hand a brand-new visitor the loose
--- gate on a CP the PREVIOUS visitor was holding.
-local function reset_cp_engagement()
-  for i = 1, #cp_engaged do cp_engaged[i] = false end
-end
-
--- CP beacon: track ownership changes (both playing states); declare
--- presence by returning slot+1 only when send_presence and close enough.
---
--- The totem's own accbit rule has no RSSI guard at all — it counts
--- whoever replies, full stop (see docs/totem-behavior-handshake.md,
--- "RSSI is readable, not policy").  Proximity is entirely this
--- decision: whether to reply, and at what reach.  cp_engaged[idx] is
--- the hysteresis: fail to answer for ANY reason — too far, or shone
--- and therefore not sending presence at all — and it drops, so the
--- next attempt needs the tight gate again.
+-- CP beacon: track ownership changes (both playing states), and answer
+-- with exactly one of two reply kinds — never both — matching whichever
+-- role applies right now:
+--   * the recorded owner replies "hold" while within the (looser)
+--     NEAR_CP_RSSI_HOLD reach, at ANY distance inside it — standing right
+--     at the totem does not upgrade this to a conquest reply.  Easy
+--     stealing is deliberate: only combat (shining a challenger before
+--     they get a clean window) defends a held hill, not proximity.
+--   * anyone else replies "conquest" only within the tight NEAR_CP_RSSI
+--     reach.  No hysteresis, no memory of past presence: each beacon is
+--     answered fresh from the current RSSI alone, so there is nothing to
+--     reset between visitors or respawns.
 local function cp_beacon_handler(send_presence)
   return function(vars, pkt)
     local idx = cp_index(pkt.sender)
@@ -161,14 +156,13 @@ local function cp_beacon_handler(send_presence)
       end
     end
 
-    if not send_presence then
-      cp_engaged[idx] = false
-      return
-    end
+    if not send_presence then return end
 
-    local gate = cp_engaged[idx] and NEAR_CP_RSSI_HOLD or NEAR_CP_RSSI
-    cp_engaged[idx] = pkt.rssi >= gate
-    if cp_engaged[idx] then return my_slot + 1 end
+    if owner == my_slot then
+      if pkt.rssi >= NEAR_CP_RSSI_HOLD then return CP_HOLD end
+    elseif pkt.rssi >= NEAR_CP_RSSI then
+      return my_slot + 1
+    end
   end
 end
 
@@ -244,7 +238,6 @@ local function welcome(vars)
   imm.reset()
   proj.reset(vars)
   arm_trial(vars)
-  reset_cp_engagement()
   la.clear_tray()
   la.show("Vai a una BASE!", 0)
   la.show(string.format("Benvenuto giocatore %d", vars.counter), 0)
@@ -264,7 +257,6 @@ local function start_turn(vars)
   shone_by    = nil
   imm.reset()
   proj.reset(vars)
-  reset_cp_engagement()
   la.clear_tray()
   la.show("Gioca!", 2000)
   la.ui("Up")
@@ -361,13 +353,12 @@ return {
     -- onto their last digit, so give a stand's projectors ids 1-9.
     vars.counter = vars.played_before * 10 + (la.my_id() % 10)
     welcome(vars)
-    cp_ids, cp_owner, cp_engaged = {}, {}, {}
+    cp_ids, cp_owner = {}, {}
     for i = 0, 5 do
       local id = la.totem_for_role("CP", i)
       if id == 0 then break end
       cp_ids[#cp_ids + 1]     = id
       cp_owner[#cp_owner + 1] = CP_NONE
-      cp_engaged[#cp_engaged + 1] = false
     end
     la.ui("GameStart")
   end,
