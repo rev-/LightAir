@@ -37,6 +37,10 @@ function la.player_short(id) return "P" .. tostring(id) end
 function la.team_short(t) return ({ [0] = "O", [1] = "X" })[t] or "?" end
 function la.totem_for_role(role, i) return i == 0 and 254 or 0 end
 function la.trigger_down(n) return false end
+-- The same ladder the keypad reports on: "pressed" appears in exactly one
+-- poll, which is what a ruleset reads a press EDGE from (TiroBersaglio's
+-- reload) instead of holding the trigger down.
+function la.trigger_state(n) return "off" end
 function la.key_down(k, pad) return false end
 function la.key_state(k, pad) return "off" end
 function la.key_at(i) return nil end
@@ -86,7 +90,7 @@ local function mk_pkt(fields)
 end
 
 local files = { "freeforall", "teams", "flag", "kingofhill", "outflow", "upkeep",
-                "virus", "festasportsasso" }
+                "virus", "festasportsasso", "tirobersaglio" }
 local failures = 0
 local totem_sizes = {}
 
@@ -905,6 +909,189 @@ do
   shine_result.status, shine_result.id = "no_hit", 0
   print("OK   festa trial   free shots, radio-silent, battery shown; "
         .. "the turn still costs and still sends")
+end
+
+-- ================================================================
+--   tirobersaglio: the six panels, in order, on one magazine and a half
+--
+--   The rules that decide what a child at the stand experiences, none of
+--   which the smoke test above can see:
+--     * the welcome screen answers CLEAR and GREEN and NOTHING else, so
+--       learning to aim cannot burn the run's own targets;
+--     * the sequence advances only on the expected colour, and a RED
+--       ends the turn keeping the targets but forfeiting the leftovers;
+--     * a CLEAR refunds its beam -- including the LAST one, which is the
+--       whole point of the grace window: the result comes back several
+--       ticks after the pool hit zero;
+--     * the reload is a press EDGE on the second trigger and only with
+--       the magazine actually empty.
+-- ================================================================
+do
+  local S_PRE, S_ACTIVE, S_END = 0, 1, 2
+  local GREEN, YELLOW, BLUE, ORANGE = 2, 3, 4, 5
+  local RED, LIME, MAGENTA, CLEAR   = 6, 7, 8, 1
+
+  local function fail(what, msg)
+    failures = failures + 1
+    print(string.format("  FAIL %-12s %s: %s", "tirobersaglio", what, msg))
+  end
+  local function check(cond, what, msg) if not cond then fail(what, msg) end end
+
+  local state
+  local g, v
+
+  -- One GameRunner tick, in the runner's own order: StateRules first
+  -- (step 2d), then the state's update body (step 2e).  A flag an update
+  -- raises is therefore acted on by the NEXT tick, exactly as on the
+  -- device.
+  local function tick(id)
+    shine_result.status = id and "player" or "no_hit"
+    shine_result.id     = id or 0
+    for _, r in ipairs(g.rules) do
+      if r.from == state and (not r.when or r.when(v)) then
+        state = r.to
+        if r.action then r.action(v) end
+        break
+      end
+    end
+    if g.update[state] then g.update[state](v) end
+    clock = clock + 200
+    shine_busy_until = 0            -- the burst finished inside the tick
+  end
+
+  local function fresh()
+    libcache = {}                   -- a projector of its own for this copy
+    g = dofile(ROOT .. "tirobersaglio.lua")
+    v = {}
+    for _, c in ipairs(g.config) do v[c.id] = c.default end
+    for _, x in ipairs(g.vars)   do v[x.id] = x.default end
+    clock, shine_busy_until = 0, 0
+    g.on_begin(v)
+    state = g.initial_state
+  end
+
+  la.trigger_down = function() return true end
+
+  -- ---- the welcome screen answers two colours, and no others --------
+  fresh()
+  local radio0 = #out.radio          -- out.radio is the whole file's, not ours
+  local e0 = v.energy
+  tick(CLEAR)
+  check(state == S_PRE and v.energy == e0, "trial",
+        "the CLEAR practice shot left the welcome screen or cost energy")
+  tick(YELLOW)
+  check(state == S_PRE and v.hits == 0, "trial",
+        "a run target was live on the welcome screen")
+  check(#out.radio == radio0, "trial",
+        (#out.radio - radio0) .. " radio message(s) escaped a game that has no radio")
+
+  -- ---- GREEN opens the turn, and IS target 1 ------------------------
+  tick(GREEN)                       -- update raises the flag ...
+  tick(nil)                         -- ... and this tick's rules act on it
+  check(state == S_ACTIVE, "start", "the GREEN target did not start the turn")
+  check(v.hits == 1, "start", "the opening GREEN did not count as target 1")
+  check(v.next == "GIALLO", "start", "the turn did not ask for target 2")
+  check(v.time_left == v.sub_time, "start", "the turn clock was not loaded")
+  check(v.energy_left == v.pool * v.charges - 1, "start",
+        "the reserve magazine is missing from the energy the score converts")
+
+  -- ---- the sequence advances only on the expected colour ------------
+  tick(YELLOW)
+  check(v.hits == 2 and v.next == "BLU", "order", "a correct target did not count")
+  local h = v.hits
+  tick(MAGENTA)
+  check(v.hits == h, "order", "an out-of-order target counted as a hit")
+
+  -- ---- a CLEAR gives its beam back ----------------------------------
+  local before = v.energy
+  tick(CLEAR)                       -- refunds this tick's own beam
+  check(v.energy == before, "clear",
+        "the CLEAR panel did not refund its energy: " ..
+        tostring(before) .. " -> " .. tostring(v.energy))
+  check(v.energy_left == v.energy + v.reloads * v.pool, "clear",
+        "the score's energy drifted from magazine + reserve")
+
+  -- ---- the reload: an empty magazine, and a press edge ---------------
+  la.trigger_state = function() return "pressed" end
+  v.energy = 5
+  local reloads = v.reloads
+  tick(nil)
+  check(v.reloads == reloads, "reload",
+        "the second trigger reloaded a magazine that still had energy")
+  v.energy = 0
+  tick(nil)
+  check(v.reloads == reloads - 1 and v.energy > 0, "reload",
+        "the second trigger did not reload an empty magazine")
+  la.trigger_state = function() return "off" end
+
+  -- ---- the grace window: the last beam's CLEAR still arrives ---------
+  v.energy, v.reloads = 1, 0
+  tick(nil)                         -- spends the very last energy
+  check(v.energy_left == 0, "grace", "the last energy was not spent")
+  tick(nil)
+  check(state == S_ACTIVE, "grace",
+        "the turn ended before the last beam's result could come back")
+  la.trigger_down = function() return false end   -- finger off: no new beam
+  tick(CLEAR)                       -- the result of that last beam
+  check(state == S_ACTIVE and v.energy_left == 1, "grace",
+        "the CLEAR refund did not save the last beam")
+  la.trigger_down = function() return true end
+
+  -- ---- and once the grace is spent, the turn ends --------------------
+  -- Two ticks, not one: `energy_left` is recomputed by the update body, so
+  -- the rules only see an emptied pool from the tick after -- the same
+  -- one-tick lag the device has, and the reason a rule may never read a
+  -- number the update it precedes is about to write.
+  v.energy, v.reloads = 0, 0
+  tick(nil)
+  clock = clock + 2000
+  tick(nil)
+  check(state == S_END, "energy", "an empty pool did not end the turn")
+  check(v.score == v.pt_target * v.hits + v.energy_left + v.time_left, "energy",
+        "the score did not pay the leftovers of a clean turn")
+
+  -- ---- a RED keeps the targets and forfeits the leftovers ------------
+  fresh()
+  tick(GREEN); tick(nil)
+  local hits_before = v.hits
+  tick(RED)
+  tick(nil)
+  check(state == S_END, "red", "a RED target did not end the turn")
+  check(v.red == 1, "red", "the RED target was not recorded")
+  check(v.hits == hits_before, "red", "a RED target moved the hit count")
+  check(v.score == v.pt_target * v.hits, "red",
+        "a RED turn was still paid its time and energy: " .. tostring(v.score))
+
+  -- ---- all six panels end the turn while the clock still pays --------
+  fresh()
+  tick(GREEN); tick(nil)
+  for _, id in ipairs({ YELLOW, BLUE, ORANGE, LIME, MAGENTA }) do tick(id) end
+  check(v.hits == 6, "sweep", "the six panels did not all count: " .. tostring(v.hits))
+  tick(nil)
+  check(state == S_END, "sweep", "a completed sequence did not end the turn")
+  check(v.score == v.pt_target * 6 + v.energy_left + v.time_left, "sweep",
+        "a perfect turn was not paid its leftovers")
+
+  local scored = false
+  for _, line in ipairs(out.shows) do
+    if line:match("^Giocatore #%d+ PUNTI: %d+$") then scored = true end
+  end
+  check(scored, "tray", "the stats screen never showed the score line")
+
+  -- ---- the staff's key hands over to the next child ------------------
+  la.key_down = function(k) return k == "A" or k == "B" end
+  local n = v.counter
+  tick(nil)
+  check(state == S_PRE and v.counter == n + 1, "handover",
+        "A+B did not start the next child's turn")
+  check(v.hits == 0 and v.red == 0 and v.energy_left == v.pool * v.charges,
+        "handover", "the next child inherited the last one's turn")
+  la.key_down = function(k, pad) return false end
+
+  la.trigger_down = function() return false end
+  shine_result.status, shine_result.id = "no_hit", 0
+  print("OK   tirobersaglio order enforced, RED forfeits the leftovers, "
+        .. "CLEAR refunds even the last beam, reload needs an empty magazine")
 end
 
 -- ================================================================

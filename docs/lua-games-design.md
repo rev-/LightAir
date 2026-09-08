@@ -230,7 +230,7 @@ The spec details the games rely on:
   infrastructure and 0xF0 totem-protocol blocks.
 - **A match with no end** — `scoring_state` and `time_left_var` are both
   optional, and leaving them out is what makes an always-on ruleset like
-  FestaSportSasso possible.  No `scoring_state`: the runner never sees its
+  FestaSportSasso or TiroBersaglio possible.  No `scoring_state`: the runner never sees its
   entry condition, so it never collects scores, never floods `MSG_END_GAME`,
   never announces a winner and never arms its own end-screen A+B reboot —
   which is what leaves that chord free for the ruleset's own use.  No

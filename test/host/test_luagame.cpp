@@ -111,6 +111,7 @@ int main() {
         { "games/kingofhill.lua", 0x0006 },
         { "games/virus.lua",      0x0007 },
         { "games/festasportsasso.lua", 0x0008 },
+        { "games/tirobersaglio.lua",   0x0009 },
     };
     static LightAir_LuaGame shared;   // the one loaded-game instance
     static LightAir_LuaGame scanner;  // manifest-scan scratch instance
