@@ -66,8 +66,9 @@ local C = { CLEAR = 1, GREEN = 2, YELLOW = 3, BLUE = 4,
             ORANGE = 5, RED = 6, LIME = 7, MAGENTA = 8 }
 
 -- The six numbered panels of the stand, in the order they must be lit,
--- and the names the child reads on the tray.  Kept short on purpose: the
--- LCD cell is 64 px wide minus the icon gutter.
+-- and the names that go with them.  The names live on the TRAY, which is
+-- the full 128 px wide; the cell carries the panel's number, which is
+-- what the child reads off the panel itself.
 local SEQ   = { C.GREEN, C.YELLOW, C.BLUE, C.ORANGE, C.LIME, C.MAGENTA }
 local NAMES = { "VERDE", "GIALLO", "BLU", "ARANCIO", "LIME", "MAGENTA" }
 
@@ -119,7 +120,7 @@ local function show_next(vars)
   local n = vars.hits + 1
   la.clear_tray()
   if n <= #SEQ then
-    vars.next = NAMES[n]
+    vars.next_n = n
     la.show(string.format("Ora il %d: %s", n, NAMES[n]), 0)
   end
 end
@@ -132,7 +133,7 @@ local function welcome(vars)
   vars.red       = 0
   vars.reloads   = vars.charges - 1        -- one charge is in the magazine
   vars.score     = 0
-  vars.next      = NAMES[1]
+  vars.next_n    = 1
   start_now, over, spent_seen, reload_hint = false, nil, 0, false
   grace_until = 0
   proj.reset(vars)
@@ -190,7 +191,7 @@ local function on_target(vars, id)
     vars.hits = vars.hits + 1
     la.ui("Lit")
     if vars.hits >= #SEQ then
-      vars.next = "--"
+      vars.next_n = 0                    -- nothing left to aim at
       over = "TUTTI I BERSAGLI!"
     else
       show_next(vars)
@@ -257,9 +258,10 @@ return {
     { id = "red",          default = 0   },
     { id = "score",        default = 0   },
     { id = "counter",      default = 1   },
-    -- The colour still to light, spelled out for a child who cannot be
-    -- expected to remember the order.
-    { id = "next", text = true, len = 8, default = "VERDE" },
+    -- The panel still to light, by its number: the panels are numbered
+    -- 1..6 at the stand, and a number is what fits the 64 px cell without
+    -- being trimmed.  The colour that goes with it is on the tray line.
+    { id = "next_n",       default = 1   },
     -- Battery, read on the welcome screen: between turns is the only
     -- moment anyone looks at a projector without playing it, so it is
     -- where a flat one has to be caught.
@@ -274,7 +276,7 @@ return {
 
     { var = "time_left",   icon = "TIME",   col = 0, row = 0, states = { S.ACTIVE } },
     { var = "energy",      icon = "ENERGY", col = 1, row = 0, states = { S.ACTIVE } },
-    { var = "next",        icon = "ROLE",   col = 0, row = 1, states = { S.ACTIVE } },
+    { var = "next_n",      icon = "ROLE",   col = 0, row = 1, states = { S.ACTIVE } },
     { var = "reloads",     icon = "LIFE",   col = 1, row = 1, states = { S.ACTIVE } },
 
     -- The four numbers of the turn, frozen.

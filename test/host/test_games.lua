@@ -990,14 +990,14 @@ do
   tick(nil)                         -- ... and this tick's rules act on it
   check(state == S_ACTIVE, "start", "the GREEN target did not start the turn")
   check(v.hits == 1, "start", "the opening GREEN did not count as target 1")
-  check(v.next == "GIALLO", "start", "the turn did not ask for target 2")
+  check(v.next_n == 2, "start", "the turn did not ask for target 2")
   check(v.time_left == v.sub_time, "start", "the turn clock was not loaded")
   check(v.energy_left == v.pool * v.charges - 1, "start",
         "the reserve magazine is missing from the energy the score converts")
 
   -- ---- the sequence advances only on the expected colour ------------
   tick(YELLOW)
-  check(v.hits == 2 and v.next == "BLU", "order", "a correct target did not count")
+  check(v.hits == 2 and v.next_n == 3, "order", "a correct target did not count")
   local h = v.hits
   tick(MAGENTA)
   check(v.hits == h, "order", "an out-of-order target counted as a hit")
