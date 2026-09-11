@@ -28,9 +28,9 @@ local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
 
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
 -- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
-local NEAR_BASE_RSSI = -52               -- ~2 m: base proximity (respawn + scoring)
-local FLAG_RSSI      = -56.9             -- ~3-4 m: flag pickup zone
-local PICKUP_RSSI    = -52               -- ~2 m: BONUS/MALUS claim gate
+local NEAR_BASE_RSSI = -55               -- ~2 m: base proximity (respawn + scoring)
+local FLAG_RSSI      = -55             -- ~2 m: flag pickup zone
+local PICKUP_RSSI    = -55               -- ~2 m: BONUS/MALUS claim gate
 
 -- Continuous carry alert: slow cyan pulse + gentle vibration, tone
 -- 500 Hz above the LIT feedback so the two never sound alike.

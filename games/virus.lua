@@ -38,7 +38,7 @@ local R = { NOEFFECT = 1, INFECTED = 2, VIRUS = 3 }
 
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
 -- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
-local PICKUP_RSSI = -52         -- ~2 m: BONUS/MALUS claim gate
+local PICKUP_RSSI = -55         -- ~2 m: BONUS/MALUS claim gate
 
 -- Continuous red pulse + soft vibration on the infected device.
 local virus_bg = {

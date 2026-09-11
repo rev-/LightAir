@@ -26,16 +26,16 @@ local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
 
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
 -- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
-local NEAR_CP_RSSI      = -55.5 -- ~3 m: CP presence gate, to join or capture
+local NEAR_CP_RSSI      = -45 -- ~0.5 m: CP presence gate, to join or capture
 -- Once counted as present, a CP is held (or contested) at this looser
 -- reach instead — earned, not given: reaching it the first time still
 -- needs NEAR_CP_RSSI.  Applies to anyone who was just present, not only
 -- the recorded owner, so a multi-way contest does not flicker apart on
 -- signal noise near the tight gate while it is still being fought over.
 -- Kept at the same 10 dB margin below NEAR_CP_RSSI as before recalibration.
-local NEAR_CP_RSSI_HOLD = -65.5 -- ~9 m: keep scoring out to here once owned
-local NEAR_BASE_RSSI    = -52   -- ~2 m: BASE respawn gate
-local PICKUP_RSSI       = -52   -- ~2 m: BONUS/MALUS claim gate
+local NEAR_CP_RSSI_HOLD = -66 -- ~6 m: keep scoring out to here once owned
+local NEAR_BASE_RSSI    = -55   -- ~2 m: BASE respawn gate
+local PICKUP_RSSI       = -55   -- ~2 m: BONUS/MALUS claim gate
 local CP_NONE           = 0xFF
 -- Reserved reply sub-type for "hold" (see std.totems.cp() for why 17 and
 -- not 0).  Conquest replies keep using the plain slot+1 encoding (1-16).

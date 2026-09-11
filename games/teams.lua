@@ -27,8 +27,8 @@ local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
 
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
 -- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
-local NEAR_BASE_RSSI = -52      -- ~2 m: BASE respawn gate
-local PICKUP_RSSI    = -52      -- ~2 m: BONUS/MALUS claim gate
+local NEAR_BASE_RSSI = -55      -- ~2 m: BASE respawn gate
+local PICKUP_RSSI    = -55      -- ~2 m: BONUS/MALUS claim gate
 
 -- ---- Private state ------------------------------------------------
 local my_team      = 0          -- read from the runner in on_begin
