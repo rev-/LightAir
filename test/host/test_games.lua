@@ -1110,9 +1110,9 @@ end
 do
   local CP_HOLD = 17
   local cases = {
-    { file = "festasportsasso", tight = -40,   hold = -61.5, owner_arg = 1 },
-    { file = "kingofhill",      tight = -55.5, hold = -65.5, owner_arg = 1 },
-    { file = "upkeep",          tight = -55.5, hold = -65.5, owner_arg = 0 },
+    { file = "festasportsasso", tight = -45, hold = -66, owner_arg = 1 },
+    { file = "kingofhill",      tight = -45, hold = -66, owner_arg = 1 },
+    { file = "upkeep",          tight = -45, hold = -66, owner_arg = 0 },
   }
 
   for _, case in ipairs(cases) do

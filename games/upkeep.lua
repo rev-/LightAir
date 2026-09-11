@@ -26,7 +26,7 @@ local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
 
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
 -- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
-local NEAR_CP_RSSI      = --45 -- ~0.5 m: CP presence gate, to join or capture
+local NEAR_CP_RSSI      = -45 -- ~0.5 m: CP presence gate, to join or capture
 -- Once counted as present, a CP is held (or contested) at this looser
 -- reach instead — earned, not given: reaching it the first time still
 -- needs NEAR_CP_RSSI.  Applies to anyone who was just present, not only
