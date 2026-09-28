@@ -355,3 +355,31 @@ declares none), because a projector with no cooldown must undo a dimmed
 one. That also means switching back to the baseline no longer keeps the
 previous profile's cooldown.
 
+
+---
+
+## 11. A measurement belongs to the state it was fired in
+
+Enlight keeps a completed result until `poll()` reads it, and only in-play
+states read it (`proj.result`). So a beam still being measured when its
+shooter was put out used to stay parked for the whole wait. On the first
+tick back in play it went out as a LIT, aimed at whoever it hit seconds
+earlier, wherever they are now. FestaSportSasso and TiroBersaglio had the
+same leak across the welcome screen: a practice beam could land as a real
+LIT once the turn began.
+
+`GameRunner` now calls `Enlight::discardResult()` on every state change,
+and at `begin()`. The pending result is then delivered as NO_HIT, and the
+cooldown / re-arm sequence runs exactly as after a miss. The energy for
+that beam stays spent, because the trigger really fired.
+
+The consequence is deliberate: in near-simultaneous mutual fire, the
+player who goes down first does not land their beam ("discard", not
+"trade"). A trade would need every out-of-game state to read and send
+results, game by game.
+
+**Radio messages are not purged, and must not be.** Incoming requests are
+already dispatched under the current state on the tick they arrive, and a
+request with no handler in that state is dropped. There is no cross-state
+queue to clean. Replies are kept on purpose: a SHONE reply that arrives
+after the shooter went down is a point earned while in play.

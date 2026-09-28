@@ -85,9 +85,10 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     _emptyBindingSetId = display.createBindingSet();
     _endExitReady = false;
 
-    // Reset state and activate the initial binding set.
-    *game.currentState = game.initialState;
-    activateStateDisplay(game.initialState);
+    // Reset state and activate the initial binding set.  A new match starts
+    // with no measurement pending, whatever state the last one ended in.
+    if (enlightPtr) enlightPtr->discardResult();
+    enterState(game.initialState);
 
     // Stamp the game's typeId on the radio layer so all outgoing packets
     // carry it and incoming packets from other games are filtered out.
@@ -168,6 +169,20 @@ uint8_t LightAir_GameRunner::teamOf(uint8_t id) const {
  *   UPDATE — one loop iteration
  * ========================================================= */
 
+// Every state change goes through here.  Besides the display, it drops any
+// Enlight measurement still undelivered: a beam belongs to the state it was
+// fired in.  Only in-play states read results (proj.result), so a beam in
+// flight when its shooter went down used to sit in Enlight's result slot for
+// the whole wait and go out as a LIT on the first tick back in play — at
+// whoever it hit seconds earlier, wherever they are now.  Replies are
+// deliberately NOT touched: a SHONE reply arriving after the shooter went
+// down is a point earned while in play.
+void LightAir_GameRunner::enterState(uint8_t s) {
+    if (*_game->currentState != s && enlightPtr) enlightPtr->discardResult();
+    *_game->currentState = s;
+    activateStateDisplay(s);
+}
+
 void LightAir_GameRunner::update() {
     uint32_t loopStart = millis();
 
@@ -231,8 +246,7 @@ void LightAir_GameRunner::update() {
         infraHandled[e] = true;
         if (*_game->currentState != _game->scoringState) {
             uint8_t prev = *_game->currentState;
-            *_game->currentState = _game->scoringState;
-            activateStateDisplay(_game->scoringState);
+            enterState(_game->scoringState);
             bool fired = false;
             for (uint8_t i = 0; i < _game->ruleCount; i++) {
                 const StateRule& r = _game->rules[i];
@@ -311,8 +325,7 @@ void LightAir_GameRunner::update() {
         if (r.fromState != *_game->currentState) continue;
         if (r.condition && !r.condition(inputs, radio)) continue;
 
-        *_game->currentState = r.toState;
-        activateStateDisplay(r.toState);
+        enterState(r.toState);
         if (r.onTransition) r.onTransition(*_display, output);
         break;
     }

@@ -121,6 +121,15 @@ public:
     // bus is free again).
     bool busy() const { return _active && !_complete; }
 
+    // Throw away the result of the run in progress (or completed but not yet
+    // polled): the next poll() that would deliver it reports NO_HIT instead,
+    // and the cooldown / re-arm sequence runs exactly as after a miss.  No-op
+    // when there is nothing undelivered.  GameRunner calls it on every state
+    // change — a measurement belongs to the state it was fired in, so a beam
+    // still in flight when its shooter is put out must not land as a LIT on
+    // the first tick back in play.  Main-loop only, like poll().
+    void discardResult();
+
     // ---- Analogue front end ------------------------------------------------
     // AFE_ON powers the photodiode front end *and* the battery / NTC divider
     // rail, so the SpiAdcSensor channels only read anything while it is up.
@@ -251,6 +260,9 @@ private:
     float       _actualFreqHz    = 0.0f;
     uint32_t    _periodsPerCycle  = 0;
     uint32_t    _adcConvsPerCycle = 0;
+
+    // Set by discardResult(): deliver NO_HIT for the current run.
+    bool       _discard            = false;
 
     //Cooldown
     int64_t    _cooldown           = 0;

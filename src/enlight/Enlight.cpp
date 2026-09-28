@@ -259,6 +259,7 @@ bool Enlight::run() {
     _arrayiter=_satCount=_activePeriods=0;
     _colorCoords={0.0f,0.0f};
     _resultDelivered = false;
+    _discard         = false;
     _useLowPower    = false;
     _cycleNormScale = 1.0f;
     _active=true;
@@ -283,6 +284,10 @@ bool Enlight::run() {
 
 EnlightRawMeasure Enlight::rawMeasure() const {
     return { _rout, _gout, _bout, _rnear, _gnear, _bnear, _satCount, _arrayiter };
+}
+
+void Enlight::discardResult() {
+    if (_active && !_resultDelivered) _discard = true;
 }
 
 EnlightResult Enlight::poll() {
@@ -318,6 +323,10 @@ EnlightResult Enlight::poll() {
         r=_latestResult;
         _latestResult={};
         taskEXIT_CRITICAL(&_mux);
+        if (_discard) {                 // see discardResult()
+            r={EnlightStatus::NO_HIT,0};
+            _discard=false;
+        }
         if (_cooldown == 0) {
             _active=false;
         } else {

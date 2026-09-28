@@ -170,6 +170,7 @@ private:
     uint8_t  _scoreSlots[PlayerDefs::MAX_PLAYER_ID][GameDefaults::MAX_WINNER_VARS * 4];
 
     // ---- Helpers ----
+    void enterState(uint8_t s);   // set state + display, drop stale Enlight result
     void activateStateDisplay(uint8_t state);
     void flushOutput(const GameOutput& out);
     void scoreUpdate(const InputReport&, const RadioReport&, GameOutput&);

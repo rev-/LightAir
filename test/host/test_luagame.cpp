@@ -24,7 +24,29 @@ static uint8_t       g_shineId     = 0;
 Enlight::Enlight(const EnlightCalib&) {}
 Enlight::~Enlight() {}
 bool Enlight::run() { return true; }
-EnlightResult Enlight::poll() { return EnlightResult(g_shineStatus, g_shineId); }
+// A scripted one-shot measurement, mirroring the real poll() contract: while
+// g_pendReadyAt is in the future the run is in flight (RUNNING); after it,
+// the result is delivered exactly once — as NO_HIT if discardResult() was
+// called while it was undelivered.  Without a pending run, the persistent
+// g_shineStatus above applies (the older sections script it that way).
+static bool     g_pendActive  = false;
+static uint32_t g_pendReadyAt = 0;
+static uint8_t  g_pendId      = 0;
+static bool     g_pendDiscard = false;
+static int      g_discardCalls = 0;
+EnlightResult Enlight::poll() {
+    if (g_pendActive) {
+        if (millis() < g_pendReadyAt) return EnlightResult(EnlightStatus::RUNNING, 0);
+        g_pendActive = false;
+        if (g_pendDiscard) { g_pendDiscard = false; return EnlightResult(EnlightStatus::NO_HIT, 0); }
+        return EnlightResult(EnlightStatus::PLAYER_HIT, g_pendId);
+    }
+    return EnlightResult(g_shineStatus, g_shineId);
+}
+void Enlight::discardResult() {
+    g_discardCalls++;
+    if (g_pendActive) g_pendDiscard = true;
+}
 static EnlightCalib g_calib;
 static Enlight g_enlight(g_calib);
 Enlight* enlightPtr = &g_enlight;
@@ -1025,6 +1047,74 @@ int main() {
             run2.begin(g2, d2, in2, rad2, &u2);
         CHECK(d2.bindingSetCount() == first,
               "repeated begin() rebuilds the same sets instead of appending");
+    }
+
+    // ---- 18. A measurement belongs to the state it was fired in ----------
+    // Only in-play states read Enlight (proj.result), and Enlight keeps a
+    // completed result until it is read.  A beam still in flight when its
+    // shooter went down used to sit there for the whole wait and go out as
+    // a LIT on the first tick back in play.  Driven through the real
+    // GameRunner::update(), which discards on every state change.
+    {
+        FakeDisplay          raw3;
+        LightAir_DisplayCtrl d3(raw3);
+        FakeAudio            a3; FakeVib v3; FakeRGB r3;
+        LightAir_UICtrl      u3(a3, v3, r3);
+        LightAir_InputCtrl   in3;
+        LightAir_RadioTestTransport tr3;
+        LightAir_Radio       rad3(tr3, 2, 0x42, 0, 0);
+        rad3.begin();
+        LightAir_GameRunner  run3;
+        run3.clearRoster();
+        run3.addToRoster(2);
+        run3.addToRoster(3);
+
+        CHECK(shared.load("games/freeforall.lua"), "freeforall loads for the stale-beam test");
+        const LightAir_Game& g3 = shared.descriptor();
+        g_millisStep = 1;
+        run3.begin(g3, d3, in3, rad3, &u3);
+        int* l3 = slotOf(g3, "lives");
+
+        // Count LITs (0x10) this device put on the wire since the last call.
+        auto litsSent = [&]() {
+            int n = 0;
+            while (tr3.hasSent()) {
+                LightAir_RadioTestTransport::SentEntry e = tr3.popSent();
+                if (e.pkt.msgType == 0x10) n++;
+            }
+            return n;
+        };
+        auto fire = [&](uint32_t inMs) {
+            g_pendActive = true; g_pendDiscard = false;
+            g_pendReadyAt = millis() + inMs; g_pendId = 3;
+        };
+
+        // Control: a beam that completes in play goes out as a LIT.
+        litsSent();
+        fire(0);
+        run3.update();
+        CHECK(litsSent() == 1, "a beam completed in play sends its LIT");
+
+        // The bug: in flight when the shooter goes down, read on respawn.
+        fire(200);
+        int callsBefore = g_discardCalls;
+        *l3 = 0;                                 // shone mid-burst
+        run3.update();                           // IN_GAME -> OUT_GAME
+        CHECK(*g3.currentState == 1, "shooter went down");
+        CHECK(g_discardCalls > callsBefore, "the state change discarded the pending beam");
+        g_millis += 60000;                       // burst long done; respawn due
+        run3.update();                           // OUT_GAME -> IN_GAME, first in-play tick
+        run3.update();
+        CHECK(*g3.currentState == 0, "shooter is back in play");
+        CHECK(litsSent() == 0, "no stale LIT after respawn");
+        CHECK(!g_pendActive, "the stale result was consumed, freeing Enlight");
+
+        // And the next real beam works normally.
+        fire(0);
+        run3.update();
+        CHECK(litsSent() == 1, "the first beam after respawn sends its LIT");
+
+        g_millisStep = 0;
     }
 
     printf(failures == 0 ? "\nLUAGAME HOST TESTS PASS\n" : "\n%d FAILURES\n", failures);
