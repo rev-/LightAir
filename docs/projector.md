@@ -314,3 +314,44 @@ beam**, and once anchored it runs to completion:
 Nothing recharges between an accepted beam and its release, because until
 that release the wait has not begun — otherwise a player who had been idle
 would see the pool refill on the very tick they emptied it.
+
+---
+
+## 10. Pickups: projector bonuses and DIM
+
+A BONUS totem can hand out a projector, and a MALUS totem can DIM the
+player. The DM picks which one each totem does, with O in the Totems
+submenu. `std.pickup_effect` applies it when the player claims the totem.
+
+**The standard catalogue is always known.** `define()` registers SPLASH,
+FAST, LONG and STRONG in every game, declared or not, so a bonus can give
+any of them. Known is not owned: the inventory still starts with the
+baseline alone. Splash lookup-by-id gets the same guarantee for free.
+
+**`proj.bonus_options()`** builds the BONUS list: `LIFE`, the catalogue in
+id order, then the game's own profiles. A profile marked `bonus = false`
+(a practice or role projector: TRIAL, VIRUS) is left out.
+`{ projectors = false }` offers LIFE only, for a ruleset where the pool in
+hand *is* the player's life (Outflow): swapping the projector would swap
+lives. Labels are cut to the menu's 8 characters, and `proj.bonus_id(label)`
+maps them back.
+
+A projector bonus is `grant`ed: given at full energy and put in hand.
+`max_owned` still applies, so it may evict the oldest powered projector.
+
+**DIM** (`proj.set_dim(vars, on)`) halves the pool of every held projector
+(current energy is clamped down to it). It doubles the recharge wait and
+the ramp, and doubles the cooldown. A profile that declares no cooldown
+(the baseline) gets `DIM.min_cooldown_ms` instead, because doubling
+nothing would not be "longer". The factors are constants at the top of
+`projector.lua`.
+
+The ruleset lifts DIM when the player goes out of the game (its IN→OUT
+rule), and `reset()` lifts it too. Virus has no OUT state, so it lifts DIM
+on infection. Lifting does not refill the pool; the ordinary recharge does.
+
+The optics push now always carries an integer cooldown (0 when the profile
+declares none), because a projector with no cooldown must undo a dimmed
+one. That also means switching back to the baseline no longer keeps the
+previous profile's cooldown.
+

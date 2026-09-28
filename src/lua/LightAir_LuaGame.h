@@ -161,6 +161,8 @@ private:
     DirectRadioRule _directRules[LuaDefaults::MAX_MSG_RULES];
     ReplyRadioRule  _replyRules[2];
     LightAir_TotemRequirement _totReqs[TotemDefs::MAX_TOTEM_ROLES];
+    char    _optLabels[TotemDefs::MAX_OPTION_LABELS][TotemDefs::OPTION_LABEL_LEN];
+    uint8_t _optLabelCount = 0;
     uint8_t _teamMap[PlayerDefs::MAX_PLAYER_ID];
 
     // Countdown vars (declarative per-second decrement)

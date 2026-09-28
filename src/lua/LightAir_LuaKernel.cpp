@@ -19,6 +19,7 @@
 #include <Arduino.h>
 #include <string.h>
 
+#include "../totem/TotemRoleIds.h"
 #include "../game/LightAir_GameRunner.h"
 #include "../radio/LightAir_Radio.h"
 #include "../ui/player/display/LightAir_DisplayCtrl.h"
@@ -191,6 +192,36 @@ static int l_totem_for_role(lua_State* L) {
     lua_pushinteger(L, g_luaCtx.runner
                        ? g_luaCtx.runner->totemIdForRole((uint8_t)roleId, idx) : 0);
     return 1;
+}
+// la.totem_option(id) -> index, label
+// The DM's per-totem choice (Totems submenu, O key) for the totem with
+// this device ID: the 1-based index into its role's declared `options`
+// and that option's label.  0, nil when the totem has no option or is
+// not part of this match — which a claim handler reads as "no effect".
+static int l_totem_option(lua_State* L) {
+    lua_Integer id = luaL_checkinteger(L, 1);
+    const LightAir_GameRunner* r = g_luaCtx.runner;
+    uint8_t opt = 0, role = TotemRoleId::NONE;
+    if (r && id > 0 && id <= 0xFF) {
+        opt = r->totemOption((uint8_t)id);
+        for (uint8_t t = 0; t < r->totemCount(); t++)
+            if (r->totemId(t) == (uint8_t)id) { role = r->totemRole(t); break; }
+    }
+    const char* label = nullptr;
+    if (opt > 0 && g_luaCtx.active) {
+        const LightAir_Game& g = g_luaCtx.active->descriptor();
+        for (uint8_t i = 0; i < g.totemRequirementCount; i++) {
+            const LightAir_TotemRequirement& req = g.totemRequirements[i];
+            if (req.roleId == role && opt <= req.optionCount) {
+                label = req.optionLabels[opt - 1];
+                break;
+            }
+        }
+    }
+    if (!label) opt = 0;
+    lua_pushinteger(L, opt);
+    if (label) lua_pushstring(L, label); else lua_pushnil(L);
+    return 2;
 }
 // ---- inputs ----
 static const InputReport::ButtonEntry* findButton(uint8_t id) {
@@ -565,6 +596,7 @@ void LightAir_LuaGame::registerKernel() {
         { "sensor", l_sensor },
         { "player_short", l_player_short }, { "team_short", l_team_short },
         { "totem_for_role", l_totem_for_role },
+        { "totem_option",   l_totem_option },
         { "trigger_down", l_trigger_down }, { "trigger_state", l_trigger_state },
         { "key_down", l_key_down }, { "key_state", l_key_state },
         { "key_at", l_key_at },

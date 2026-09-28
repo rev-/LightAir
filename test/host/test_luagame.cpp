@@ -13,6 +13,7 @@ HostLog Log;
 
 #include "lua/LightAir_LuaGame.h"
 #include "game/LightAir_GameRunner.h"
+#include "game/LightAir_ConfigBlob.h"
 #include "radio/LightAir_RadioTestTransport.h"
 #include "enlight/Enlight.h"
 
@@ -76,6 +77,7 @@ struct FakeRGB : LightAir_RGB {
 };
 
 uint8_t TotemRoleId_BONUS();
+uint8_t TotemRoleId_MALUS();
 uint8_t TotemRoleId_CP();
 static int failures = 0;
 #define CHECK(cond, msg) do { \
@@ -436,6 +438,93 @@ int main() {
             CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payloadLen == 1,
                   "pickup in range is claimed by this player");
         }
+
+        // ---- 10b. Per-totem options (Totems submenu, O key) ----
+        // The `options` lists reach the descriptor the menu reads...
+        const LightAir_TotemRequirement* bReq = nullptr;
+        const LightAir_TotemRequirement* mReq = nullptr;
+        for (uint8_t i = 0; i < tg.totemRequirementCount; i++) {
+            if (tg.totemRequirements[i].roleId == TotemRoleId_BONUS()) bReq = &tg.totemRequirements[i];
+            if (tg.totemRequirements[i].roleId == TotemRoleId_MALUS()) mReq = &tg.totemRequirements[i];
+        }
+        CHECK(bReq && bReq->optionCount == 5, "teams BONUS offers LIFE + the four standard projectors");
+        CHECK(bReq && bReq->optionCount > 0 && strcmp(bReq->optionLabels[0], "LIFE") == 0,
+              "BONUS option 1 is LIFE");
+        uint8_t fastOpt = 0;
+        for (uint8_t k = 0; bReq && k < bReq->optionCount; k++)
+            if (strcmp(bReq->optionLabels[k], "FAST") == 0) fastOpt = k + 1;
+        CHECK(fastOpt > 0, "BONUS offers FAST");
+        CHECK(mReq && mReq->optionCount == 2 &&
+              strcmp(mReq->optionLabels[0], "LIFE") == 0 &&
+              strcmp(mReq->optionLabels[1], "DIM") == 0, "MALUS offers LIFE, DIM");
+        const LightAir_TotemRequirement* baseReq = nullptr;
+        for (uint8_t i = 0; i < tg.totemRequirementCount; i++)
+            if (tg.totemRequirements[i].optionCount == 0) baseReq = &tg.totemRequirements[i];
+        CHECK(baseReq && baseReq->optionLabels == nullptr, "a role with no options declares none");
+
+        // ...and la.totem_option() hands the claiming player the pick the
+        // runner holds for that totem: LIFE adds this player's starting
+        // lives, capped at twice that.
+        runner.clearTotems();
+        runner.addTotem(253, TotemRoleId_BONUS(), 1);           // LIFE
+        runner.addTotem(252, TotemRoleId_MALUS(), 1);           // LIFE
+        CHECK(runner.totemOption(253) == 1 && runner.totemOption(251) == 0,
+              "runner keeps each totem's option");
+        *tlives = 1;
+        if (bonus && bonus->onReceive) {
+            out = GameOutput();
+            bonus->onReceive(bon, /*rssi*/ -40, disp, out);
+            CHECK(*tlives == 4, "BONUS LIFE: 1 + 3 starting lives");
+            out = GameOutput();
+            bonus->onReceive(bon, /*rssi*/ -40, disp, out);
+            CHECK(*tlives == 6, "BONUS LIFE capped at 2x starting lives");
+        }
+        const DirectRadioRule* malus = nullptr;
+        for (uint8_t i = 0; i < tg.directRadioRuleCount; i++)
+            if (tg.directRadioRules[i].fromState == 0 &&
+                tg.directRadioRules[i].msgType == RadioMsg::MSG_MALUS_BEACON)
+                malus = &tg.directRadioRules[i];
+        CHECK(malus && malus->onReceive, "teams handles MALUS_BEACON in play");
+        if (malus && malus->onReceive) {
+            RadioPacket mal = bon;
+            mal.senderId = 252; mal.msgType = RadioMsg::MSG_MALUS_BEACON;
+            out = GameOutput();
+            malus->onReceive(mal, /*rssi*/ -40, disp, out);
+            CHECK(*tlives == 0, "MALUS LIFE takes every life");
+        }
+        // A totem this match does not know gives nothing, but is still claimed.
+        runner.clearTotems();
+        *tlives = 2;
+        if (bonus && bonus->onReceive) {
+            out = GameOutput();
+            bonus->onReceive(bon, /*rssi*/ -40, disp, out);
+            CHECK(*tlives == 2 && out.radio.replyCount == 1,
+                  "unknown totem: claimed, no effect");
+        }
+
+        // ---- 10c. Config blob carries the options ----
+        uint8_t assign[TotemDefs::MAX_TOTEMS] = {};
+        uint8_t opts[TotemDefs::MAX_TOTEMS]   = {};
+        uint8_t teams[PlayerDefs::MAX_PLAYER_ID];
+        memset(teams, 0xFF, sizeof(teams));
+        assign[1] = TotemRoleId_BONUS();  opts[1] = fastOpt;
+        assign[2] = TotemRoleId_MALUS();  opts[2] = 2;
+        teams[3] = 1;
+        uint8_t blob[250];
+        uint16_t len = game_serialize_config(tg, blob, sizeof(blob), assign, teams, 0x5A, opts);
+        CHECK(len == 2 + tg.configCount * 4 + PlayerDefs::MAX_PLAYER_ID + 2 * TotemDefs::MAX_TOTEMS + 1,
+              "blob size includes 16 option bytes");
+        uint8_t assign2[TotemDefs::MAX_TOTEMS] = {};
+        uint8_t opts2[TotemDefs::MAX_TOTEMS]   = {};
+        uint8_t teams2[PlayerDefs::MAX_PLAYER_ID] = {};
+        uint8_t token = 0;
+        CHECK(game_apply_config(tg, blob, len, assign2, teams2, &token, opts2),
+              "blob applies");
+        CHECK(memcmp(assign, assign2, sizeof(assign)) == 0 &&
+              memcmp(opts, opts2, sizeof(opts)) == 0 &&
+              teams2[3] == 1 && token == 0x5A, "blob round-trips roles, options, teams, token");
+        CHECK(!game_apply_config(tg, blob, (uint16_t)(len - TotemDefs::MAX_TOTEMS), assign2, teams2, &token, opts2),
+              "an old-format blob (no option bytes) is rejected");
     }
 
     // ---- 11. Fault policy: log, notify, continue ----
@@ -945,4 +1034,5 @@ int main() {
 // avoid dragging TotemRoleIds include ordering issues into the test
 #include "totem/TotemRoleIds.h"
 uint8_t TotemRoleId_BONUS() { return TotemRoleId::BONUS; }
+uint8_t TotemRoleId_MALUS() { return TotemRoleId::MALUS; }
 uint8_t TotemRoleId_CP()    { return TotemRoleId::CP; }

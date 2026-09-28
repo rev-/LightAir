@@ -2,7 +2,7 @@
 // LightAir_GameSetupMenu.cpp — the blocking pre-game menu.
 //
 // Map (the screen flow S1..S5 is drawn in the header):
-//   config blob serialize/apply  → free functions, top of file
+//   config blob serialize/apply  → LightAir_ConfigBlob.cpp
 //   home / settings / share / ID → runSettingsMenu and friends
 //   non-DM path                  → runWaiter (join + wait for config)
 //   S1/S2 game choice            → runRestartPrompt / runGameList
@@ -32,8 +32,6 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char* TAG = "GameConfig";
-
 #define MGR_NVS_NAMESPACE  "lightair"
 #define MGR_NVS_KEY_DM     "is_dm"
 #define MGR_NVS_KEY_CFG    "last_cfg"   // blob: the config committed at the last game start
@@ -49,105 +47,6 @@ static uint32_t    gLastButtonHeld[InputDefaults::MAX_BUTTONS]  = {};
 
 // Convenience: convert a button id to its virtual key character
 static inline char buttonVirtualKey(uint8_t id) { return (char)(0x01 + id); }
-
-/* =========================================================
- *   CONFIG BLOB FREE FUNCTIONS
- * ========================================================= */
-
-uint16_t game_serialize_config(const LightAir_Game& game,
-                                uint8_t* buf, uint16_t maxLen,
-                                const uint8_t totemAssignment[TotemDefs::MAX_TOTEMS],
-                                const uint8_t teamMap[PlayerDefs::MAX_PLAYER_ID],
-                                uint8_t sessionToken) {
-    uint16_t minNeeded = 2
-        + (uint16_t)game.configCount * 4
-        + (game.teamCount > 0 ? PlayerDefs::MAX_PLAYER_ID : 0)
-        + TotemDefs::MAX_TOTEMS   // 16 × uint8_t roleId
-        + 1;
-    if (maxLen < minNeeded) return 0;
-
-    uint16_t id = game.typeId;
-    memcpy(buf, &id, 2);
-    uint16_t pos = 2;
-
-    // configVars
-    for (uint8_t v = 0; v < game.configCount; v++) {
-        int32_t val = (int32_t)*game.configVars[v].value;
-        memcpy(buf + pos, &val, 4);
-        pos += 4;
-    }
-
-    // teamMap (MAX_PLAYER_ID bytes; only if game.teamCount > 0)
-    if (game.teamCount > 0) {
-        for (uint8_t i = 0; i < PlayerDefs::MAX_PLAYER_ID; i++)
-            buf[pos++] = teamMap ? teamMap[i] : 0xFF;
-    }
-
-    // 16 totem slot assignments (roleId per slot; 0 = unassigned)
-    for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++)
-        buf[pos++] = totemAssignment ? totemAssignment[s] : 0;
-
-    // Session token (1 byte; 0 = no session isolation)
-    buf[pos++] = sessionToken;
-
-    return pos;
-}
-
-bool game_apply_config(const LightAir_Game& game,
-                        const uint8_t* buf, uint16_t len,
-                        uint8_t totemAssignmentOut[TotemDefs::MAX_TOTEMS],
-                        uint8_t teamMapOut[PlayerDefs::MAX_PLAYER_ID],
-                        uint8_t* sessionTokenOut) {
-    uint16_t minNeeded = 2
-        + (uint16_t)game.configCount * 4
-        + (game.teamCount > 0 ? PlayerDefs::MAX_PLAYER_ID : 0)
-        + TotemDefs::MAX_TOTEMS
-        + 1;
-    if (len < minNeeded) {
-        ESP_LOGW(TAG, "config blob too short: got %u, need %u", (unsigned)len, (unsigned)minNeeded);
-        return false;
-    }
-
-    uint16_t id;
-    memcpy(&id, buf, 2);
-    if (id != game.typeId) return false;
-
-    uint16_t pos = 2;
-
-    // configVars
-    for (uint8_t v = 0; v < game.configCount && pos + 4 <= len; v++) {
-        const ConfigVar& var = game.configVars[v];
-        int32_t val;
-        memcpy(&val, buf + pos, 4);
-        pos += 4;
-        if (val < var.min) val = var.min;
-        if (val > var.max) val = var.max;
-        *var.value = (int)val;
-    }
-
-    // teamMap (MAX_PLAYER_ID bytes; only if game.teamCount > 0)
-    if (game.teamCount > 0) {
-        for (uint8_t i = 0; i < PlayerDefs::MAX_PLAYER_ID && pos < len; i++) {
-            uint8_t t = buf[pos++];
-            if (teamMapOut)    teamMapOut[i]    = t;
-            if (game.teamMap) game.teamMap[i]   = t;
-        }
-    }
-
-    // totem slot assignments (roleId per slot)
-    if (totemAssignmentOut) {
-        for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS && pos < len; s++)
-            totemAssignmentOut[s] = buf[pos++];
-    } else {
-        pos += TotemDefs::MAX_TOTEMS;
-    }
-
-    // Session token (last byte)
-    if (sessionTokenOut)
-        *sessionTokenOut = (pos < len) ? buf[pos] : 0;
-
-    return true;
-}
 
 /* =========================================================
  *   CONSTRUCTOR
@@ -264,7 +163,8 @@ void LightAir_GameSetupMenu::saveLastConfig() {
     if (!_game) return;
     uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
     uint16_t len = game_serialize_config(*_game, blob, sizeof(blob),
-                                         _totemAssignment, _teams, _radio.sessionToken());
+                                         _totemAssignment, _teams, _radio.sessionToken(),
+                                         _totemOption);
     if (len == 0) return;
     nvs_handle_t h;
     if (nvs_open(MGR_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return;
@@ -292,7 +192,8 @@ void LightAir_GameSetupMenu::applyLastConfig(const LightAir_Game& game) {
     esp_err_t err = nvs_get_blob(h, MGR_NVS_KEY_CFG, blob, &len);
     nvs_close(h);
     if (err != ESP_OK) return;
-    game_apply_config(game, blob, (uint16_t)len, _totemAssignment, _teams, nullptr);
+    game_apply_config(game, blob, (uint16_t)len, _totemAssignment, _teams, nullptr,
+                      _totemOption);
 }
 
 void LightAir_GameSetupMenu::runSettingsMenu() {
@@ -515,7 +416,8 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
                 const LightAir_Game& candidate = _mgr.game(g);
                 uint8_t token = 0;
                 if (game_apply_config(candidate, ev.packet.payload,
-                                      ev.packet.payloadLen, _totemAssignment, _teams, &token)) {
+                                      ev.packet.payloadLen, _totemAssignment, _teams, &token,
+                                      _totemOption)) {
                     _game    = &candidate;
                     _gameIdx = g;
                     if (token != 0) _radio.setSessionToken(token);
@@ -901,65 +803,198 @@ void LightAir_GameSetupMenu::runTeamsSubmenu() {
  *   S4c — TOTEMS SUBMENU
  * ========================================================= */
 
+// ---- BASE / FLAG folding --------------------------------------
+// The team a BASE or FLAG serves is a per-totem option, not a separate
+// role, as far as the DM is concerned: </> shows one "BASE" / "FLAG"
+// entry and O picks which team.  Underneath, the existing roleIds stay
+// exactly as they were (BASE_O / BASE_X / BASE, FLAG_O / FLAG_X), so the
+// wire, the totem programs and every game file are untouched — only
+// this menu knows the roles are grouped.
+namespace {
+struct RoleFamily {
+    const char* label;
+    uint8_t     count;
+    uint8_t     members[3];
+    uint8_t     team[3];        // team index shown for the member; 0xFF = teamless
+};
+constexpr RoleFamily kFamilies[] = {
+    { "BASE", 3, { TotemRoleId::BASE_O, TotemRoleId::BASE_X, TotemRoleId::BASE }, { 0, 1, 0xFF } },
+    { "FLAG", 2, { TotemRoleId::FLAG_O, TotemRoleId::FLAG_X, 0 },                 { 0, 1, 0xFF } },
+};
+constexpr uint8_t kFamilyCount = sizeof(kFamilies) / sizeof(kFamilies[0]);
+
+// Family index of roleId, or -1 for a role that stands alone.
+int8_t familyOf(uint8_t roleId) {
+    if (roleId == TotemRoleId::NONE) return -1;
+    for (uint8_t f = 0; f < kFamilyCount; f++)
+        for (uint8_t m = 0; m < kFamilies[f].count; m++)
+            if (kFamilies[f].members[m] == roleId) return (int8_t)f;
+    return -1;
+}
+
+// Two roles are the same Totems-submenu entry: identical, or one family.
+bool sameEntry(uint8_t a, uint8_t b) {
+    if (a == b) return true;
+    int8_t fa = familyOf(a);
+    return fa >= 0 && fa == familyOf(b);
+}
+}  // namespace
+
 void LightAir_GameSetupMenu::initTotemAssignment() {
     memset(_totemAssignment, 0, sizeof(_totemAssignment));
+    memset(_totemOption, 0, sizeof(_totemOption));
+}
+
+const LightAir_TotemRequirement*
+LightAir_GameSetupMenu::requirementFor(uint8_t roleId) const {
+    if (!_game->totemRequirements) return nullptr;
+    for (uint8_t r = 0; r < _game->totemRequirementCount; r++)
+        if (_game->totemRequirements[r].roleId == roleId) return &_game->totemRequirements[r];
+    return nullptr;
+}
+
+bool LightAir_GameSetupMenu::isRoleDeclared(uint8_t roleId) const {
+    return requirementFor(roleId) != nullptr;
 }
 
 bool LightAir_GameSetupMenu::isRoleAvailable(uint8_t slot, uint8_t roleId) const {
     if (roleId == TotemRoleId::NONE) return true;
-    if (!_game->totemRequirements) return false;
-    for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
-        const LightAir_TotemRequirement& req = _game->totemRequirements[r];
-        if (req.roleId != roleId) continue;
-        // Count assignments to this role on other slots.
-        uint8_t count = 0;
-        for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++) {
-            if (s != slot && _totemAssignment[s] == roleId) count++;
-        }
-        return count < req.maxCount;
+    const LightAir_TotemRequirement* req = requirementFor(roleId);
+    if (!req) return false;  // roleId not in requirements
+    // Count assignments to this role on other slots.
+    uint8_t count = 0;
+    for (uint8_t s = 0; s < TotemDefs::MAX_TOTEMS; s++) {
+        if (s != slot && _totemAssignment[s] == roleId) count++;
     }
-    return false;  // roleId not in requirements
+    return count < req->maxCount;
+}
+
+// The role an entry resolves to on this slot: roleId itself for a lone
+// role, or the first declared, not-yet-full member of its family.
+// NONE when nothing in the entry can take this slot.
+uint8_t LightAir_GameSetupMenu::firstAvailableInEntry(uint8_t slot, uint8_t roleId) const {
+    int8_t f = familyOf(roleId);
+    if (f < 0) return isRoleAvailable(slot, roleId) ? roleId : TotemRoleId::NONE;
+    for (uint8_t m = 0; m < kFamilies[f].count; m++) {
+        uint8_t cand = kFamilies[f].members[m];
+        if (isRoleDeclared(cand) && isRoleAvailable(slot, cand)) return cand;
+    }
+    return TotemRoleId::NONE;
+}
+
+// Assign a role to a slot.  A role with options starts on its first one,
+// so a BONUS/MALUS totem always does something even if the DM never
+// presses O.
+void LightAir_GameSetupMenu::setTotemRole(uint8_t slot, uint8_t roleId) {
+    _totemAssignment[slot] = roleId;
+    const LightAir_TotemRequirement* req = requirementFor(roleId);
+    _totemOption[slot] = (req && req->optionCount > 0) ? 1 : 0;
 }
 
 const char* LightAir_GameSetupMenu::totemRoleLabel(uint8_t roleId) const {
     if (roleId == TotemRoleId::NONE) return "----";
     // Append '*' for required roles (minCount > 0).
-    if (_game->totemRequirements) {
-        for (uint8_t r = 0; r < _game->totemRequirementCount; r++) {
-            if (_game->totemRequirements[r].roleId == roleId &&
-                _game->totemRequirements[r].minCount > 0) {
-                static char buf[12];
-                snprintf(buf, sizeof(buf), "%.9s*", totemRoleName(roleId));
-                return buf;
-            }
-        }
+    const LightAir_TotemRequirement* req = requirementFor(roleId);
+    if (req && req->minCount > 0) {
+        static char buf[12];
+        snprintf(buf, sizeof(buf), "%.9s*", totemRoleName(roleId));
+        return buf;
     }
     return totemRoleName(roleId);
 }
 
+// S4c row label: the family name for BASE/FLAG ("BASE", not "BASE_O" —
+// the team is shown as the option), '*' when the assigned role is required.
+const char* LightAir_GameSetupMenu::totemEntryLabel(uint8_t roleId) const {
+    int8_t f = familyOf(roleId);
+    if (f < 0) return totemRoleLabel(roleId);
+    const LightAir_TotemRequirement* req = requirementFor(roleId);
+    static char buf[12];
+    snprintf(buf, sizeof(buf), "%s%s", kFamilies[f].label,
+             (req && req->minCount > 0) ? "*" : "");
+    return buf;
+}
+
+// What O has picked for this slot: the team of a BASE/FLAG, or the label
+// of a role's declared option.  "" when there is nothing to show.
+const char* LightAir_GameSetupMenu::totemOptionLabel(uint8_t slot) const {
+    uint8_t roleId = _totemAssignment[slot];
+    int8_t  f      = familyOf(roleId);
+    if (f >= 0) {
+        for (uint8_t m = 0; m < kFamilies[f].count; m++) {
+            if (kFamilies[f].members[m] != roleId) continue;
+            uint8_t t = kFamilies[f].team[m];
+            if (t == 0xFF) return "Any";
+            static char buf[TotemDefs::OPTION_LABEL_LEN];
+            snprintf(buf, sizeof(buf), "Team %s", TeamNames::forTeam(t));
+            return buf;
+        }
+        return "";
+    }
+    const LightAir_TotemRequirement* req = requirementFor(roleId);
+    uint8_t opt = _totemOption[slot];
+    if (!req || opt == 0 || opt > req->optionCount) return "";
+    return req->optionLabels[opt - 1];
+}
+
+// O key.  BASE/FLAG: step to the next declared, available member of the
+// family (the team).  Roles with declared options: step 1..N, wrapping.
+// Returns false when the slot's role has nothing to choose.
+bool LightAir_GameSetupMenu::cycleTotemOption(uint8_t slot) {
+    uint8_t roleId = _totemAssignment[slot];
+    int8_t  f      = familyOf(roleId);
+    if (f >= 0) {
+        const RoleFamily& fam = kFamilies[f];
+        uint8_t cur = 0;
+        for (uint8_t m = 0; m < fam.count; m++)
+            if (fam.members[m] == roleId) cur = m;
+        for (uint8_t step = 1; step < fam.count; step++) {
+            uint8_t cand = fam.members[(cur + step) % fam.count];
+            if (isRoleDeclared(cand) && isRoleAvailable(slot, cand)) {
+                setTotemRole(slot, cand);
+                return true;
+            }
+        }
+        return false;   // only one team possible here
+    }
+    const LightAir_TotemRequirement* req = requirementFor(roleId);
+    if (!req || req->optionCount == 0) return false;
+    _totemOption[slot] = (_totemOption[slot] >= req->optionCount) ? 1 : _totemOption[slot] + 1;
+    return true;
+}
+
 uint8_t LightAir_GameSetupMenu::nextTotemRole(uint8_t slot, int8_t dir) const {
-    // Options: index 0 = NONE, index 1..N = totemRequirements[0..N-1].roleId
+    // Entries: index 0 = NONE, then one per distinct role — or per family,
+    // for BASE/FLAG — in the order the game declares them.
     uint8_t reqCount = _game->totemRequirements ? _game->totemRequirementCount : 0;
-    uint8_t total    = 1 + reqCount;
+    uint8_t entries[1 + TotemDefs::MAX_TOTEM_ROLES];
+    uint8_t total = 0;
+    entries[total++] = TotemRoleId::NONE;
+    for (uint8_t r = 0; r < reqCount; r++) {
+        uint8_t id = _game->totemRequirements[r].roleId;
+        bool dup = false;
+        for (uint8_t e = 1; e < total; e++)
+            if (sameEntry(entries[e], id)) { dup = true; break; }
+        if (!dup) entries[total++] = id;
+    }
 
     // Find current index in the cycle.
     uint8_t curRole = _totemAssignment[slot];
     uint8_t curIdx  = 0;
-    for (uint8_t r = 0; r < reqCount; r++) {
-        if (_game->totemRequirements[r].roleId == curRole) { curIdx = r + 1; break; }
-    }
+    for (uint8_t e = 1; e < total; e++)
+        if (sameEntry(entries[e], curRole)) { curIdx = e; break; }
 
     for (uint8_t attempt = 0; attempt < total; attempt++) {
         if (dir > 0) curIdx = (curIdx + 1 >= total) ? 0 : curIdx + 1;
         else         curIdx = (curIdx == 0) ? total - 1 : curIdx - 1;
-        uint8_t candidate = (curIdx == 0) ? TotemRoleId::NONE
-                                          : _game->totemRequirements[curIdx - 1].roleId;
-        if (isRoleAvailable(slot, candidate)) return candidate;
+        if (curIdx == 0) return TotemRoleId::NONE;
+        uint8_t candidate = firstAvailableInEntry(slot, entries[curIdx]);
+        if (candidate != TotemRoleId::NONE) return candidate;
     }
     return _totemAssignment[slot];  // no change possible
 }
 
-void LightAir_GameSetupMenu::renderTotemEntry(uint8_t cursor) {
+void LightAir_GameSetupMenu::renderTotemEntry(uint8_t cursor, const char* legend) {
     _display.clear();
     _display.setColor(true);
 
@@ -968,14 +1003,15 @@ void LightAir_GameSetupMenu::renderTotemEntry(uint8_t cursor) {
         uint8_t row = (uint8_t)(delta + 1);
         if (slot < 0 || slot >= (int8_t)TotemDefs::MAX_TOTEMS) continue;
 
-        char buf[20];
-        snprintf(buf, sizeof(buf), "%s%s: %-8s",
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%s%s:%-6s %s",
                  (delta == 0) ? ">" : " ",
                  TotemDefs::totemShort[slot],
-                 totemRoleLabel(_totemAssignment[slot]));
+                 totemEntryLabel(_totemAssignment[slot]),
+                 totemOptionLabel((uint8_t)slot));
         _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
     }
-    printLegend("^V Nav  <> Chg  X:Exit", DisplayDefaults::BOTTOM_LINE_Y);
+    printLegend(legend ? legend : "^V <>Role O:Opt X:Exit", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
 }
 
@@ -989,8 +1025,8 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
         MenuKeyEvent ev = waitForKey();
         char key = ev.key;
 
-        // Action button (B) only responds to PRESS
-        if (key == 'B' && ev.state != KeyState::PRESSED) continue;
+        // Action buttons (O, X) only respond to PRESS
+        if ((key == 'A' || key == 'B') && ev.state != KeyState::PRESSED) continue;
 
         switch (key) {
             case '^':
@@ -1000,11 +1036,19 @@ void LightAir_GameSetupMenu::runTotemsSubmenu() {
                 if (cursor < TotemDefs::MAX_TOTEMS - 1) { cursor++; renderTotemEntry(cursor); }
                 break;
             case '<':
-                _totemAssignment[cursor] = nextTotemRole(cursor, -1);
+                setTotemRole(cursor, nextTotemRole(cursor, -1));
                 renderTotemEntry(cursor);
                 break;
             case '>':
-                _totemAssignment[cursor] = nextTotemRole(cursor, +1);
+                setTotemRole(cursor, nextTotemRole(cursor, +1));
+                renderTotemEntry(cursor);
+                break;
+            case 'A':
+                if (!cycleTotemOption(cursor) && _totemAssignment[cursor] != TotemRoleId::NONE) {
+                    // Say why O did nothing, then put the list back.
+                    renderTotemEntry(cursor, "No options");
+                    delay(700);
+                }
                 renderTotemEntry(cursor);
                 break;
             case 'B': return;
@@ -1026,7 +1070,8 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
     _radio.setSessionToken(token);
 
     uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
-    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD, _totemAssignment, _teams, token);
+    uint16_t len = game_serialize_config(*_game, blob, GameDefaults::RADIO_OUT_PAYLOAD,
+                                         _totemAssignment, _teams, token, _totemOption);
     if (len > 0) _radio.broadcast(_msgType, blob, len, 2);
 
     _seenCount = 0;
@@ -1175,6 +1220,9 @@ void LightAir_GameSetupMenu::renderSummary(uint8_t vScroll) {
         if (team != 0xFF)
             off += snprintf(full + off, sizeof(full) - off, " T%s",
                             TeamNames::forTeam(team));
+        else if (familyOf(te.val) < 0 && totemOptionLabel(te.slot)[0])
+            off += snprintf(full + off, sizeof(full) - off, " %s",
+                            totemOptionLabel(te.slot));
 
         char rowBuf[20];
         snprintf(rowBuf, sizeof(rowBuf), "%s", full);
@@ -1222,7 +1270,7 @@ void LightAir_GameSetupMenu::commitToRunner() {
         uint8_t roleId = _totemAssignment[s];
         if (roleId == TotemRoleId::NONE) continue;
         uint8_t id = TotemDefs::idFromIndex(s);
-        _runner.addTotem(id, roleId);
+        _runner.addTotem(id, roleId, _totemOption[s]);
     }
 
     // Checkpoint what is actually about to run, for S1's "Restart" to

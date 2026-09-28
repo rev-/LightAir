@@ -155,6 +155,91 @@ function std.pickup_claim(cfg)
 end
 
 -- ----------------------------------------------------------------
+-- BONUS / MALUS effects — what a claimed pickup actually does.
+--
+-- The DM picks each pickup totem's effect in the Totems submenu (O key);
+-- la.totem_option(pkt.sender) tells the claiming player which one.  This
+-- returns the on_claim for std.pickup_claim:
+--
+--   [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI,
+--       on_claim = std.pickup_effect{ proj = proj, lives = "lives",
+--                                     start_lives = my_start_lives } },
+--
+-- with the matching option lists in totem_slots:
+--
+--   { role = "BONUS", ..., options = proj.bonus_options() },
+--   { role = "MALUS", ..., options = std.malus_options() },
+--
+-- Effects:
+--   BONUS LIFE    lives += S, capped at 2*S, where S = this player's
+--                 starting lives — an unhurt player lands on the maximum.
+--   BONUS <proj>  that projector, given at full energy and put in hand.
+--   MALUS LIFE    lives = 0; the ruleset's own "out of lives" rule fires.
+--   MALUS DIM     proj.set_dim(true): the ruleset lifts it on going out.
+--
+-- cfg.start_lives(vars) is "this player's starting lives".  It is a
+-- function, not a number, so that when players get roles with different
+-- starting lives only the game's one resolver changes — the same one its
+-- respawn uses — and the bonus follows.
+--
+-- A ruleset with no lives (cfg.lives = nil) applies LIFE to energy
+-- instead: cfg.energy names the var (default "energy"), and
+-- cfg.start_energy(vars) plays the part of S (default vars.start_energy).
+--
+-- cfg.projector_ok(vars), optional: false turns a projector bonus into
+-- the LIFE bonus — for a player whose projector in hand is their role.
+-- ----------------------------------------------------------------
+local function default_start_lives(vars)  return vars.start_lives or 0 end
+local function default_start_energy(vars) return vars.start_energy or 0 end
+
+function std.malus_options() return { "LIFE", "DIM" } end
+
+function std.pickup_effect(cfg)
+  assert(cfg.proj, "std.pickup_effect: cfg.proj is required")
+  local proj         = cfg.proj
+  local lives        = cfg.lives
+  local energy       = cfg.energy or "energy"
+  local start_lives  = cfg.start_lives  or default_start_lives
+  local start_energy = cfg.start_energy or default_start_energy
+
+  local function gain_life(vars)
+    if lives then
+      local s = start_lives(vars)
+      vars[lives] = math.min(vars[lives] + s, 2 * s)
+    else
+      local s = start_energy(vars)
+      vars[energy] = math.min(vars[energy] + s, 2 * s)
+    end
+    la.show("BONUS: LIFE", 2000)
+  end
+
+  local function lose_life(vars)
+    if lives then vars[lives] = 0 else vars[energy] = 0 end
+    la.show("MALUS: LIFE", 2000)
+  end
+
+  return function(vars, pkt)
+    local _, label = la.totem_option(pkt.sender)
+    if not label then return end
+    if pkt.msg == la.msg.MALUS_BEACON then
+      if label == "LIFE" then lose_life(vars)
+      elseif label == "DIM" then
+        proj.set_dim(vars, true)
+        la.show("MALUS: DIM", 2000)
+      end
+      return
+    end
+    local id = proj.bonus_id(label)
+    if id and (cfg.projector_ok == nil or cfg.projector_ok(vars)) then
+      proj.grant(vars, id)
+      la.show("BONUS: " .. label, 2000)
+    elseif label == "LIFE" or id then
+      gain_life(vars)
+    end
+  end
+end
+
+-- ----------------------------------------------------------------
 -- Two-team aggregate winner announcement (Teams, Flag, Upkeep).
 -- scores is the array handed to on_score_announce:
 --   { { id = pid, team = 0|1|.., vals = { v1, v2 } }, ... }

@@ -401,12 +401,20 @@ struct ScoreTable {
 //               is serialized into the 0xF1 activation reply, so a
 //               game-configured cooldown reaches the totem.
 //               nullptr = the program's own cfg_default applies.
+// optionCount / optionLabels
+//             — optional per-totem choices the DM picks with O in the
+//               Totems submenu (e.g. which bonus a BONUS totem gives).
+//               The chosen 1-based index travels in the config blob and
+//               is read in game through la.totem_option(id); what an
+//               option *does* is entirely the ruleset's.  0 = none.
 // ----------------------------------------------------------------
 struct LightAir_TotemRequirement {
     uint8_t     roleId;
     uint8_t     minCount;
     uint8_t     maxCount;
     const int*  configSecs;   // optional; points to a game config var
+    uint8_t     optionCount;  // 0 = no per-totem options
+    const char (*optionLabels)[TotemDefs::OPTION_LABEL_LEN];
 };
 
 // ----------------------------------------------------------------

@@ -88,7 +88,8 @@ proj.define{
     -- magazine the config menu sizes, and NO recharge — the reload is a
     -- deliberate press, never a wait.
     { id = 0, cost = COST, max_energy = "pool", recharge = "none" },
-    { id = P_TRIAL, name = "TRIAL", cost = 0, max_energy = "pool",
+    -- bonus = false: a practice projector is not a BONUS totem's to give.
+    { id = P_TRIAL, name = "TRIAL", bonus = false, cost = 0, max_energy = "pool",
       recharge = "none", strength = 1, ready_ms = 0 },
   },
 }

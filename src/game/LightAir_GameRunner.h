@@ -89,14 +89,20 @@ public:
 
     // ---- Totem management ----
     // Call clearTotems() + addTotem() before begin() to record totem roles.
-    // roleId is a TotemRoleId constant.
+    // roleId is a TotemRoleId constant.  option is the DM's per-totem
+    // choice from the Totems submenu (1-based index into the role's
+    // declared options; 0 = none) — e.g. which bonus a BONUS totem gives.
     void clearTotems();
-    void addTotem(uint8_t id, uint8_t roleId);  // ignores duplicates; caps at MAX_PARTICIPANTS
+    void addTotem(uint8_t id, uint8_t roleId, uint8_t option = 0);  // ignores duplicates; caps at MAX_PARTICIPANTS
 
     // Read-back accessors (for game logic or post-game queries).
     uint8_t totemCount()           const { return _totemCount; }
     uint8_t totemId(uint8_t i)     const { return _totems[i].id; }
     uint8_t totemRole(uint8_t i)   const { return _totems[i].roleId; }
+
+    // Option chosen for the totem with this device ID (1-based; 0 = none
+    // or not a configured totem).
+    uint8_t totemOption(uint8_t id) const;
 
     // Returns the device ID of the idx-th totem assigned the given roleId,
     // or 0 if fewer than idx+1 totems have that role.
@@ -145,7 +151,7 @@ private:
     uint32_t _expectedPlayerMask = 0;   // bit id = player id is in this session
 
     // ---- Totem entries (id → roleId) ----
-    struct TotemEntry { uint8_t id; uint8_t roleId; };
+    struct TotemEntry { uint8_t id; uint8_t roleId; uint8_t option; };
     TotemEntry _totems[GameDefaults::MAX_PARTICIPANTS];
     uint8_t    _totemCount = 0;
 

@@ -59,6 +59,16 @@ local ready_at     = 0     -- millis before which trigger() refuses
 local lit_at       = {}    -- target id -> millis of the last accepted hit
 local evicted_name = nil
 
+-- ---- DIM (a MALUS) -----------------------------------------------
+-- While dimmed, every projector the player holds has a smaller pool, a
+-- slower recharge and a longer cooldown.  Fixed factors: retune here.
+-- min_cooldown_ms stands in for a profile that declares no cooldown at
+-- all (the baseline) — doubling nothing would not be "longer".
+local DIM = { energy_div = 2, recharge_mul = 2, cooldown_mul = 2,
+              min_cooldown_ms = 250 }
+local dimmed = false
+local bonus_ids = {}       -- BONUS option label -> projector id, see bonus_options()
+
 -- ================================================================
 --   Limits.  The load-time equivalent of the C++ clamp the projector
 --   used to carry: a typo in a game file is corrected once, here,
@@ -355,6 +365,19 @@ function P.define(decl)
   end
   for k in pairs(LIM) do clamp_field(defs[0], k) end
 
+  -- The standard catalogue is always KNOWN, declared or not: a BONUS totem
+  -- may hand any of it to any game, and a splash beacon names its
+  -- projector by id for every receiver to look up.  Known is not owned —
+  -- the inventory still starts with the baseline alone.
+  for _, std_p in pairs(P.standard) do
+    if not defs[std_p.id] then
+      local p = {}
+      for k, v in pairs(std_p) do p[k] = v end
+      for k in pairs(LIM) do clamp_field(p, k) end
+      defs[std_p.id] = p
+    end
+  end
+
   cfg.max_owned = clamp(cfg.max_owned or 3, LIM.max_owned[1], LIM.max_owned[2])
   return P
 end
@@ -385,7 +408,28 @@ end
 local function get_energy(vars)     return vars[var.energy] or 0 end
 local function set_energy(vars, v)  vars[var.energy] = v end
 
-local function max_energy(vars, p)  return val(vars, p.max_energy, 0) end
+local function max_energy(vars, p)
+  local m = val(vars, p.max_energy, 0)
+  if dimmed and m > 0 then m = math.max(1, m // DIM.energy_div) end
+  return m
+end
+
+-- A recharge duration, stretched while dimmed.
+local function stretch(ms)
+  if dimmed then return ms * DIM.recharge_mul end
+  return ms
+end
+
+-- The cooldown pushed to Enlight.  Always an integer, never nil: a profile
+-- that declares none must still undo a dimmed (or a previous profile's)
+-- cooldown when it becomes the one in hand.
+local function cooldown_of(vars, p)
+  local c = val(vars, p.cooldown_ms, 0)
+  if dimmed then
+    c = (c > 0) and (c * DIM.cooldown_mul) or DIM.min_cooldown_ms
+  end
+  return c
+end
 
 -- ================================================================
 --   The reload bar.
@@ -403,9 +447,9 @@ local function max_energy(vars, p)  return val(vars, p.max_energy, 0) end
 --   them without the projector reaching into the display layer.
 -- ================================================================
 local function reload_total_ms(vars, p)
-  local delay = val(vars, p.recharge_delay_ms, 0)
+  local delay = stretch(val(vars, p.recharge_delay_ms, 0))
   if p.recharge == "ramp" then
-    return delay + val(vars, p.recharge_ms, 0)
+    return delay + stretch(val(vars, p.recharge_ms, 0))
   end
   return delay
 end
@@ -432,7 +476,7 @@ local function activate(vars, idx)
   -- Optics.  Queued by the verb and applied in the OUTPUT phase, so this
   -- can never reconfigure Enlight mid-measurement.
   la.shine_config{ reps = val(vars, p.cycles, nil),
-                   cooldown_ms = val(vars, p.cooldown_ms, nil) }
+                   cooldown_ms = cooldown_of(vars, p) }
   if la.shine_action then la.shine_action(p.shine_action) end
   if var.name then vars[var.name] = p.name or "" end
   -- The energy cell's icon follows the projector in hand.  Published as an
@@ -499,6 +543,79 @@ function P.grant(vars, id)
   return P.select(vars, id)
 end
 
+-- ================================================================
+--   DIM — the MALUS that weakens every projector the player holds.
+--
+--   set_dim(vars, true): half the pool (current energy clamped down to
+--   it), twice the recharge, twice the cooldown.  set_dim(vars, false) lifts it; the pool then
+--   refills by the ordinary recharge, not at once.  reset() lifts it too.
+--   (A profile with no cooldown gets DIM.min_cooldown_ms instead.)
+--   A ruleset lifts it when the player goes out of the game.
+-- ================================================================
+function P.set_dim(vars, on)
+  on = on and true or false
+  if on == dimmed then return end
+  dimmed = on
+  local p = active()
+  -- Re-push the optics for the projector in hand.
+  la.shine_config{ cooldown_ms = cooldown_of(vars, p) }
+  if on then
+    slots[active_idx].energy = get_energy(vars)
+    for i = 1, #slots do
+      local m = max_energy(vars, profile_of(i))
+      if slots[i].energy > m then slots[i].energy = m end
+    end
+    set_energy(vars, slots[active_idx].energy)
+  end
+  publish_reload(vars, 0, p)
+end
+
+function P.dimmed() return dimmed end
+
+-- The pool of the projector in hand, as it stands (dimmed or not).
+function P.max_energy(vars) return max_energy(vars, active()) end
+
+-- ================================================================
+--   BONUS totem options.
+--
+--   The list the DM cycles with O on a BONUS totem, for a game's
+--   totem_slots entry:
+--
+--     { role = "BONUS", min = 0, max = 16, options = proj.bonus_options() }
+--
+--   "LIFE", then the standard catalogue in id order, then the game's own
+--   profiles (id > 0) unless a profile says `bonus = false` — a practice
+--   or role projector is not something a totem should hand out.  Pass
+--   { projectors = false } for a ruleset where swapping the projector in
+--   hand would break the game (its pool is the player's life).
+--
+--   Labels are cut to the menu's 8 characters; bonus_id() maps a label
+--   back to its projector, so a long custom name still resolves.
+--   Call after define().
+-- ================================================================
+function P.bonus_options(opts)
+  opts = opts or {}
+  local list = { "LIFE" }
+  bonus_ids = {}
+  if opts.projectors == false then return list end
+  local ids = {}
+  for id, p in pairs(defs) do
+    if id ~= 0 and p.bonus ~= false then ids[#ids + 1] = id end
+  end
+  table.sort(ids)
+  for _, id in ipairs(ids) do
+    local label = string.sub(tostring(defs[id].name or id), 1, 8)
+    if label ~= "LIFE" and not bonus_ids[label] then
+      bonus_ids[label] = id
+      list[#list + 1] = label
+    end
+  end
+  return list
+end
+
+-- Projector id behind a BONUS option label, or nil (e.g. for "LIFE").
+function P.bonus_id(label) return bonus_ids[label] end
+
 function P.drop(vars, id)
   local idx = find_slot(id)
   if not idx or idx == 1 then return false end    -- slot 1 is structural
@@ -555,6 +672,7 @@ function P.reset(vars)
   lit_at      = {}
   evicted_name   = nil
   splash_sent_at = nil
+  dimmed         = false
 
   slots[1].energy = max_energy(vars, defs[0])
   activate(vars, 1)
@@ -749,7 +867,7 @@ local function tick_recharge(vars, p, now)
     return
   end
 
-  local delay_ms = val(vars, p.recharge_delay_ms, 0)
+  local delay_ms = stretch(val(vars, p.recharge_delay_ms, 0))
   if (now - release_at) < delay_ms then
     -- Waiting out the idle: the clock started at the release, which is
     -- exactly what the bar must show.
@@ -769,7 +887,7 @@ local function tick_recharge(vars, p, now)
   end
 
   -- ramp: one unit every recharge_ms / max, stepped in integers.
-  local total_ms = val(vars, p.recharge_ms, 0)
+  local total_ms = stretch(val(vars, p.recharge_ms, 0))
   local step_ms  = (max > 0) and (total_ms // max) or 0
   if step_ms < 1 then step_ms = 1 end
   local s = slots[active_idx]

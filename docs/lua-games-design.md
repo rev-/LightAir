@@ -161,7 +161,8 @@ return {
   monitor = { { var, icon, col, row, states = {...} }, ... },
   winners = { { var, dir = "max"|"min" }, ... },
 
-  totem_slots   = { { role = "BONUS", min = 0, max = 16, config_var = "..."? }, ... },
+  totem_slots   = { { role = "BONUS", min = 0, max = 16, config_var = "..."?,
+                      options = { "LIFE", ... }? }, ... },
   teams         = 0,             -- 0 = teamless, 2..8 = team count
   time_left_var = "time_left",   -- optional, feeds totem watchdog
 
@@ -191,7 +192,7 @@ keeps the C++ diff small:
 | `on_reply` | `ReplyRadioRule[]` (default state mask = all states except `scoring_state`) |
 | `rules` | `StateRule[]` trampolines |
 | `update` | `StateBehavior[]` trampolines |
-| `totem_slots` | `LightAir_TotemRequirement[]` (`config_var` wires a slot into `configSecs` for the 0xF1 payload) |
+| `totem_slots` | `LightAir_TotemRequirement[]` (`config_var` wires a slot into `configSecs` for the 0xF1 payload; `options` lists the per-totem choices the DM cycles with O in the Totems submenu — see "Per-totem options" below) |
 | `teams` | `teamCount` + a firmware-owned `teamMap` |
 | `time_left_var` | `gameTimeLeft` pointer into the slot |
 
@@ -224,6 +225,25 @@ The spec details the games rely on:
   return a sub-type.  A totem that wants *every* answer, like CP counting who
   is standing on it, gets them: `LightAir_Radio` keeps a broadcast's reply
   window open for its whole timeout instead of closing it on the first reply.
+- **Per-totem options** — a `totem_slots` entry may declare `options`, a
+  list of labels (≤ 8 chars) the DM cycles with **O** in the Totems submenu
+  (S4c).  The pick travels in the config blob (16 bytes, one per slot,
+  1-based, 0 = none) and a ruleset reads it with
+  `la.totem_option(pkt.sender)` when it handles that totem's beacon.  What
+  an option *does* is entirely the ruleset's: the C++ side only stores and
+  shows labels.  The stock games give BONUS
+  `proj.bonus_options()` (LIFE + the standard projectors + the game's own)
+  and MALUS `std.malus_options()` (LIFE, DIM), applied by
+  `std.pickup_effect`.  BASE and FLAG are not options in this sense: the
+  menu folds BASE_O/BASE_X/BASE and FLAG_O/FLAG_X into one entry each and O
+  picks the team, but the roleIds underneath — and so the wire and the
+  totem programs — are unchanged.
+- **This player's starting lives** — every lives game declares one
+  resolver, `my_start_lives(vars)`, and uses it for the lives `on_begin`
+  loads, the lives a respawn restores, and the S of a BONUS LIFE (`+S`,
+  capped at `2*S`).  Today it returns `vars.start_lives`; when players get
+  roles with their own starting lives, only that function changes.  The
+  host suite fails on any `lives = vars.start_lives` written directly.
 - **Custom message ids** — a game may declare its own even msgType (Virus
   uses `0x16` for infection announcements).  `typeId` + session token already
   isolate games on the wire; the only rule is to stay out of the 0xA0
@@ -265,7 +285,9 @@ at load time.
 `la.player_count()` (roster size), `la.player_short(id)`,
 `la.team_short(team)` (the team's label, "O"/"X"/… from the one table in
 `config.h` — a game file never spells the names out for itself),
-`la.totem_for_role(role, idx)`, `la.state()`, `la.now()` (millis).
+`la.totem_for_role(role, idx)`, `la.totem_option(id)` → `index, label`
+(the DM's per-totem option for that totem; `0, nil` when none),
+`la.state()`, `la.now()` (millis).
 
 **Inputs (pull)** — `la.trigger_down(n)`, `la.trigger_state(n)`,
 `la.key_down(key [, keypad])`, `la.key_state(key [, keypad])` (`"off"` /

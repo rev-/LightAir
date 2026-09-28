@@ -36,6 +36,14 @@ function la.sensor(n) return ({ 4.05, 31.0, 29.5 })[n or 1] end
 function la.player_short(id) return "P" .. tostring(id) end
 function la.team_short(t) return ({ [0] = "O", [1] = "X" })[t] or "?" end
 function la.totem_for_role(role, i) return i == 0 and 254 or 0 end
+-- The DM's per-totem option (Totems submenu, O key): [totem id] = label.
+-- The index is not checked by any game, so the stub returns 1 for a hit.
+local totem_opts = {}
+function la.totem_option(id)
+  local label = totem_opts[id]
+  if label then return 1, label end
+  return 0, nil
+end
 function la.trigger_down(n) return false end
 -- The same ladder the keypad reports on: "pressed" appears in exactly one
 -- poll, which is what a ruleset reads a press EDGE from (TiroBersaglio's
@@ -1172,6 +1180,222 @@ do
   end
 
   print("OK   cp conquest/hold  tight-ring conquest, owner-only hold, no RSSI memory")
+end
+
+-- ================================================================
+--   BONUS / MALUS options and effects
+--
+--   The DM picks each pickup totem's effect with O; la.totem_option()
+--   carries it to the claiming player.  Checks, per game: the option
+--   lists the menu shows, and that a claim applies what was picked —
+--   LIFE as +S capped at 2*S (S = this player's starting lives, through
+--   the game's own resolver), a projector put in hand, MALUS LIFE ending
+--   the lives, DIM weakening the projector until the player goes out.
+-- ================================================================
+do
+  local function fail(what, msg)
+    failures = failures + 1
+    print(string.format("  FAIL %-12s %s", what, msg))
+  end
+  local function check(cond, what, msg) if not cond then fail(what, msg) end end
+
+  local TOTEM = 250
+  local function options_of(g, role)
+    for _, t in ipairs(g.totem_slots) do
+      if t.role == role then return t.options end
+    end
+  end
+  local function has(list, x)
+    for _, v in ipairs(list or {}) do if v == x then return true end end
+    return false
+  end
+  -- The handler that answers a ready pickup beacon in the "in play" state.
+  local function claim_handler(g, msg)
+    local first = g.on_message[g.initial_state]
+    if first and first[msg] then return first[msg] end
+    for _, handlers in pairs(g.on_message) do
+      if handlers[msg] then return handlers[msg] end
+    end
+  end
+  local function fresh_game(f)
+    libcache = {}                       -- this game's own projector instance
+    local g = dofile(ROOT .. f .. ".lua")
+    local v = {}
+    for _, c in ipairs(g.config) do v[c.id] = c.default end
+    for _, x in ipairs(g.vars)   do v[x.id] = x.default end
+    clock = 0
+    g.on_begin(v)
+    return g, v, libcache.projector
+  end
+  local function claim(g, v, msg, label)
+    totem_opts[TOTEM] = label
+    local h = claim_handler(g, msg)
+    local r = h(v, mk_pkt{ msg = msg, payload = { 0 }, sender = TOTEM, rssi = -30 })
+    totem_opts[TOTEM] = nil
+    return r
+  end
+  local B, M = la.msg.BONUS_BEACON, la.msg.MALUS_BEACON
+
+  -- Option lists: every label fits the 8-char menu, the standard catalogue
+  -- is offered everywhere a projector may change hands, role/practice
+  -- projectors never are.
+  local lists = {
+    freeforall = true, teams = true, flag = true, kingofhill = true,
+    upkeep = true, virus = true, festasportsasso = true, outflow = false,
+  }
+  for f, projectors in pairs(lists) do
+    local g = fresh_game(f)
+    local bo, mo = options_of(g, "BONUS"), options_of(g, "MALUS")
+    check(bo and bo[1] == "LIFE", f, "BONUS options do not start with LIFE")
+    check(has(mo, "LIFE") and has(mo, "DIM") and #mo == 2, f, "MALUS options are not LIFE, DIM")
+    for _, name in ipairs({ "SPLASH", "FAST", "LONG", "STRONG" }) do
+      check(has(bo, name) == projectors, f,
+            "BONUS " .. name .. (projectors and " missing" or " offered where the pool is life"))
+    end
+    check(not has(bo, "TRIAL") and not has(bo, "VIRUS"), f,
+          "a practice / role projector is offered as a BONUS")
+    for _, l in ipairs(bo or {}) do check(#l <= 8, f, "option '" .. l .. "' over 8 chars") end
+  end
+
+  -- Lives games: LIFE, projector, MALUS LIFE, DIM — and the resolver.
+  for _, f in ipairs({ "freeforall", "teams", "flag", "kingofhill", "upkeep" }) do
+    local g, v, P = fresh_game(f)
+    local S = v.start_lives
+
+    -- Unhurt: +S lands exactly on the 2*S maximum.
+    check(claim(g, v, B, "LIFE") == la.my_id(), f, "BONUS claim did not answer the totem")
+    check(v.lives == 2 * S, f, "unhurt LIFE bonus gave " .. v.lives .. ", expected " .. 2 * S)
+    -- A second one is capped.
+    claim(g, v, B, "LIFE")
+    check(v.lives == 2 * S, f, "LIFE bonus went past the 2*S cap: " .. v.lives)
+    -- Hurt: a significant bonus, still +S.
+    v.lives = 1
+    claim(g, v, B, "LIFE")
+    check(v.lives == math.min(1 + S, 2 * S), f, "hurt LIFE bonus gave " .. v.lives)
+
+    -- A totem with no option does nothing but still answers.
+    local before = v.lives
+    check(claim(g, v, B, nil) == la.my_id() and v.lives == before, f,
+          "an option-less BONUS changed something")
+
+    -- Projector bonus: in hand at once.
+    claim(g, v, B, "FAST")
+    check(P.active_id() == 2, f, "FAST bonus did not put FAST in hand")
+
+    -- DIM: half pool, lifted by going out.
+    local pool = P.max_energy(v)
+    claim(g, v, M, "DIM")
+    check(P.dimmed() and P.max_energy(v) == math.max(1, pool // 2), f,
+          "DIM did not halve the pool (" .. pool .. " -> " .. P.max_energy(v) .. ")")
+    check(v.energy <= P.max_energy(v), f, "DIM left energy above the dimmed pool")
+
+    -- MALUS LIFE: no lives left, and the OUT rule that fires lifts DIM.
+    claim(g, v, M, "LIFE")
+    check(v.lives == 0, f, "MALUS LIFE left " .. v.lives .. " lives")
+    local out_rule
+    for _, r in ipairs(g.rules) do
+      if r.from == g.initial_state and r.when(v) and r.to ~= g.scoring_state then
+        out_rule = r; break
+      end
+    end
+    check(out_rule ~= nil, f, "no rule takes a player with 0 lives out")
+    if out_rule then
+      out_rule.action(v)
+      check(not P.dimmed(), f, "going out did not lift DIM")
+    end
+  end
+
+  -- The per-player resolver is the single source for respawn AND bonus:
+  -- swap vars.start_lives for a "role" value and both follow.
+  do
+    local g, v = fresh_game("teams")
+    v.start_lives = 4                   -- what a role resolver would return
+    v.lives = 0
+    for _, r in ipairs(g.rules) do
+      if r.to == g.initial_state and r.from ~= g.initial_state then
+        r.action(v); break
+      end
+    end
+    check(v.lives == 4, "teams", "respawn did not restore this player's starting lives")
+    v.lives = 3
+    claim(g, v, B, "LIFE")
+    check(v.lives == 7, "teams", "LIFE bonus did not use this player's starting lives")
+  end
+
+  -- No game writes starting lives directly: every use goes through the
+  -- game's resolver, so a per-role value is a one-line change.
+  for _, f in ipairs(files) do
+    local fh = assert(io.open(ROOT .. f .. ".lua", "r"))
+    local src = fh:read("a"); fh:close()
+    for line in src:gmatch("[^\n]+") do
+      if not line:match("^%s*%-%-") and line:match("lives%s*=%s*vars%.start_lives") then
+        fail(f, "sets lives from vars.start_lives, not the resolver: "
+                .. line:match("^%s*(.-)%s*$"))
+      end
+    end
+  end
+
+  -- Outflow: energy is life.  LIFE is +S capped at 2*S; MALUS LIFE drains.
+  do
+    local g, v = fresh_game("outflow")
+    local S = v.start_energy
+    claim(g, v, B, "LIFE")
+    check(v.energy == 2 * S, "outflow", "LIFE bonus on energy gave " .. v.energy)
+    claim(g, v, M, "LIFE")
+    check(v.energy == 0, "outflow", "MALUS LIFE left " .. v.energy .. " energy")
+  end
+
+  -- Virus: a virus keeps the VIRUS projector — a projector bonus becomes LIFE.
+  do
+    local g, v, P = fresh_game("virus")
+    claim(g, v, B, "FAST")
+    check(P.active_id() == 2, "virus", "a clean player did not get FAST")
+    -- Become the virus through the game's own rule.
+    local infect = claim_handler(g, la.msg.LIT)
+    infect(v, mk_pkt{ msg = la.msg.LIT, payload = { 1, 11, 1 }, sender = 5 })
+    for _, r in ipairs(g.rules) do
+      if r.from == g.initial_state and r.to ~= g.scoring_state and r.when(v) then
+        r.action(v); break
+      end
+    end
+    check(P.active_id() == 11, "virus", "infection did not put VIRUS in hand")
+    v.energy = 0
+    claim(g, v, B, "FAST")
+    check(P.active_id() == 11, "virus", "a projector bonus took VIRUS out of a virus's hand")
+    check(v.energy == v.energy_max, "virus",
+          "the virus's projector bonus did not become LIFE (energy " .. v.energy .. ")")
+  end
+
+  -- DIM on the projector itself: recharge and cooldown doubled, a
+  -- profile with no cooldown gets the floor, and lifting it restores both.
+  do
+    package.loaded_projector = nil
+    local P = dofile(ROOT .. "lib/projector.lua")
+    P.define{ vars = { energy = "energy", spent = "energy_spent",
+                       reload = "reload", reload_ms = "reload_ms" } }
+    local pushed
+    local real = la.shine_config
+    la.shine_config = function(t) if t.cooldown_ms then pushed = t.cooldown_ms end end
+    local v = { energy = 20, energy_spent = 0, start_energy = 20, recharge_secs = 4,
+                reload = 0, reload_ms = 0 }
+    clock = 0
+    P.reset(v)
+    check(pushed == 0, "dim", "baseline did not push an explicit 0 cooldown")
+    P.set_dim(v, true)
+    check(pushed > 0, "dim", "dimmed baseline cooldown is still 0")
+    check(v.reload_ms == 8000, "dim", "dimmed recharge is " .. v.reload_ms .. " ms, expected 8000")
+    check(v.energy == 10, "dim", "dimmed pool left energy " .. v.energy)
+    P.set_dim(v, false)
+    check(pushed == 0 and v.reload_ms == 4000, "dim", "lifting DIM did not restore the optics / recharge")
+    P.grant(v, 4)                       -- STRONG: 900 ms cooldown
+    P.set_dim(v, true)
+    check(pushed == 1800, "dim", "STRONG dimmed cooldown " .. tostring(pushed) .. ", expected 1800")
+    P.reset(v)
+    check(not P.dimmed(), "dim", "reset did not lift DIM")
+    la.shine_config = real
+  end
+
+  print("OK   pickups       option lists, LIFE +S capped 2*S, projector, MALUS LIFE, DIM")
 end
 
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")

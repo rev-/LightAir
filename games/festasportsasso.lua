@@ -68,10 +68,20 @@ proj.define{
   vars     = { energy = "energy", spent = "energy_spent",
                reload = "reload", reload_ms = "reload_ms" },
   profiles = {
-    { id = P_TRIAL, name = "TRIAL", cost = 0, max_energy = "start_energy",
+    -- bonus = false: a practice projector is not a BONUS totem's to give.
+    { id = P_TRIAL, name = "TRIAL", bonus = false, cost = 0, max_energy = "start_energy",
       recharge = "none", strength = 1, ready_ms = 0 },
   },
 }
+
+-- This player's starting lives: what on_begin loads, what a respawn
+-- restores, and the S of a BONUS LIFE (lives += S, capped at 2*S).  One
+-- resolver for all three, so a future per-role value changes it here only.
+local function my_start_lives(vars) return vars.start_lives end
+
+-- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
+local pickup = std.pickup_effect{ proj = proj, lives = "lives",
+                                  start_lives = my_start_lives }
 
 -- Hand the welcome screen its practice projector.  proj.reset() rebuilds
 -- the inventory down to the baseline, so this runs after every reset that
@@ -200,6 +210,7 @@ local function go_down(vars)
   vars.shone_times = vars.shone_times + 1
   respawn_at  = la.now() + vars.respawn_secs * 1000
   can_respawn = false
+  proj.set_dim(vars, false)         -- a DIM malus lasts until going out
   la.show("VAI ALLA BASE", 0)
   la.show("Illuminato da " .. (shone_by or "?"), 0)
   la.ui("Down")
@@ -224,7 +235,7 @@ local function welcome(vars)
   -- The playing numbers are loaded here as well, so the welcome screen
   -- shows a fresh turn instead of the last visitor's leftovers; the
   -- ones that matter are loaded again, for real, in start_turn.
-  vars.lives        = vars.start_lives
+  vars.lives        = my_start_lives(vars)
   vars.energy       = vars.start_energy
   vars.time_left    = vars.sub_time
   vars.points       = 0
@@ -250,7 +261,7 @@ end
 -- itself: std.base_respawn replied with slot+1, which is what makes it
 -- play its respawn animation in this player's colour.
 local function start_turn(vars)
-  vars.lives     = vars.start_lives
+  vars.lives     = my_start_lives(vars)
   vars.energy    = vars.start_energy
   vars.time_left = vars.sub_time
   can_respawn = false
@@ -340,8 +351,8 @@ return {
   totem_slots = {
     { role = "CP",    min = 1, max = 6 },      -- at least one hill
     { role = "BASE",  min = 1, max = 4 },      -- teamless: starts and respawns
-    { role = "BONUS", min = 0, max = 16 },
-    { role = "MALUS", min = 0, max = 16 },
+    { role = "BONUS", min = 0, max = 16, options = proj.bonus_options() },
+    { role = "MALUS", min = 0, max = 16, options = std.malus_options() },
   },
   teams = 0,
   -- time_left_var deliberately absent — see the header.
@@ -378,8 +389,8 @@ return {
     [S.ACTIVE] = {
       -- A pickup totem gives itself to whoever answers, so only answer
       -- from arm's length: the claim has to mean "I am standing at it".
-      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
-      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = std.lit_target{
         lives = "lives", immunity = imm,
         reply = { taken = R.TAKEN, shone = R.SHONE, immune = R.IMMUNE },
@@ -433,7 +444,7 @@ return {
     { from = S.DOWN, to = S.ACTIVE,
       when   = function() return can_respawn end,
       action = function(vars)
-        vars.lives  = vars.start_lives
+        vars.lives  = my_start_lives(vars)
         vars.energy = vars.start_energy
         can_respawn = false
         shone_by    = nil

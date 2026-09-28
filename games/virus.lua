@@ -72,7 +72,8 @@ proj.define{
       max_energy = "energy_max",
       recharge_delay_ms = function(v) return (v.recharge_secs or 0) * 1000 end,
       role_tag = 0 },
-    { id = P_VIRUS, name = "VIRUS", cooldown_ms = "virus_cooldown",
+    -- bonus = false: the virus's projector is a role, not a pickup.
+    { id = P_VIRUS, name = "VIRUS", bonus = false, cooldown_ms = "virus_cooldown",
       max_energy = "energy_max",
       recharge_delay_ms = function(v) return (v.recharge_secs or 0) * 1000 end,
       role_tag = 1 },
@@ -82,6 +83,17 @@ local was_active       = false   -- trigger release edge for recharge
 local release_at       = 0
 
 local function is_virus() return virus_set[la.my_id()] == true end
+
+-- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
+-- No lives here, so LIFE works on energy, against this player's own pool
+-- (the virus's is a fifth of the others').  A virus keeps the VIRUS
+-- projector in hand — it is what infects — so a projector bonus reaching
+-- a virus becomes the LIFE bonus instead.
+local pickup = std.pickup_effect{
+  proj         = proj,
+  start_energy = function(vars) return vars.energy_max end,
+  projector_ok = function() return not is_virus() end,
+}
 
 local function note_infected(vars, id)
   if id and not virus_set[id] then
@@ -104,6 +116,9 @@ local function become_virus(vars)
   vars.energy_max = math.max(1, vars.start_energy // 5)
   if vars.energy > vars.energy_max then vars.energy = vars.energy_max end
   proj.grant(vars, P_VIRUS)       -- longer cooldown, and a viral role tag
+  -- No OUT state in this game: infection is the way out of the game as a
+  -- clean player, so that is where a DIM malus lifts.
+  proj.set_dim(vars, false)
   la.background(virus_bg)
   la.show("YOU ARE THE VIRUS!", 0)
   la.ui("RoleChange")
@@ -180,8 +195,8 @@ return {
   },
 
   totem_slots = {
-    { role = "BONUS", min = 0, max = 16 },
-    { role = "MALUS", min = 0, max = 16 },
+    { role = "BONUS", min = 0, max = 16, options = proj.bonus_options() },
+    { role = "MALUS", min = 0, max = 16, options = std.malus_options() },
   },
   teams = 0,
   time_left_var = "time_left",
@@ -214,8 +229,8 @@ return {
     [S.CLEAN] = {
       -- A pickup totem gives itself to whoever answers, so only answer
       -- from arm's length: the claim has to mean "I am standing at it".
-      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
-      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = function(vars, pkt)
         -- Only a viral lit infects; a clean player's lit has no effect.
         -- Byte 3 is the projector's role tag — byte 1 is its strength.
@@ -234,8 +249,8 @@ return {
     [S.VIRUS] = {
       -- A pickup totem gives itself to whoever answers, so only answer
       -- from arm's length: the claim has to mean "I am standing at it".
-      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
-      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = function() return R.VIRUS end,   -- already infected
       [MSG_INFECTED] = function(vars, pkt)
         note_infected(vars, pkt.sender)

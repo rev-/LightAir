@@ -118,11 +118,17 @@ void LightAir_GameRunner::clearTotems() {
     _totemCount = 0;
 }
 
-void LightAir_GameRunner::addTotem(uint8_t id, uint8_t roleId) {
+void LightAir_GameRunner::addTotem(uint8_t id, uint8_t roleId, uint8_t option) {
     if (_totemCount >= GameDefaults::MAX_PARTICIPANTS) return;
     for (uint8_t i = 0; i < _totemCount; i++)
         if (_totems[i].id == id) return;  // ignore duplicate
-    _totems[_totemCount++] = { id, roleId };
+    _totems[_totemCount++] = { id, roleId, option };
+}
+
+uint8_t LightAir_GameRunner::totemOption(uint8_t id) const {
+    for (uint8_t t = 0; t < _totemCount; t++)
+        if (_totems[t].id == id) return _totems[t].option;
+    return 0;
 }
 
 uint8_t LightAir_GameRunner::totemIdForRole(uint8_t roleId, uint8_t idx) const {

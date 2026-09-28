@@ -50,6 +50,31 @@ local respawn_at         = 0      -- la.now() when respawn fires
 local shone_by           = nil    -- short name of whoever put us down
 local lit_at             = {}     -- [senderId] = la.now() of last accepted lit
 
+-- This player's starting lives: what on_begin loads, what a respawn
+-- restores, and the S of a BONUS LIFE.  One resolver for all three, so
+-- when players get roles with their own starting lives only this changes.
+local function my_start_lives(vars) return vars.start_lives end
+
+-- What a claimed pickup does.  The DM picks each BONUS / MALUS totem's
+-- effect in the Totems submenu (O key), from the `options` lists in
+-- totem_slots below; la.totem_option(id) tells us which one the totem we
+-- just claimed carries.  std.pickup_effect packages exactly this.
+local function apply_pickup(vars, pkt, malus)
+  local _, label = la.totem_option(pkt.sender)
+  if not label then return end
+  if malus then
+    if     label == "LIFE" then vars.lives = 0     -- the OUT rule fires next tick
+    elseif label == "DIM"  then proj.set_dim(vars, true) end
+  elseif label == "LIFE" then
+    local s = my_start_lives(vars)                  -- +S lives, capped at 2*S
+    vars.lives = math.min(vars.lives + s, 2 * s)
+  else
+    local id = proj.bonus_id(label)                 -- a powered projector
+    if id then proj.grant(vars, id) end
+  end
+  la.show((malus and "MALUS: " or "BONUS: ") .. label, 2000)
+end
+
 return {
   api     = 1,                    -- binding version this file targets
   type_id = 0x0001,               -- GameTypeId::FREE_FOR_ALL
@@ -119,8 +144,9 @@ return {
 
   -- ---- Totem requirements (assigned by the host in the menu) -------
   totem_slots = {
-    { role = "BONUS", min = 0, max = 16 },
-    { role = "MALUS", min = 0, max = 16 },
+    -- options: what the DM can pick per totem with O (see apply_pickup).
+    { role = "BONUS", min = 0, max = 16, options = proj.bonus_options() },
+    { role = "MALUS", min = 0, max = 16, options = { "LIFE", "DIM" } },
   },
   teams = 0,                       -- teamless game
 
@@ -132,7 +158,7 @@ return {
   -- Called by the runner after the (C++-owned) warmup countdown, once
   -- config values have been distributed and applied.
   on_begin = function(vars)
-    vars.lives     = vars.start_lives
+    vars.lives     = my_start_lives(vars)
     vars.time_left = vars.game_time
     vars.points        = 0
     vars.energy_spent  = 0
@@ -157,11 +183,13 @@ return {
       [MSG.BONUS_BEACON] = function(vars, pkt)
         if pkt.len < 1 or pkt:byte(1) ~= 0 then return end   -- 0 = ready
         if pkt.rssi < PICKUP_RSSI then return end
+        apply_pickup(vars, pkt, false)
         return la.my_id()
       end,
       [MSG.MALUS_BEACON] = function(vars, pkt)
         if pkt.len < 1 or pkt:byte(1) ~= 0 then return end
         if pkt.rssi < PICKUP_RSSI then return end
+        apply_pickup(vars, pkt, true)
         return la.my_id()
       end,
       [MSG.LIT] = function(vars, pkt)
@@ -225,6 +253,7 @@ return {
         -- not a base, so the instruction says so.
         la.show("Wait to respawn", 0)
         la.show("LIT by " .. (shone_by or "?"), 0)
+        proj.set_dim(vars, false)   -- a DIM malus lasts until going out
         la.ui("Down")
       end },
 
@@ -238,7 +267,7 @@ return {
     { from = S.OUT_GAME, to = S.IN_GAME,
       when   = function(vars) return la.now() >= respawn_at end,
       action = function(vars)
-        vars.lives  = vars.start_lives
+        vars.lives  = my_start_lives(vars)
         vars.energy = vars.start_energy
         lit_at   = {}
         shone_by = nil

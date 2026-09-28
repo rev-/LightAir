@@ -414,6 +414,11 @@ namespace TotemDefs {
     constexpr uint8_t MAX_TOTEM_ID    = 254;
     constexpr uint8_t MAX_TOTEMS      = 16;   // IDs 239–254
     constexpr uint8_t MAX_TOTEM_ROLES = 8;    // max totem roles one game declares
+    // Per-totem options (Totems submenu, O key): e.g. which bonus a BONUS
+    // totem gives.  Labels are shared across all of one game's roles.
+    constexpr uint8_t MAX_ROLE_OPTIONS    = 12;  // options one role may declare
+    constexpr uint8_t MAX_OPTION_LABELS   = 24;  // labels one game may declare in total
+    constexpr uint8_t OPTION_LABEL_LEN    = 9;   // 8 chars + null
 
     constexpr uint8_t totemIndex(uint8_t id)   { return MAX_TOTEM_ID - id; }
     constexpr uint8_t idFromIndex(uint8_t idx) { return MAX_TOTEM_ID - idx; }

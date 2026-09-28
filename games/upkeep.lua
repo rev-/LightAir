@@ -20,6 +20,15 @@ local proj = la.lib("projector")
 proj.define{ vars = { energy = "energy", spent = "energy_spent",
                       reload = "reload", reload_ms = "reload_ms" } }
 
+-- This player's starting lives: what on_begin loads, what a respawn
+-- restores, and the S of a BONUS LIFE (lives += S, capped at 2*S).  One
+-- resolver for all three, so a future per-role value changes it here only.
+local function my_start_lives(vars) return vars.start_lives end
+
+-- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
+local pickup = std.pickup_effect{ proj = proj, lives = "lives",
+                                  start_lives = my_start_lives }
+
 local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
 local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
@@ -204,14 +213,14 @@ return {
     { role = "BASE_O", min = 1, max = 3 },
     { role = "BASE_X", min = 1, max = 3 },
     { role = "BASE",   min = 0, max = 3 },
-    { role = "BONUS",  min = 0, max = 16 },
-    { role = "MALUS",  min = 0, max = 16 },
+    { role = "BONUS",  min = 0, max = 16, options = proj.bonus_options() },
+    { role = "MALUS",  min = 0, max = 16, options = std.malus_options() },
   },
   teams = 2,
   time_left_var = "time_left",
 
   on_begin = function(vars)
-    vars.lives     = vars.start_lives
+    vars.lives     = my_start_lives(vars)
     vars.energy    = vars.start_energy
     vars.time_left = vars.game_time
     vars.team_points  = 0
@@ -240,8 +249,8 @@ return {
     [S.IN_GAME] = {
       -- A pickup totem gives itself to whoever answers, so only answer
       -- from arm's length: the claim has to mean "I am standing at it".
-      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
-      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = std.lit_target{
         lives = "lives", immunity = imm, friendly = friendly,
         reply = { taken = R.TAKEN, shone = R.SHONE,
@@ -295,6 +304,7 @@ return {
         -- feedback, so no transient line competes for the tray.
         la.show("Go to base", 0)
         la.show("LIT by " .. (shone_by or "?"), 0)
+        proj.set_dim(vars, false)   -- a DIM malus lasts until going out
         la.ui("Down")
       end },
     { from = S.OUT_GAME, to = S.GAME_END,
@@ -306,7 +316,7 @@ return {
     { from = S.OUT_GAME, to = S.IN_GAME,
       when   = function() return can_respawn end,
       action = function(vars)
-        vars.lives  = vars.start_lives
+        vars.lives  = my_start_lives(vars)
         vars.energy = vars.start_energy
         can_respawn = false
         shone_by    = nil

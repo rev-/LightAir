@@ -49,6 +49,15 @@ proj.define{
                  recharge = "none", strength = 1 } },
 }
 
+-- This player's starting energy — Outflow's lives.  What a respawn
+-- restores and the S of a BONUS LIFE (energy += S, capped at 2*S); one
+-- resolver for both, so a future per-role value changes it here only.
+local function my_start_energy(vars) return vars.start_energy end
+
+-- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
+-- No lives: LIFE works on energy.  No projector bonuses (see totem_slots).
+local pickup = std.pickup_effect{ proj = proj, start_energy = my_start_energy }
+
 local function game_over()
   la.show("Game over!", 3000)
   la.ui("EndGame")
@@ -97,8 +106,10 @@ return {
   },
 
   totem_slots = {
-    { role = "BONUS", min = 0, max = 16 },
-    { role = "MALUS", min = 0, max = 16 },
+    -- The pool in hand IS the player's life here, so swapping projectors
+    -- would swap lives: BONUS offers LIFE only.
+    { role = "BONUS", min = 0, max = 16, options = proj.bonus_options{ projectors = false } },
+    { role = "MALUS", min = 0, max = 16, options = std.malus_options() },
   },
   teams = 0,
   time_left_var = "time_left",
@@ -123,8 +134,8 @@ return {
     [S.IN_GAME] = {
       -- A pickup totem gives itself to whoever answers, so only answer
       -- from arm's length: the claim has to mean "I am standing at it".
-      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
-      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = function(vars, pkt)
         if vars.energy > vars.lit_cost then
           vars.energy = vars.energy - vars.lit_cost
@@ -177,6 +188,7 @@ return {
         -- not a base, so the instruction says so.
         la.show("Wait to respawn", 0)
         la.show("LIT by " .. (shone_by or "?"), 0)
+        proj.set_dim(vars, false)   -- a DIM malus lasts until going out
         la.ui("Down")
       end },
     { from = S.IN_GAME, to = S.OUT_GAME,
@@ -189,6 +201,7 @@ return {
         -- Nobody to credit: the drain did it.
         la.show("Wait to respawn", 0)
         la.show("Drained out!", 0)
+        proj.set_dim(vars, false)   -- a DIM malus lasts until going out
         la.ui("Down")
       end },
     { from = S.OUT_GAME, to = S.GAME_END,
@@ -197,7 +210,7 @@ return {
     { from = S.OUT_GAME, to = S.IN_GAME,
       when   = function() return la.now() >= respawn_at end,
       action = function(vars)
-        vars.energy = vars.start_energy
+        vars.energy = my_start_energy(vars)
         last_drain  = la.now()
         shone_by    = nil
         la.clear_tray()             -- drop the credit and the instruction

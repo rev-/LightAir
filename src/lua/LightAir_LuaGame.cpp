@@ -762,6 +762,32 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
                 _totReqs[totReqCount].configSecs = &_slots[slot].val;
                 roleCfgSlot[totReqCount] = (int8_t)slot;
             }
+            // Optional per-totem choices (Totems submenu, O key).  Labels
+            // are copied into one pool shared by all of this game's roles.
+            _totReqs[totReqCount].optionCount  = 0;
+            _totReqs[totReqCount].optionLabels = nullptr;
+            lua_getfield(L, e, "options");
+            if (lua_istable(L, -1)) {
+                int ot = lua_absindex(L, -1);
+                int no = (int)lua_rawlen(L, ot);
+                if (no > TotemDefs::MAX_ROLE_OPTIONS)
+                    luaL_error(L, "totem role '%s': too many options", roleName);
+                if (_optLabelCount + no > TotemDefs::MAX_OPTION_LABELS)
+                    luaL_error(L, "too many totem option labels");
+                _totReqs[totReqCount].optionLabels = &_optLabels[_optLabelCount];
+                for (int k = 1; k <= no; k++) {
+                    lua_rawgeti(L, ot, k);
+                    const char* lbl = luaL_checkstring(L, -1);
+                    if (strlen(lbl) >= TotemDefs::OPTION_LABEL_LEN)
+                        luaL_error(L, "totem option '%s' too long", lbl);
+                    strcpy(_optLabels[_optLabelCount++], lbl);
+                    lua_pop(L, 1);
+                }
+                _totReqs[totReqCount].optionCount = (uint8_t)no;
+            } else if (!lua_isnil(L, -1)) {
+                luaL_error(L, "totem role '%s': options must be a list", roleName);
+            }
+            lua_pop(L, 1);
             totReqCount++;
             lua_pop(L, 1);
         }
@@ -1175,6 +1201,7 @@ void LightAir_LuaGame::unload() {
     _slotCount = 0;
     _countdownCount = 0;
     _progCount = 0;
+    _optLabelCount = 0;
     _stateMax = 0;
     memset(&_game, 0, sizeof(_game));
 }

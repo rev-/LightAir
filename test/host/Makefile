@@ -39,6 +39,7 @@ FW_SRC := $(ROOT)/src/lua/LightAir_LuaGame.cpp \
           $(ROOT)/src/lua/LightAir_TotemEncoder.cpp \
           $(ROOT)/src/lua/LightAir_LuaEngine.cpp \
           $(ROOT)/src/game/LightAir_GameRunner.cpp \
+          $(ROOT)/src/game/LightAir_ConfigBlob.cpp \
           $(ROOT)/src/radio/LightAir_Radio.cpp \
           $(ROOT)/src/input/LightAir_InputCtrl.cpp \
           $(ROOT)/src/input/SpiAdcSensor.cpp \
