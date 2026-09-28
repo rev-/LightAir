@@ -62,17 +62,24 @@ local function my_start_lives(vars) return vars.start_lives end
 local function apply_pickup(vars, pkt, malus)
   local _, label = la.totem_option(pkt.sender)
   if not label then return end
+  -- The LCD names the effect ("BONUS FAST", "MALUS DIM", …) and each kind
+  -- has its own cue: LIFE and projector bonuses sound different, and so do
+  -- the two maluses.
+  local cue
   if malus then
-    if     label == "LIFE" then vars.lives = 0     -- the OUT rule fires next tick
-    elseif label == "DIM"  then proj.set_dim(vars, true) end
+    if     label == "LIFE" then vars.lives = 0; cue = "Malus"   -- OUT rule fires next tick
+    elseif label == "DIM"  then proj.set_dim(vars, true); cue = "MalusDim" end
   elseif label == "LIFE" then
     local s = my_start_lives(vars)                  -- +S lives, capped at 2*S
     vars.lives = math.min(vars.lives + s, 2 * s)
+    cue = "Bonus"
   else
     local id = proj.bonus_id(label)                 -- a powered projector
-    if id then proj.grant(vars, id) end
+    if id then proj.grant(vars, id, true); cue = "BonusProjector" end  -- quiet grant
   end
-  la.show((malus and "MALUS: " or "BONUS: ") .. label, 2000)
+  if not cue then return end
+  la.show((malus and "MALUS " or "BONUS ") .. label, 2000)
+  la.ui(cue)
 end
 
 return {

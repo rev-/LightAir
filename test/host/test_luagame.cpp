@@ -514,6 +514,30 @@ int main() {
             malus->onReceive(mal, /*rssi*/ -40, disp, out);
             CHECK(*tlives == 0, "MALUS LIFE takes every life");
         }
+        // Every pickup cue exists in the real kernel's UI table: la.ui() with
+        // an unknown name is a Lua error, which the fault counter would record.
+        {
+            uint32_t faults0 = shared.faultStats().total;
+            runner.clearTotems();
+            runner.addTotem(253, TotemRoleId_BONUS(), fastOpt);  // BonusProjector
+            runner.addTotem(252, TotemRoleId_MALUS(), 2);        // DIM -> MalusDim
+            *tlives = 3;
+            if (bonus && bonus->onReceive) {
+                out = GameOutput();
+                bonus->onReceive(bon, /*rssi*/ -40, disp, out);
+                CHECK(out.ui.count > 0, "projector bonus queued a UI cue");
+            }
+            if (malus && malus->onReceive) {
+                RadioPacket mal = bon;
+                mal.senderId = 252; mal.msgType = RadioMsg::MSG_MALUS_BEACON;
+                out = GameOutput();
+                malus->onReceive(mal, /*rssi*/ -40, disp, out);
+                CHECK(out.ui.count > 0, "DIM malus queued a UI cue");
+            }
+            CHECK(shared.faultStats().total == faults0,
+                  "BonusProjector / MalusDim are known UI events");
+        }
+
         // A totem this match does not know gives nothing, but is still claimed.
         runner.clearTotems();
         *tlives = 2;

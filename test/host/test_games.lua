@@ -1395,6 +1395,56 @@ do
     la.shine_config = real
   end
 
+  -- Feedback: the LCD names the effect — every projector by its own name —
+  -- and each kind has its own cue, with no ProjectorChange on top.
+  do
+    local function last(t) return t[#t] end
+    local function saw(t, x, from)
+      for i = from, #t do if t[i] == x then return true end end
+      return false
+    end
+    local g, v, P = fresh_game("teams")
+    local cases = {
+      { B, "LIFE",   "BONUS LIFE",   "Bonus" },
+      { B, "SPLASH", "BONUS SPLASH", "BonusProjector" },
+      { B, "FAST",   "BONUS FAST",   "BonusProjector" },
+      { B, "LONG",   "BONUS LONG",   "BonusProjector" },
+      { B, "STRONG", "BONUS STRONG", "BonusProjector" },
+      { M, "DIM",    "MALUS DIM",    "MalusDim" },
+      { M, "LIFE",   "MALUS LIFE",   "Malus" },
+    }
+    for _, c in ipairs(cases) do
+      local ui0 = #out.ui + 1
+      claim(g, v, c[1], c[2])
+      check(last(out.shows) == c[3], "feedback",
+            c[2] .. ": LCD read '" .. tostring(last(out.shows)) .. "', expected '" .. c[3] .. "'")
+      check(saw(out.ui, c[4], ui0), "feedback", c[2] .. ": no '" .. c[4] .. "' cue")
+      check(not saw(out.ui, "ProjectorChange", ui0), "feedback",
+            c[2] .. ": ProjectorChange played on top of the pickup cue")
+    end
+
+    -- A game's own projector shows its own name, cut to the menu's 8 chars.
+    package.loaded_projector = nil
+    local CP = dofile(ROOT .. "lib/projector.lua")
+    CP.define{ vars = { energy = "energy", spent = "energy_spent" },
+               profiles = { { id = 10, name = "LIGHTNING", max_energy = 5 } } }
+    local opts = CP.bonus_options()
+    check(opts[#opts] == "LIGHTNIN", "feedback", "custom option label is '" .. tostring(opts[#opts]) .. "'")
+    local S = dofile(ROOT .. "lib/std.lua")
+    local eff = S.pickup_effect{ proj = CP, lives = "lives" }
+    local cv = { energy = 5, energy_spent = 0, start_energy = 5, recharge_secs = 1,
+                 lives = 3, start_lives = 3 }
+    CP.reset(cv)
+    totem_opts[TOTEM] = "LIGHTNIN"
+    local ui0 = #out.ui + 1
+    eff(cv, mk_pkt{ msg = B, payload = { 0 }, sender = TOTEM })
+    totem_opts[TOTEM] = nil
+    check(last(out.shows) == "BONUS LIGHTNIN", "feedback",
+          "custom projector LCD read '" .. tostring(last(out.shows)) .. "'")
+    check(CP.active_id() == 10 and saw(out.ui, "BonusProjector", ui0), "feedback",
+          "custom projector bonus not granted with its cue")
+  end
+
   print("OK   pickups       option lists, LIFE +S capped 2*S, projector, MALUS LIFE, DIM")
 end
 

@@ -77,6 +77,14 @@ LightAir_UICtrl::_actionTable[(uint8_t)UIEvent::Count] = {
   // Special2
   {{100,200,100,0},3,{1500,3500,1500,0},{200,255,200,0},{ {255,255,0},{0,255,255},{255,0,255},{0,0,0} },4},
 
+  // BonusProjector — two quick rising ticks into a long high note, in
+  // projector orange: a different shape from Bonus's green arpeggio (LIFE).
+  {{60,60,60,300},4,{3500,4500,3500,5000},{120,150,120,200},{ {255,180,0},{255,220,0},{255,180,0},{255,255,255} },2},
+
+  // MalusDim — a slow falling slide with the vibration fading out, purple to
+  // dark: the projector going dim.  Distinct from Malus's short red thud (LIFE).
+  {{150,150,150,300},4,{2000,1500,1000,700},{200,150,100,50},{ {160,0,255},{100,0,160},{50,0,80},{0,0,0} },2},
+
   // Custom1
   {{0,0,0,0},0,{0,0,0,0},{0,0,0,0},{ {0,0,0},{0,0,0},{0,0,0},{0,0,0} },2},
 

@@ -39,6 +39,8 @@ public:
     Malus,
     Special1,
     Special2,
+    BonusProjector,   // a BONUS totem handed over a powered projector
+    MalusDim,         // a MALUS totem dimmed the projector
     Custom1,
     Custom2,
     Custom3,

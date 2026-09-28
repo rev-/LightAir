@@ -234,7 +234,8 @@ The spec details the games rely on:
   shows labels.  The stock games give BONUS
   `proj.bonus_options()` (LIFE + the standard projectors + the game's own)
   and MALUS `std.malus_options()` (LIFE, DIM), applied by
-  `std.pickup_effect`.  BASE and FLAG are not options in this sense: the
+  `std.pickup_effect`, which also shows `BONUS <label>` / `MALUS <label>`
+  and plays `Bonus` / `BonusProjector` / `Malus` / `MalusDim`.  BASE and FLAG are not options in this sense: the
   menu folds BASE_O/BASE_X/BASE and FLAG_O/FLAG_X into one entry each and O
   picks the team, but the roleIds underneath — and so the wire and the
   totem programs — are unchanged.

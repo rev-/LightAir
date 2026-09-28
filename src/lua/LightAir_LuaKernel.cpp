@@ -45,9 +45,13 @@ static const char* const kUIEventNames[] = {
     "FlagReturn", "ControlGain", "ControlLoss", "RoleChange",
     "ProjectorChange", "Stop",
     "Bonus", "Malus", "Special1", "Special2",
+    "BonusProjector", "MalusDim",
     "Custom1", "Custom2", "Custom3", "Custom4",
 };
 static const uint8_t kUIEventCount = sizeof(kUIEventNames) / sizeof(*kUIEventNames);
+static_assert(sizeof(kUIEventNames) / sizeof(*kUIEventNames) ==
+              (size_t)LightAir_UICtrl::UIEvent::Count,
+              "kUIEventNames must list every LightAir_UICtrl::UIEvent, in order");
 
 // la.msg — the RadioMsg registry exposed to game files.
 static const NamedU8 kMsgConsts[] = {

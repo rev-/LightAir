@@ -202,6 +202,9 @@ function std.pickup_effect(cfg)
   local start_lives  = cfg.start_lives  or default_start_lives
   local start_energy = cfg.start_energy or default_start_energy
 
+  -- Every effect names itself on the LCD ("BONUS LIFE", "BONUS FAST", …)
+  -- and plays its own cue: LIFE and projector bonuses sound different, and
+  -- so do the two maluses.
   local function gain_life(vars)
     if lives then
       local s = start_lives(vars)
@@ -210,12 +213,14 @@ function std.pickup_effect(cfg)
       local s = start_energy(vars)
       vars[energy] = math.min(vars[energy] + s, 2 * s)
     end
-    la.show("BONUS: LIFE", 2000)
+    la.show("BONUS LIFE", 2000)
+    la.ui("Bonus")
   end
 
   local function lose_life(vars)
     if lives then vars[lives] = 0 else vars[energy] = 0 end
-    la.show("MALUS: LIFE", 2000)
+    la.show("MALUS LIFE", 2000)
+    la.ui("Malus")          -- the ruleset's own "Down" follows as it goes out
   end
 
   return function(vars, pkt)
@@ -225,14 +230,16 @@ function std.pickup_effect(cfg)
       if label == "LIFE" then lose_life(vars)
       elseif label == "DIM" then
         proj.set_dim(vars, true)
-        la.show("MALUS: DIM", 2000)
+        la.show("MALUS DIM", 2000)
+        la.ui("MalusDim")
       end
       return
     end
     local id = proj.bonus_id(label)
     if id and (cfg.projector_ok == nil or cfg.projector_ok(vars)) then
-      proj.grant(vars, id)
-      la.show("BONUS: " .. label, 2000)
+      proj.grant(vars, id, true)          -- quiet: BonusProjector is the cue
+      la.show("BONUS " .. label, 2000)    -- the projector's own name
+      la.ui("BonusProjector")
     elseif label == "LIFE" or id then
       gain_life(vars)
     end

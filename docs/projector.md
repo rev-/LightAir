@@ -339,6 +339,14 @@ maps them back.
 A projector bonus is `grant`ed: given at full energy and put in hand.
 `max_owned` still applies, so it may evict the oldest powered projector.
 
+**Feedback at the player.** The LCD names the effect for 2 s:
+`BONUS LIFE`, `BONUS <projector name>` (SPLASH, FAST, LONG, STRONG or the
+game's own, cut to 8 characters), `MALUS LIFE` or `MALUS DIM`. Each kind
+has its own cue: `Bonus` for LIFE, `BonusProjector` for any projector,
+`Malus` for MALUS LIFE (the ruleset's `Down` follows as the player goes
+out), and `MalusDim` for DIM. The grant is quiet
+(`proj.grant(vars, id, true)`), so `ProjectorChange` doesn't play on top.
+
 **DIM** (`proj.set_dim(vars, on)`) halves the pool of every held projector
 (current energy is clamped down to it). It doubles the recharge wait and
 the ramp, and doubles the cooldown. A profile that declares no cooldown

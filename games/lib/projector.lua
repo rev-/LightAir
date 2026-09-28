@@ -508,12 +508,14 @@ function P.active_id() return slots[active_idx].id end
 function P.active_profile() return active() end
 function P.owned_count() return #slots end
 
-function P.select(vars, id)
+-- quiet = true skips the ProjectorChange cue, for a caller that plays its
+-- own (a BONUS pickup has a sound of its own).
+function P.select(vars, id, quiet)
   local idx = find_slot(id)
   if not idx or not available(id) then return false end
   if idx ~= active_idx then
     activate(vars, idx)
-    la.ui("ProjectorChange")
+    if not quiet then la.ui("ProjectorChange") end
   end
   return true
 end
@@ -538,9 +540,9 @@ function P.give(vars, id)
   return true
 end
 
-function P.grant(vars, id)
+function P.grant(vars, id, quiet)
   if not P.give(vars, id) then return false end
-  return P.select(vars, id)
+  return P.select(vars, id, quiet)
 end
 
 -- ================================================================
