@@ -449,37 +449,41 @@ namespace TotemDefs {
 // of the totem strip changes; kNumLeds is the single source of truth for
 // strip length (totem_pins.h::TOTEM_NUM_LEDS derives from it).
 //
-// Geometry (rectangle outline + center spine):
-//   short1 = 0,1   long1 = 2,3,4   short2 = 5,6   long2 = 7,8,9
-//   centerline (spine through the middle) = 10,11,12; LED 11 = exact center.
-//   long2 runs antiparallel to long1, so long2's last LED (9) sits beside
-//   long1's first LED (2).
+// Geometry (0-based indices; physical LED number = index + 1):
+//   centerline (spine) = 0,1,2, bottom to top; index 1 = exact center.
+//   right  = 3,4,5  (top to bottom)
+//   bottom = 6,7    (right to left)
+//   left   = 8,9,10 (bottom to top)
+//   top    = 11,12  (left to right)
+//   The perimeter therefore runs as a clockwise loop starting at the top
+//   of the right side.
 // ---------------------------------------------------------------
 namespace TotemLedLayout {
-    constexpr uint8_t kPerimeter[]     = { 0,1,2,3,4,5,6,7,8,9 };
+    constexpr uint8_t kPerimeter[]     = { 3,4,5,6,7,8,9,10,11,12 };
     constexpr uint8_t kPerimeterCount  = sizeof(kPerimeter) / sizeof(kPerimeter[0]);
 
-    constexpr uint8_t kCenterLine[]    = { 10,11,12 };
+    constexpr uint8_t kCenterLine[]    = { 0,1,2 };
     constexpr uint8_t kCenterLineCount = sizeof(kCenterLine) / sizeof(kCenterLine[0]);
 
-    constexpr uint8_t kCenter          = 11;  // single LED, rectangle center
+    constexpr uint8_t kCenter          = 1;  // single LED, rectangle center
 
     // Named sides — kept as documentation of the wiring; no current effect
     // consumes them, but they make the geometry self-describing if a
     // side-anchored effect is added later.
-    constexpr uint8_t kSideShort1[]    = { 0,1 };
-    constexpr uint8_t kSideLong1[]     = { 2,3,4 };
-    constexpr uint8_t kSideShort2[]    = { 5,6 };
-    constexpr uint8_t kSideLong2[]     = { 7,8,9 };
+    constexpr uint8_t kSideRight[]     = { 3,4,5 };
+    constexpr uint8_t kSideBottom[]    = { 6,7 };
+    constexpr uint8_t kSideLeft[]      = { 8,9,10 };
+    constexpr uint8_t kSideTop[]       = { 11,12 };
 
-    // "Rungs" level across the rectangle's width, short1-end to short2-end;
-    // long2 is indexed in reverse because it runs antiparallel to long1.
+    // "Rungs" level across the rectangle's width, bottom to top; the left
+    // side is indexed in reverse because it runs top-ward while the right
+    // side runs bottom-ward.
     // Used by the VerticalScan effect (ping-pong sweep along the length).
-    constexpr uint8_t kStation0[]      = { 0, 1 };
-    constexpr uint8_t kStation1[]      = { 2, 9, 10 };
-    constexpr uint8_t kStation2[]      = { 3, 8, 11 };
-    constexpr uint8_t kStation3[]      = { 4, 7, 12 };
-    constexpr uint8_t kStation4[]      = { 5, 6 };
+    constexpr uint8_t kStation0[]      = { 6, 7 };
+    constexpr uint8_t kStation1[]      = { 0, 5, 8 };
+    constexpr uint8_t kStation2[]      = { 1, 4, 9 };
+    constexpr uint8_t kStation3[]      = { 2, 3, 10 };
+    constexpr uint8_t kStation4[]      = { 11, 12 };
     constexpr uint8_t kStationCount    = 5;
 
     // Strip length.  Derived from the hardware pin header (totem_pins.h,

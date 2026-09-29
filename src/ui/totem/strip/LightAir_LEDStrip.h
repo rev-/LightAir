@@ -24,9 +24,9 @@
 // Which LEDs an effect is allowed to touch.  See config.h TotemLedLayout.
 enum class StripZone : uint8_t {
     All,         // every LED on the strip
-    Perimeter,   // the rectangle outline (indices 0–9)
-    CenterLine,  // the spine through the middle (indices 10–12)
-    Center,      // the single center LED (index 11)
+    Perimeter,   // the rectangle outline (indices 3–12)
+    CenterLine,  // the spine through the middle (indices 0–2)
+    Center,      // the single center LED (index 1)
 };
 
 // Footprint + motion primitive.
