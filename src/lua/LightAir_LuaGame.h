@@ -85,7 +85,7 @@ public:
     // "lua_faults") when the match ends.
     enum class FaultSite : uint8_t {
         Begin, RuleWhen, RuleAction, Update, Message, Reply, Timeout,
-        Score, End,
+        Score, End, Hold,
         Count
     };
     struct FaultStats {
@@ -180,6 +180,10 @@ private:
     int _beginRef  = LUA_NOREF;
     int _scoreRef  = LUA_NOREF;
     int _endRef    = LUA_NOREF;
+    int _holdEnterRef = LUA_NOREF;           // hold.on_enter
+    int _holdExitRef  = LUA_NOREF;           // hold.on_exit
+    uint8_t _holdAccept[LuaDefaults::MAX_HOLD_ACCEPT];
+    uint8_t _holdAcceptCount = 0;
     int _msgTabRef[LuaDefaults::MAX_STATES];
     int _updateRef[LuaDefaults::MAX_STATES];
     int _replyTabRef = LUA_NOREF;
@@ -215,6 +219,8 @@ private:
     void doTimeout(const RadioPacket& orig);
     void doScoreAnnounce(const ScoreTable& t);
     void doEnd();
+    void doClockTick();                      // held: countdowns only
+    void doHoldHook(int ref);                // hold.on_enter / hold.on_exit
     void tickCountdowns();
     void luaFault(FaultSite site);           // count + log + throttled notice
     void maybeEscalate(FaultSite site);      // future-policy hook (see .cpp)

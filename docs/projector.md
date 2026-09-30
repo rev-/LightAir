@@ -297,6 +297,15 @@ like flaky hardware.
 `test/host/test_games.lua` enforces it: every game file is scanned for
 `la.shine*` calls and the suite fails on any that reach Enlight directly.
 
+The same read-and-clear poll is why the game is **unplugged** from Enlight
+while a tool borrows it (the in-game calibration, opened with A+B): the
+runner sets the `enlightPtr` handle every `la.shine*` verb guards on to
+null for the whole hold, so the ruleset sees a device with no optics
+rather than stealing the tool's measurements.  Optics the ruleset queues
+meanwhile are kept and applied when the hold ends; the calibration itself
+saves and restores the repetitions and cooldown it overrides.  See
+`src/game/LightAir_GameHold.h`.
+
 ---
 
 ## 9. The recharge clock

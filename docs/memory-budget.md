@@ -106,8 +106,8 @@ displayable.
 
 > **Do not cut `MAX_SETS` without fixing this first:** `_setCount` is never
 > reset, and `GameRunner::begin()` does not clear the sets it created last
-> time. Today the sketch calls `begin()` once per boot and the end-game A+B
-> reboots, so 32 slots hide the leak. At 9 a second `begin()` would run out.
+> time. Today the sketch calls `begin()` once per boot and the end-game
+> restart reboots, so 32 slots hide the leak. At 9 a second `begin()` would run out.
 > Add a `DisplayCtrl::resetBindingSets()` called from `GameRunner::begin`.
 
 ### B. Drop the second `LightAir_LuaGame` · **~7.2 KB**

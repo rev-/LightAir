@@ -580,8 +580,8 @@ struct LightAir_Game {
     const int* gameTimeLeft;
 
     // Called by GameRunner immediately before esp_restart() after the player
-    // presses A+B on the end-game screen.  Use for last-moment display updates
-    // or NVS writes.  nullptr = skip.
+    // holds A (alone) on the end-game screen.  Use for last-moment display
+    // updates or NVS writes.  nullptr = skip.
     void (*onEnd)(LightAir_DisplayCtrl&);
 
     // ---- TotemVM programs (Lua-defined games) ----
@@ -594,4 +594,21 @@ struct LightAir_Game {
     // IDLE — the VM form is the only activation form (the pre-VM short
     // reply and the native totem role runners are retired).
     const TotemProgramEntry* (*totemProgram)(uint8_t roleId);
+
+    // ---- In-game hold (see LightAir_GameHold.h) — all optional ----
+    //
+    // onClockTick: called once per cycle INSTEAD of the state behavior while
+    //   the player is held.  Advances whatever must not stop — the declarative
+    //   countdowns — and nothing else: no input, no optics, no radio.
+    //   nullptr = nothing ticks while held.
+    // holdAccept: msgTypes the ruleset still wants to receive from other
+    //   players while held.  nullptr = all of them.  It can only narrow:
+    //   totem messages are dropped either way.
+    // onHoldEnter / onHoldExit: bracket a hold (a tray line, a cue).  Not
+    //   called on the end screen; onHoldExit runs whenever onHoldEnter did.
+    void (*onClockTick)();
+    const uint8_t* holdAccept;
+    uint8_t        holdAcceptCount;
+    void (*onHoldEnter)(LightAir_DisplayCtrl&, GameOutput&);
+    void (*onHoldExit)(LightAir_DisplayCtrl&, GameOutput&);
 };

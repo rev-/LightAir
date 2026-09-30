@@ -250,6 +250,11 @@ bool Enlight::begin(spi_device_handle_t adcHandle) {
  *   (Rmax is enlight_max_range_m() in the header — the calibration
  *   routine needs it over a calib struct it has just written.)
  * ============================================================ */
+// NOTE — known flaw, deferred: refFar* (the reference this model is
+// anchored to) is derived in calibration step 2 from step-1 shots that were
+// correlated through the PRE-calibration phase.  On a device whose phase had
+// drifted — the one being recalibrated — the reference comes out low and the
+// distance reported here is biased.  See EnlightCalibRoutine.h.
 float Enlight::estimateRangeM(float farSum, float baseScale) const {
     const float refSum = (float)_cal.refFarR + (float)_cal.refFarG + (float)_cal.refFarB;
     if (refSum <= 0.0f || _cal.refDistM == 0) return 0.0f;   // never calibrated

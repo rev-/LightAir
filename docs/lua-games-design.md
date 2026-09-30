@@ -55,7 +55,8 @@ stays in C++ and is untouched by this migration:
 | Warmup countdown                                 | Totem role behaviour (`totems`)        |
 | Score collection, fusion, winner election        | All game-private state (Lua locals)    |
 | Totem activation protocol (0xF0/0xF1/0xF2)       |                                        |
-| End-game A+B reboot                              |                                        |
+| End-game restart (hold A)                        |                                        |
+| In-game hold: A+B tools menu, calibration        | Optional hold refinement (`hold`)      |
 
 The key observation that makes this cheap: `LightAir_Game` is **already a pure
 data table** of function pointers and var descriptors. The Lua engine does not
@@ -269,6 +270,43 @@ The spec details the games rely on:
   countdown, so a totem activated at any moment never arms its self-revert
   watchdog.  A `countdown_in` var still ticks normally, so such a game can
   run any number of internal timed rounds inside the one endless match.
+- **Keys the firmware owns** — in every game and every state, **A+B held**
+  opens the in-game tools menu before the ruleset sees the keys, and on the
+  end screen **A held alone** for 2 s restarts the device.  A ruleset must
+  not build a rule on A+B (the host suite fails on it); `<`+`>` is free and
+  is what the festival stands use.
+- **The in-game hold** (`src/game/LightAir_GameHold.h`) — while a player is
+  in the tools menu or a tool it opened (calibration), they are *busy, not
+  out of the game*:
+  - messages from other players still reach the `on_message` handlers of
+    the state the player is in: a LIT is taken, answered and scored as
+    usual, so are a splash, a team point report or a flag event.  Totem
+    messages are dropped — no pickups, no CP presence, no BASE respawn;
+  - `update` does not run, so nothing is fired, sent or claimed on the
+    player's behalf, and the game cannot reach Enlight (the tool owns it);
+    `rules` still run but see no keys, so the player's state follows from
+    what happens to them (shone to zero lives → out, a respawn clock → back
+    in) and never from what they press; `countdown_in` clocks keep running;
+  - END GAME, the score round-robin and totem activation always run.  An
+    END GAME during a hold does its data work at once — the transition
+    `action` runs (it may compute winner vars), the own score goes out, the
+    round-robin is answered — and its presentation (end screen, EndGame
+    cue, winner, tray lines, all with their full durations) when the tool
+    returns.
+
+  A ruleset needs to declare nothing for this.  It *may* refine it:
+
+  ```lua
+  hold = {
+    accept   = { la.msg.LIT },                 -- narrows only; nil = all player msgs
+    on_enter = function(vars) la.show("Busy", 0) end,
+    on_exit  = function(vars) la.clear_tray() end,
+  },
+  ```
+
+  `accept` can only narrow what arrives (totem messages are dropped either
+  way); `on_exit` runs whenever `on_enter` did, and neither runs on the
+  end screen.
 
 ### The `la` verb kernel
 

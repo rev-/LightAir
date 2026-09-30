@@ -149,6 +149,21 @@ struct LuaGameTramps {
         g_luaCtx.out  = nullptr;
         if (g_luaCtx.active) g_luaCtx.active->doEnd();
     }
+    static void clockTick() {
+        if (g_luaCtx.active) g_luaCtx.active->doClockTick();
+    }
+    static void holdEnter(LightAir_DisplayCtrl& d, GameOutput& out) {
+        g_luaCtx.disp   = &d;
+        g_luaCtx.out    = &out;
+        g_luaCtx.inputs = nullptr;           // the keys belong to the tool
+        if (g_luaCtx.active) g_luaCtx.active->doHoldHook(g_luaCtx.active->_holdEnterRef);
+    }
+    static void holdExit(LightAir_DisplayCtrl& d, GameOutput& out) {
+        g_luaCtx.disp   = &d;
+        g_luaCtx.out    = &out;
+        g_luaCtx.inputs = nullptr;
+        if (g_luaCtx.active) g_luaCtx.active->doHoldHook(g_luaCtx.active->_holdExitRef);
+    }
 };
 
 typedef void (*BeginFn)(LightAir_DisplayCtrl&, LightAir_Radio&,
@@ -195,7 +210,7 @@ const TotemProgramEntry* LightAir_LuaGame::progTramp(uint8_t roleId) {
 // per-site circuit breaker — only has to be added in maybeEscalate().
 static const char* const kFaultSiteNames[] = {
     "on_begin", "rule.when", "rule.action", "update", "on_message",
-    "on_reply", "on_reply.timeout", "on_score_announce", "on_end",
+    "on_reply", "on_reply.timeout", "on_score_announce", "on_end", "hold",
 };
 
 static constexpr uint32_t kFaultNoticeCooldownMs = 10000;
@@ -298,6 +313,20 @@ void LightAir_LuaGame::tickCountdowns() {
             if (s.val > 0) s.val--;
         }
     }
+}
+
+// Held (see LightAir_GameHold.h): the clocks run, the update body does not.
+void LightAir_LuaGame::doClockTick() {
+    tickCountdowns();
+    _engine.gcStep();
+}
+
+void LightAir_LuaGame::doHoldHook(int ref) {
+    if (ref == LUA_NOREF) return;
+    lua_State* L = _engine.L();
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+    pushVarsProxy();
+    if (!_engine.pcall(1, 0)) luaFault(FaultSite::Hold);
 }
 
 void LightAir_LuaGame::doBehavior() {
@@ -811,6 +840,41 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
     _scoreRef = fieldFnRef(L, tbl, "on_score_announce");
     _endRef   = fieldFnRef(L, tbl, "on_end");
 
+    // ---- hold: what a player busy in an in-game tool still receives ----
+    //   hold = { accept   = { la.msg.LIT, ... },   -- optional, narrows only
+    //            on_enter = function(vars) end,     -- optional
+    //            on_exit  = function(vars) end }    -- optional
+    _holdEnterRef = _holdExitRef = LUA_NOREF;
+    _holdAcceptCount = 0;
+    bool holdAcceptGiven = false;
+    lua_getfield(L, tbl, "hold");
+    if (lua_istable(L, -1)) {
+        int ht = lua_absindex(L, -1);
+        _holdEnterRef = fieldFnRef(L, ht, "on_enter");
+        _holdExitRef  = fieldFnRef(L, ht, "on_exit");
+        lua_getfield(L, ht, "accept");
+        if (lua_istable(L, -1)) {
+            holdAcceptGiven = true;
+            int at = lua_absindex(L, -1);
+            int n  = (int)lua_rawlen(L, at);
+            if (n > LuaDefaults::MAX_HOLD_ACCEPT)
+                luaL_error(L, "hold.accept: at most %d msgTypes", LuaDefaults::MAX_HOLD_ACCEPT);
+            for (int k = 1; k <= n; k++) {
+                lua_rawgeti(L, at, k);
+                lua_Integer m = luaL_checkinteger(L, -1);
+                if (m < 0 || m > 0xFF) luaL_error(L, "hold.accept: bad msgType %d", (int)m);
+                _holdAccept[_holdAcceptCount++] = (uint8_t)m;
+                lua_pop(L, 1);
+            }
+        } else if (!lua_isnil(L, -1)) {
+            luaL_error(L, "hold.accept must be a list of msgTypes");
+        }
+        lua_pop(L, 1);                                     // accept
+    } else if (!lua_isnil(L, -1)) {
+        luaL_error(L, "hold must be a table");
+    }
+    lua_pop(L, 1);                                         // hold
+
     // ---- on_message: per-state handler tables + DirectRadioRule rows ----
     uint8_t directCount = 0;
     lua_getfield(L, tbl, "on_message");
@@ -960,6 +1024,13 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
     _game.teamCount            = teams;
     _game.teamMap              = teams ? _teamMap : nullptr;
     _game.onEnd                = (_endRef != LUA_NOREF) ? &LuaGameTramps::end : nullptr;
+    _game.onClockTick          = &LuaGameTramps::clockTick;
+    // An empty accept list is a valid answer ("nothing while held"), so the
+    // pointer is set whenever the list was given — only nullptr means "all".
+    _game.holdAccept           = holdAcceptGiven ? _holdAccept : nullptr;
+    _game.holdAcceptCount      = _holdAcceptCount;
+    _game.onHoldEnter          = (_holdEnterRef != LUA_NOREF) ? &LuaGameTramps::holdEnter : nullptr;
+    _game.onHoldExit           = (_holdExitRef  != LUA_NOREF) ? &LuaGameTramps::holdExit  : nullptr;
     _game.totemProgram         = _progCount ? &LightAir_LuaGame::progTramp : nullptr;
 }
 

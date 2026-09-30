@@ -110,6 +110,21 @@ public:
     void clearTray();
 
     /* ================================
+     *       HOLD SUPPORT
+     *
+     * While another screen owns the glass (an in-game tool), nothing is
+     * drawn — update() is not called — but the game keeps writing: a hit
+     * queues "LIT by X", the end of the match queues "Game over!".
+     * pauseTray() stops their clocks, so every line gets its full duration
+     * once the game screen is back: a line shown while paused counts from
+     * resumeTray(), one shown before keeps what it had left.
+     * requestRedraw() repaints everything on the next update().
+     *    =================================== */
+    void pauseTray();
+    void resumeTray();
+    void requestRedraw() { _pendingClear = true; }
+
+    /* ================================
      *       MAIN UPDATE
      *    =================================== */
     void update();
@@ -189,6 +204,8 @@ private:
 
     TrayMessage _tray[DisplayDefaults::TRAY_MAX_MESSAGES];
     bool _pendingClear;
+    bool     _trayPaused   = false;
+    uint32_t _trayPausedAt = 0;
 };
 
 #endif

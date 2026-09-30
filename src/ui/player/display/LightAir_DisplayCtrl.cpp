@@ -142,9 +142,26 @@ void LightAir_DisplayCtrl::showMessage(const char* text, uint32_t durationMs) {
 
     strncpy(_tray[0].text, text, sizeof(_tray[0].text) - 1);
     _tray[0].text[sizeof(_tray[0].text) - 1] = '\0';
-    _tray[0].expireAt = (durationMs > 0) ? (millis() + durationMs) : 0;
+    // Paused: count from the pause instant, which resumeTray() then shifts
+    // to the resume instant — the line gets its whole duration on screen.
+    const uint32_t from = _trayPaused ? _trayPausedAt : millis();
+    _tray[0].expireAt = (durationMs > 0) ? (from + durationMs) : 0;
     _tray[0].active   = true;
     _tray[0].dirty    = true;
+}
+
+void LightAir_DisplayCtrl::pauseTray() {
+    if (_trayPaused) return;
+    _trayPaused   = true;
+    _trayPausedAt = millis();
+}
+
+void LightAir_DisplayCtrl::resumeTray() {
+    if (!_trayPaused) return;
+    const uint32_t away = millis() - _trayPausedAt;
+    for (uint8_t i = 0; i < DisplayDefaults::TRAY_MAX_MESSAGES; i++)
+        if (_tray[i].active && _tray[i].expireAt > 0) _tray[i].expireAt += away;
+    _trayPaused = false;
 }
 
 void LightAir_DisplayCtrl::clearTray() {
@@ -305,8 +322,8 @@ void LightAir_DisplayCtrl::renderString(VariableBinding& b) {
 void LightAir_DisplayCtrl::renderTray() {
     uint32_t now = millis();
 
-    // expire timed-out messages
-    for (uint8_t i = 0; i < DisplayDefaults::TRAY_MAX_MESSAGES; i++) {
+    // expire timed-out messages (their clocks are stopped while paused)
+    for (uint8_t i = 0; i < DisplayDefaults::TRAY_MAX_MESSAGES && !_trayPaused; i++) {
         if (_tray[i].active && _tray[i].expireAt > 0 && now >= _tray[i].expireAt) {
             _tray[i].active = false;
             _tray[i].dirty  = true;

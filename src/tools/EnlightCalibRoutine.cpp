@@ -22,6 +22,12 @@ bool EnlightCalibRoutine::run() {
     return session();
 }
 
+void EnlightCalibRoutine::runHeld(LightAir_HoldHost& host) {
+    _host = &host;
+    session();
+    _host = nullptr;
+}
+
 bool EnlightCalibRoutine::session() {
     _aborted = false;
     _bDownAt = 0;

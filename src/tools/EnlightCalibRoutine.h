@@ -2,13 +2,17 @@
 #include "../enlight/Enlight.h"
 #include "../ui/player/display/LightAir_Display.h"
 #include "../input/LightAir_InputCtrl.h"
+#include "../game/LightAir_GameHold.h"
 
 // ---------------------------------------------------------------
 // EnlightCalibRoutine — three-step hardware calibration sequence, plus a
 // summary.
 //
-// Started from Settings -> Calibration.  When it ends — saved or aborted —
-// run() returns to the caller; nothing reboots.
+// Started from Settings -> Calibration (run()), or from the in-game tools
+// menu while a match is on (runHeld(), see LightAir_GameHold.h: the game
+// keeps being serviced from every wait loop, the player stays targettable).
+// When it ends — saved or aborted — it returns to where it was started
+// from; nothing reboots.
 //
 // All-or-nothing
 //   The steps work on a RAM copy of the calibration (_work), seeded from the
@@ -69,7 +73,7 @@
 // Fix (deferred): re-correlate the stored step-1 samples with the new phase,
 // or take the reference shots after the phase is fixed.
 // ---------------------------------------------------------------
-class EnlightCalibRoutine {
+class EnlightCalibRoutine : public LightAir_HoldTool {
 public:
     EnlightCalibRoutine(Enlight&            e,
                         LightAir_Display&   disp,
@@ -80,16 +84,18 @@ public:
     // false when the operator aborted (nothing saved, old values restored).
     bool run();
 
+    // LightAir_HoldTool: the same routine, from inside a running game.
+    const char* holdName() const override { return "Calibration"; }
+    void runHeld(LightAir_HoldHost& host) override;
+
     // How long B must be held to abort.
     static constexpr uint32_t ABORT_HOLD_MS = 1500;
 
-protected:
-    // Hook for callers that must keep something alive while the routine
-    // blocks (an in-game hold services the game from here).  Called from
-    // every wait loop; the base routine needs nothing.
-    virtual void idle() {}
-
 private:
+    // Called from every wait loop: keeps a running game serviced while the
+    // routine blocks.  Nothing to do off-game.
+    void idle() { if (_host) _host->service(); }
+
     // Whole routine: borrow the optics, run the steps, save or restore,
     // give the optics back.
     bool session();
@@ -144,6 +150,7 @@ private:
     LightAir_InputCtrl& _input;
     uint8_t             _keypadId;
 
+    LightAir_HoldHost*  _host    = nullptr;  // the game, when run in-game
     const InputReport*  _rep     = nullptr;  // report from the last tick()
     uint32_t            _bDownAt = 0;        // millis() B went down; 0 = up
     bool                _aborted = false;

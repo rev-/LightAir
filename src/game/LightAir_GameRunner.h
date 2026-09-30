@@ -2,6 +2,7 @@
 #include "../config.h"
 #include "LightAir_Game.h"
 #include "LightAir_GameOutput.h"
+#include "LightAir_GameHold.h"
 #include "../input/LightAir_InputCtrl.h"
 #include "../input/SpiAdcSensor.h"
 #include "../radio/LightAir_Radio.h"
@@ -20,6 +21,12 @@
 //               flush queued UI events to LightAir_UICtrl
 //
 // Each update() enforces a fixed duration (GameDefaults::LOOP_MS).
+//
+// Keys the runner itself owns, in every game and every state:
+//   A+B held      opens the hold tool (the in-game tools menu), see
+//                 LightAir_GameHold.h.  Rulesets must not use this chord.
+//   A held alone  on the end-game screen, once the winner is shown, for
+//                 GameDefaults::RESTART_HOLD_MS: restart the device.
 //
 // Display binding sets are created automatically in begin() from
 // GameVar::stateMask — no DisplayCtrl code needed in game files.
@@ -80,6 +87,12 @@ public:
     // One loop iteration: read → logic → output.
     // Delays for the remainder of GameDefaults::LOOP_MS if logic finishes early.
     void update();
+
+    // ---- In-game hold ----
+    // The tool A+B opens (normally the tools menu).  Not owned; must outlive
+    // the runner.  Without one, A+B does nothing.
+    void setHoldTool(LightAir_HoldTool& tool) { _holdTool = &tool; }
+    bool held() const { return _held; }
 
     // ---- Roster management ----
     // Call clearRoster() + addToRoster() before begin() to register all player IDs
@@ -161,7 +174,7 @@ private:
     // ---- End-game score accumulation ----
     bool     _scoreActive      = false;   // true while in scoringState; prevents re-trigger
     bool     _scoreResultShown = false;   // winner display already triggered
-    bool     _endExitReady     = false;   // true after scoreAnnounce; A+B triggers reboot
+    bool     _endExitReady     = false;   // true after scoreAnnounce; A held triggers reboot
     uint8_t  _emptyBindingSetId = 255;    // binding set with no vars; activated after scoreAnnounce
     uint32_t _scorePresent     = 0;       // bit id set = _scoreSlots[id] is valid (player-ID-indexed)
     uint32_t _scoreSentAt      = 0;       // millis() of last broadcast; 0 = not yet sent
@@ -169,11 +182,35 @@ private:
     uint32_t _rosterSentAt     = 0;       // millis() of last end-game MSG_TOTEM_ROSTER re-broadcast
     uint8_t  _scoreSlots[PlayerDefs::MAX_PLAYER_ID][GameDefaults::MAX_WINNER_VARS * 4];
 
+    // ---- In-game hold ----
+    struct HoldHostAdapter;                  // LightAir_HoldHost -> holdService()
+    LightAir_HoldTool* _holdTool      = nullptr;
+    bool         _held                = false;
+    uint32_t     _holdLastMs          = 0;     // last reduced cycle; 0 = none yet
+    Enlight*     _heldEnlight         = nullptr; // the game's optics handle, unplugged
+    OpticsOutput _heldOptics;                  // optics the game queued while held
+    UIOutput     _deferredUi;                  // end-of-match cues, played at hold exit
+    bool         _holdHooked          = false; // onHoldEnter ran; onHoldExit owed
+    bool         _chordLatched        = false; // A+B must be released before it re-arms
+    uint32_t     _restartDownAt       = 0;     // millis() A went down on the end screen
+    bool         _restartSpoiled      = false; // B was down during this A press
+
+    bool holdChord(const InputReport& in);
+    void runHold();
+    void holdBegin();
+    void holdService();
+    void holdEnd();
+
     // ---- Helpers ----
+    void logic(const InputReport& inputs, const RadioReport& radio, GameOutput& output);
+    void startScoringIfEntered(GameOutput& output);
+    void runEndAction(const StateRule* rule, bool matched, GameOutput& output);
+    void flushRadio(const GameOutput& out);
     void enterState(uint8_t s);   // set state + display, drop stale Enlight result
     void activateStateDisplay(uint8_t state);
     void flushOutput(const GameOutput& out);
-    void scoreUpdate(const InputReport&, const RadioReport&, GameOutput&);
+    void scoreRadio(const RadioReport&, GameOutput&);
+    void scoreInput(const InputReport&);
     void replyToTotemBeacon(const RadioEvent& ev, GameOutput& output);
 
     // Score collection helpers (all defined in .cpp)

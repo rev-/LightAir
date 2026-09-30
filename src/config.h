@@ -353,6 +353,10 @@ namespace GameDefaults {
     constexpr uint8_t  MAX_PARTICIPANTS         = 28;   // max entries for totems; players use MAX_PLAYER_ID
     constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
     constexpr uint8_t  MSG_END_GAME             = RadioMsg::MSG_END_GAME;
+    // End screen: how long A must be held, alone, to restart the device.
+    // Longer than the A+B menu chord's long-press on purpose, so the two
+    // cannot be confused while the second key is still on its way down.
+    constexpr uint32_t RESTART_HOLD_MS          = 2000;
 }
 // ---------------------------------------------------------------
 // Lua game engine configuration
@@ -370,6 +374,7 @@ namespace LuaDefaults {
     constexpr uint8_t  MAX_MONITOR     = 16;     // monitor entries per game
     constexpr uint8_t  MAX_STATES      = 8;      // game states (mask fits uint32)
     constexpr uint8_t  MAX_COUNTDOWNS  = 4;      // vars with countdown_in per game
+    constexpr uint8_t  MAX_HOLD_ACCEPT = 8;      // msgTypes in a game's hold.accept list
     constexpr uint8_t  MAX_GAME_NAME   = 16;     // display name buffer (15 + NUL)
     constexpr uint32_t INSTR_BUDGET    = 200000; // Lua instructions per callback
     constexpr const char* GAMES_DIR    = "/games";        // parent, mkdir only

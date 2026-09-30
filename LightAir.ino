@@ -28,6 +28,7 @@
 #include "src/tools/EnlightCalibRoutine.h"
 #include "src/tools/EnlightTestMode.h"
 #include "src/tools/GameFileServer.h"
+#include "src/game/LightAir_ToolsMenu.h"
 #include "src/lua/LightAir_GameStore.h"
 
 // ----------------------------------------------------------------
@@ -104,6 +105,8 @@ static LightAir_GameManager manager;
 static LightAir_GameRunner  runner;
 static LightAir_GameStore   gameStore;   // LittleFS-backed .lua games
 static GameFileServer       shareServer; // Settings → Share games (WiFi AP)
+// In-game tools menu, opened with A+B held (see LightAir_GameHold.h).
+static LightAir_ToolsMenu   toolsMenu(rawDisplay, input, InputDefaults::KEYPAD_ID);
 
 // ================================================================
 // Runtime path flag (set in setup(), read in loop())
@@ -232,6 +235,11 @@ void _setup() {
             Log.infoln("Setup menu cancelled — rebooting");
             ESP.restart();
         }
+
+        // In-game tools (A+B held).  Calibration is the same routine as
+        // Settings -> Calibration; under a hold the player stays in the game.
+        toolsMenu.addTool(*calibRoutine);
+        runner.setHoldTool(toolsMenu);
 
         // Start game
         static SpiAdcSensor* gameSensors[] = { &battSensor, &ledTempSensor, &pdTempSensor };

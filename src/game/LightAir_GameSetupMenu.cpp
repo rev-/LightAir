@@ -1275,7 +1275,7 @@ void LightAir_GameSetupMenu::commitToRunner() {
 
     // Checkpoint what is actually about to run, for S1's "Restart" to
     // read back after the reboot that always follows a match (the
-    // end-game A+B chord calls esp_restart()).
+    // end-game "hold A" restart calls esp_restart()).
     saveLastConfig();
 }
 

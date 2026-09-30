@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <functional>
 
 #include "Arduino.h"
 #include "ArduinoLog.h"
@@ -13,9 +14,11 @@ HostLog Log;
 
 #include "lua/LightAir_LuaGame.h"
 #include "game/LightAir_GameRunner.h"
+#include "game/LightAir_ToolsMenu.h"
 #include "game/LightAir_ConfigBlob.h"
 #include "radio/LightAir_RadioTestTransport.h"
 #include "enlight/Enlight.h"
+#include "esp_system.h"            // g_restartCalls (the esp_restart() stub counts)
 
 // ---- Enlight stub (link-time): the verbs guard on enlightPtr, but the
 // test also exercises la.shine paths through a scripted instance.
@@ -1142,6 +1145,346 @@ int main() {
         fire(0);
         run3.update();
         CHECK(litsSent() == 1, "the first beam after respawn sends its LIT");
+
+        g_millisStep = 0;
+    }
+
+    // ---- 19. In-game hold: busy, not out of the game ---------------------
+    // A+B opens the hold tool.  While it runs the player is answered by the
+    // ruleset's own handlers (a LIT is taken and replied to), totem beacons
+    // go unanswered, the game cannot touch the optics, the clock keeps
+    // running, and an END GAME does its data work at once — state, own score
+    // out, the round-robin answered — while the end screen and its cue wait
+    // for the tool to return.  Then: A held alone restarts the end screen,
+    // A+B does not.  All through the real GameRunner and freeforall.lua.
+    {
+        struct ScriptKeypad : LightAir_Keypad {
+            bool want[128] = {};
+            bool have[128] = {};
+            uint8_t getEvents(KeypadRawEvent* buf, uint8_t maxN) override {
+                uint8_t n = 0;
+                for (int k = 0; k < 128 && n < maxN; k++)
+                    if (want[k] != have[k]) { have[k] = want[k]; buf[n++] = { (char)k, want[k] }; }
+                return n;
+            }
+        };
+        struct ScriptTool : LightAir_HoldTool {
+            std::function<void(LightAir_HoldHost&)> body;
+            int runs = 0;
+            const char* holdName() const override { return "Script"; }
+            void runHeld(LightAir_HoldHost& h) override { runs++; if (body) body(h); }
+        };
+        struct UIRec : LightAir_UIEventObserver {
+            int endGame = 0;
+            void onEventStarted(uint8_t id, uint8_t, uint8_t) override {
+                if (id == (uint8_t)LightAir_UICtrl::UIEvent::EndGame) endGame++;
+            }
+        };
+
+        FakeDisplay          raw4;
+        LightAir_DisplayCtrl d4(raw4);
+        FakeAudio            a4; FakeVib v4; FakeRGB r4;
+        LightAir_UICtrl      u4(a4, v4, r4);
+        UIRec                rec4;
+        u4.setObserver(&rec4);
+        LightAir_InputCtrl   in4;
+        ScriptKeypad         kp4;
+        in4.registerKeypad(InputDefaults::KEYPAD_ID, kp4);
+        LightAir_RadioTestTransport tr4;
+        LightAir_Radio       rad4(tr4, 2, 0x42, 0, 0);
+        rad4.begin();
+        LightAir_GameRunner  run4;
+        run4.clearRoster();
+        run4.addToRoster(2);
+        run4.addToRoster(3);
+        ScriptTool           tool4;
+        run4.setHoldTool(tool4);
+
+        CHECK(shared.load("games/freeforall.lua"), "freeforall loads for the hold test");
+        const LightAir_Game& g4 = shared.descriptor();
+        CHECK(g4.onClockTick != nullptr, "a Lua game ticks its clocks while held");
+        g_millisStep = 1;
+        run4.begin(g4, d4, in4, rad4, &u4);
+        int* lives4 = slotOf(g4, "lives");
+        int* time4  = slotOf(g4, "time_left");
+
+        // Sent packets of one msgType since the last drain; the rest dropped.
+        int  sentOf[256];
+        auto drain = [&]() {
+            memset(sentOf, 0, sizeof(sentOf));
+            int n18 = 0;
+            while (tr4.hasSent()) {
+                LightAir_RadioTestTransport::SentEntry e = tr4.popSent();
+                sentOf[e.pkt.msgType]++;
+                // The fused score broadcast carries one 9-byte record per
+                // player it has: 18 bytes = both of us.
+                if (e.pkt.msgType == RadioMsg::MSG_SCORE_COLLECT && e.pkt.payloadLen == 18) n18++;
+            }
+            return n18;
+        };
+        uint32_t ts = 50000;
+        auto from = [&](uint8_t sender, uint8_t type, const uint8_t* p, uint8_t n) {
+            tr4.push(sender, 0, 0, type, 0x42, ts++, 0, p, n);
+        };
+        const uint8_t ready = 0;
+
+        // Control, not held: a BONUS totem at arm's length is claimed.
+        drain();
+        from(254, RadioMsg::MSG_BONUS_BEACON, &ready, 1);
+        g_millis += 20; run4.update();
+        drain();
+        CHECK(sentOf[RadioMsg::MSG_BONUS_BEACON + 1] == 1, "in play, a BONUS beacon is answered");
+
+        const int endGameBefore = rec4.endGame;
+        bool gameSawBeam = true;
+        tool4.body = [&](LightAir_HoldHost& host) {
+            CHECK(run4.held(), "the runner reports the hold");
+            CHECK(enlightPtr == nullptr, "the game's optics handle is unplugged");
+
+            // A LIT from player 3 is taken and answered by the ruleset.
+            const int before = *lives4;
+            drain();
+            from(3, RadioMsg::MSG_LIT, nullptr, 0);
+            g_millis += 20; host.service();
+            drain();
+            CHECK(*lives4 == before - 1, "held: a LIT still costs a life");
+            CHECK(sentOf[RadioMsg::MSG_LIT + 1] == 1, "held: the LIT is answered");
+
+            // Shone to zero while held: the player goes out like anyone else,
+            // and the next LIT is answered DOWN — not another SHONE, which
+            // would hand the next shooter a free point.
+            *lives4 = 1;
+            auto replySub = [&]() {
+                int sub = -1;
+                while (tr4.hasSent()) {
+                    LightAir_RadioTestTransport::SentEntry e = tr4.popSent();
+                    if (e.pkt.msgType == RadioMsg::MSG_LIT + 1 && e.pkt.payloadLen)
+                        sub = e.pkt.payload[0];
+                }
+                return sub;
+            };
+            from(4, RadioMsg::MSG_LIT, nullptr, 0);
+            g_millis += 20; host.service();
+            CHECK(replySub() == 2, "held: the last life's LIT is answered SHONE");
+            g_millis += 20; host.service();
+            CHECK(*g4.currentState == 1, "held: shone to zero, the player is out");
+            from(5, RadioMsg::MSG_LIT, nullptr, 0);
+            g_millis += 20; host.service();
+            CHECK(replySub() == 3, "held: once out, a LIT is answered DOWN");
+            CHECK(*lives4 == 0, "held: lives never go below zero");
+
+            // A totem beacon goes unanswered: no totem actions while busy.
+            from(254, RadioMsg::MSG_BONUS_BEACON, &ready, 1);
+            g_millis += 20; host.service();
+            drain();
+            CHECK(sentOf[RadioMsg::MSG_BONUS_BEACON + 1] == 0, "held: a BONUS beacon is NOT answered");
+
+            // A beam result waiting in Enlight stays there: the game can't
+            // read it, so it can't send a LIT on the player's behalf.
+            g_pendActive = true; g_pendDiscard = false; g_pendReadyAt = 0; g_pendId = 3;
+            for (int i = 0; i < 5; i++) { g_millis += 20; host.service(); }
+            drain();
+            CHECK(sentOf[RadioMsg::MSG_LIT] == 0, "held: no LIT goes out");
+            gameSawBeam = !g_pendActive;
+
+            // The match clock keeps running.
+            const int t0 = *time4;
+            g_millis += 3000; host.service();
+            CHECK(*time4 <= t0 - 3, "held: time_left keeps counting down");
+
+            // END GAME: the data work happens now...
+            drain();
+            from(3, RadioMsg::MSG_END_GAME, nullptr, 0);
+            g_millis += 20; host.service();
+            drain();
+            CHECK(*g4.currentState == g4.scoringState, "held: END GAME moves to the scoring state");
+            CHECK(sentOf[RadioMsg::MSG_SCORE_COLLECT] >= 1, "held: own score goes out at once");
+            CHECK(sentOf[RadioMsg::MSG_END_GAME] >= 1, "held: END GAME is flooded on");
+            // ...and the presentation waits.
+            CHECK(rec4.endGame == endGameBefore, "held: the EndGame cue waits for the tool");
+
+            // Player 3's scores arrive: answered with the fused record.
+            uint8_t rec[9] = { 3, 5, 0, 0, 0, 1, 0, 0, 0 };
+            from(3, RadioMsg::MSG_SCORE_COLLECT, rec, 9);
+            g_millis += 20; host.service();
+            CHECK(drain() >= 1, "held: the round-robin is answered with both scores");
+
+            bool drawn = false;
+            for (auto& row : raw4.tray) if (strstr(row, "Restart")) drawn = true;
+            CHECK(!drawn, "held: the end screen is not drawn over the tool");
+        };
+
+        kp4.want['A'] = kp4.want['B'] = true;
+        for (int i = 0; i < 100 && tool4.runs == 0; i++) { g_millis += 10; run4.update(); }
+        CHECK(tool4.runs == 1, "A+B held opens the hold tool");
+        CHECK(!gameSawBeam, "the pending beam was not consumed by the game");
+        CHECK(!run4.held(), "the hold ends when the tool returns");
+        CHECK(enlightPtr == &g_enlight, "the optics handle is plugged back in");
+        CHECK(rec4.endGame == endGameBefore + 1, "the deferred EndGame cue plays at hold exit");
+
+        // Keys still down when the tool returns do not reopen it.
+        for (int i = 0; i < 20; i++) { g_millis += 50; run4.update(); }
+        CHECK(tool4.runs == 1, "A+B still held after the tool does not reopen it");
+        bool shown = false;
+        for (auto& row : raw4.tray) if (!strcmp(row, "Hold A: Restart")) shown = true;
+        CHECK(shown, "the end screen appears once the tool is gone");
+        CHECK(g_restartCalls == 0, "no restart while A+B is the chord");
+
+        // End screen: A held alone restarts; not before RESTART_HOLD_MS.
+        kp4.want['A'] = kp4.want['B'] = false;
+        for (int i = 0; i < 5; i++) { g_millis += 20; run4.update(); }
+        tool4.body = nullptr;
+        kp4.want['A'] = true;
+        for (int i = 0; i < 15; i++) { g_millis += 100; run4.update(); }
+        CHECK(g_restartCalls == 0, "A held for 1.5 s does not restart yet");
+        for (int i = 0; i < 10 && g_restartCalls == 0; i++) { g_millis += 100; run4.update(); }
+        CHECK(g_restartCalls == 1, "A held alone for 2 s restarts from the end screen");
+
+        // A with B joining late is the menu chord, never a restart.
+        kp4.want['A'] = false;
+        for (int i = 0; i < 5; i++) { g_millis += 20; run4.update(); }
+        kp4.want['A'] = true;
+        g_millis += 100; run4.update();
+        kp4.want['B'] = true;
+        for (int i = 0; i < 40; i++) { g_millis += 100; run4.update(); }
+        CHECK(g_restartCalls == 1, "A+B on the end screen never restarts");
+        CHECK(tool4.runs == 2, "A+B opens the tools on the end screen too");
+        kp4.want['A'] = kp4.want['B'] = false;
+
+        g_pendActive = false;
+        g_millisStep = 0;
+    }
+
+
+    // ---- 20. The in-game tools menu ---------------------------------------
+    // Opened by A+B, it must not act on that same chord, must keep the game
+    // serviced while it waits, runs the picked tool and then returns
+    // straight to the game; B backs out without running anything.
+    {
+        struct StepKeypad : LightAir_Keypad {
+            // script(step) -> keys down at that poll, as a string
+            const char* (*script)(int) = nullptr;
+            int  step = 0;
+            bool have[128] = {};
+            uint8_t getEvents(KeypadRawEvent* buf, uint8_t maxN) override {
+                const char* down = script(step++);
+                uint8_t n = 0;
+                for (int k = 1; k < 128 && n < maxN; k++) {
+                    const bool want = strchr(down, (char)k) != nullptr;
+                    if (want != have[k]) { have[k] = want; buf[n++] = { (char)k, want }; }
+                }
+                return n;
+            }
+        };
+        struct CountTool : LightAir_HoldTool {
+            int runs = 0;
+            const char* holdName() const override { return "Count"; }
+            void runHeld(LightAir_HoldHost&) override { runs++; }
+        };
+        struct CountHost : LightAir_HoldHost {
+            int calls = 0;
+            void service() override { calls++; }
+        };
+
+        FakeDisplay        rawM;
+        LightAir_InputCtrl inM;
+        StepKeypad         kpM;
+        inM.registerKeypad(InputDefaults::KEYPAD_ID, kpM);
+        LightAir_ToolsMenu menu(rawM, inM, InputDefaults::KEYPAD_ID);
+        CountTool          t1;
+        CHECK(menu.addTool(t1), "a tool registers");
+
+        // A+B still down from the chord for a while, then released, then A.
+        kpM.script = [](int s) -> const char* {
+            if (s < 10) return "AB";
+            if (s < 15) return "";
+            return "A";
+        };
+        // The runner opens the menu having already polled the chord: the keys
+        // are down in InputCtrl before the menu's first poll.
+        inM.poll(); inM.poll();
+        CountHost h1;
+        menu.runHeld(h1);
+        CHECK(t1.runs == 1, "A picks the tool, and only after the chord is released");
+        CHECK(kpM.step >= 16, "the chord's own A did not select anything");
+        CHECK(h1.calls >= kpM.step - 3, "the game is serviced on every menu poll");
+
+        // B backs out.
+        kpM.step = 0;
+        kpM.script = [](int s) -> const char* { return s < 3 ? "" : "B"; };
+        CountHost h2;
+        menu.runHeld(h2);
+        CHECK(t1.runs == 1, "B leaves the menu without running a tool");
+    }
+
+
+    // ---- 21. hold = { accept, on_enter, on_exit } --------------------------
+    // The ruleset's own refinement: accept narrows what a held player still
+    // receives (LIT yes, SPLASH no), the hooks bracket the hold, the update
+    // body stops and the countdown_in clock does not.
+    {
+        struct ScriptTool : LightAir_HoldTool {
+            std::function<void(LightAir_HoldHost&)> body;
+            const char* holdName() const override { return "Script"; }
+            void runHeld(LightAir_HoldHost& h) override { if (body) body(h); }
+        };
+        struct ChordKeypad : LightAir_Keypad {
+            bool down = false, have = false;
+            uint8_t getEvents(KeypadRawEvent* buf, uint8_t maxN) override {
+                if (down == have || maxN < 2) return 0;
+                have = down;
+                buf[0] = { 'A', down }; buf[1] = { 'B', down };
+                return 2;
+            }
+        };
+
+        CHECK(shared.load("test/host/fixtures/hold.lua"), "hold fixture loads");
+        const LightAir_Game& hd = shared.descriptor();
+        CHECK(hd.holdAccept && hd.holdAcceptCount == 1 &&
+              hd.holdAccept[0] == RadioMsg::MSG_LIT, "hold.accept reaches the descriptor");
+
+        FakeDisplay          raw5;
+        LightAir_DisplayCtrl d5(raw5);
+        LightAir_InputCtrl   in5;
+        ChordKeypad          kp5;
+        in5.registerKeypad(InputDefaults::KEYPAD_ID, kp5);
+        LightAir_RadioTestTransport tr5;
+        LightAir_Radio       rad5(tr5, 2, 0x42, 0, 0);
+        rad5.begin();
+        LightAir_GameRunner  run5;
+        ScriptTool           tool5;
+        run5.setHoldTool(tool5);
+        g_millisStep = 1;
+        run5.begin(hd, d5, in5, rad5, nullptr);
+
+        int* lits     = slotOf(hd, "lits");
+        int* splashes = slotOf(hd, "splashes");
+        int* updates  = slotOf(hd, "updates");
+        int* clock5   = slotOf(hd, "clock");
+        int* entered  = slotOf(hd, "entered");
+        int* exited   = slotOf(hd, "exited");
+
+        uint32_t ts = 90000;
+        tool5.body = [&](LightAir_HoldHost& host) {
+            CHECK(*entered == 1 && *exited == 0, "hold.on_enter ran on the way in");
+            const int u0 = *updates, c0 = *clock5;
+            tr5.push(3, 0, 0, RadioMsg::MSG_LIT,    0x42, ts++, 0, nullptr, 0);
+            tr5.push(3, 0, 0, RadioMsg::MSG_SPLASH, 0x42, ts++, 0, nullptr, 0);
+            g_millis += 20;   host.service();
+            g_millis += 2000; host.service();
+            CHECK(*lits == 1,     "held: an accepted msgType still arrives");
+            CHECK(*splashes == 0, "held: one outside hold.accept does not");
+            CHECK(*updates == u0, "held: the update body does not run");
+            CHECK(*clock5 <= c0 - 2, "held: the countdown_in clock keeps running");
+        };
+        kp5.down = true;
+        for (int i = 0; i < 100 && *entered == 0; i++) { g_millis += 10; run5.update(); }
+        CHECK(*exited == 1, "hold.on_exit ran on the way out");
+        kp5.down = false;
+        for (int i = 0; i < 5; i++) { g_millis += 10; run5.update(); }
+        tr5.push(3, 0, 0, RadioMsg::MSG_SPLASH, 0x42, ts++, 0, nullptr, 0);
+        g_millis += 10; run5.update();
+        CHECK(*splashes == 1, "after the hold, everything arrives again");
 
         g_millisStep = 0;
     }

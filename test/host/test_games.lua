@@ -820,6 +820,34 @@ do
 end
 
 -- ================================================================
+--   A+B belongs to the firmware
+--
+--   Held together, A and B open the in-game tools menu in every game and
+--   every state (GameRunner, see src/game/LightAir_GameHold.h), before the
+--   ruleset sees the keys.  A rule keyed on the same chord would fire in
+--   the same breath the menu opens — FestaSportSasso's staff hand-over did
+--   exactly that until it moved to < + >.  Any line that asks for both
+--   keys is refused here.
+-- ================================================================
+do
+  local checked = 0
+  for _, f in ipairs(files) do
+    local fh = assert(io.open(ROOT .. f .. ".lua", "r"))
+    local src = fh:read("a"); fh:close()
+    checked = checked + 1
+    for line in src:gmatch("[^\n]+") do
+      if not line:match("^%s*%-%-")
+         and line:match('key_[%w_]+%s*%(%s*"A"') and line:match('key_[%w_]+%s*%(%s*"B"') then
+        failures = failures + 1
+        print(string.format("  FAIL %-12s reads the firmware's A+B chord: %s",
+                            f, line:match("^%s*(.-)%s*$")))
+      end
+    end
+  end
+  print(string.format("OK   keys          %d game files leave the A+B menu chord alone", checked))
+end
+
+-- ================================================================
 --   Every var role a projector is given must be DECLARED
 --
 --   proj.define{ vars = { spent = "energy_spent", ... } } names game vars
