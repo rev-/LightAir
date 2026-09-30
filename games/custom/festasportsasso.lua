@@ -25,14 +25,16 @@
 --              after respawn_secs — exactly as in King of Hill.
 --   SUB_END    the clock ran out: a frozen stats screen leading with
 --              "#<counter> PUNTI: <score>" (score = 10 per CP totem
---              point plus 1 per player lit this turn).  The A+B chord
---              (deliberately NOT written on the screen — it is the
+--              point plus 1 per player lit this turn).  The < + >
+--              chord (deliberately NOT written on the screen — it is the
 --              staff's key, not the visitor's) starts the next turn.
+--              A+B is not available: the firmware reserves it, in
+--              every game, for the in-game tools menu.
 --
 -- The player counter is the one number that survives a restart. It
 -- reads as "<visitors before this one><projector digit>": 2 = the
 -- first visitor on projector 2, 12 = the second one, 122 = the
--- thirteenth.  The A+B restart bumps the first part by one; the last
+-- thirteenth.  The < + > restart bumps the first part by one; the last
 -- digit is this device's player id and never changes, because the
 -- projector doesn't.  played_before seeds the first part, so a
 -- battery swap mid-festival can resume the count instead of
@@ -40,8 +42,7 @@
 --
 -- Two consequences of "never ends" worth knowing before editing:
 --   * no `scoring_state`  -> the runner never collects scores, never
---     floods MSG_END_GAME and never arms its own A+B reboot, which
---     is what leaves the chord free for the turn restart below;
+--     floods MSG_END_GAME and never offers its end-screen restart;
 --   * no `time_left_var`  -> the 0xF1 activation reply reports
 --     0xFFFF instead of the turn clock, so a totem activated at any
 --     point of the day never arms its self-revert watchdog.  Wiring
@@ -454,10 +455,11 @@ return {
         la.ui("Up")
       end },
 
-    -- The staff's key: A+B together hands the projector to the next
-    -- visitor.  Not shown on the stats screen on purpose.
+    -- The staff's key: < and > together hand the projector to the next
+    -- visitor.  Not shown on the stats screen on purpose.  (Not A+B:
+    -- the firmware owns that chord for the in-game tools menu.)
     { from = S.SUB_END, to = S.PRE_START,
-      when   = function() return la.key_down("A") and la.key_down("B") end,
+      when   = function() return la.key_down("<") and la.key_down(">") end,
       action = function(vars)
         -- One more visitor served: bump the counter's first part and
         -- leave its last digit (this projector) alone.

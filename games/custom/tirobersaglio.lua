@@ -6,9 +6,9 @@
 -- projectors are switched on in the morning, handed from one child to
 -- the next all day, and THE MATCH ITSELF NEVER ENDS.  No
 -- `scoring_state`, so there is no score collection, no winner
--- announcement and no end screen — and the A+B chord stays free for the
--- staff's hand-over key (see the header of festasportsasso.lua for the
--- full reasoning; it applies here word for word).
+-- announcement and no end screen.  The staff's hand-over key is the
+-- < + > chord, as in festasportsasso.lua (A+B belongs to the firmware's
+-- in-game tools menu, in every game).
 --
 -- What ends and restarts is one child's turn.  A turn walks three
 -- phases:
@@ -22,7 +22,7 @@
 --   ACTIVE     the run itself: sub_time seconds and `charges` magazines
 --              of `pool` energy to light six targets IN ORDER.
 --   SUB_END    the frozen stats screen, led by
---              "Giocatore #<n> PUNTI: <score>".  The A+B chord — NOT
+--              "Giocatore #<n> PUNTI: <score>".  The < + > chord — NOT
 --              written on the screen, it is the staff's key — hands the
 --              projector to the next child.
 --
@@ -229,8 +229,7 @@ return {
   name    = "TiroBersaglio",
 
   initial_state = S.PRE_START,
-  -- No scoring_state / score_msg on purpose: this game has no end, and
-  -- that is what leaves the A+B chord to the hand-over rule below.
+  -- No scoring_state / score_msg on purpose: this game has no end.
 
   config = {
     -- One child's turn, not the match: the match never ends.
@@ -334,10 +333,10 @@ return {
         sub_end(vars)
       end },
 
-    -- The staff's key: A+B together hands the projector to the next
+    -- The staff's key: < and > together hand the projector to the next
     -- child.  Deliberately not written on the stats screen.
     { from = S.SUB_END, to = S.PRE_START,
-      when   = function() return la.key_down("A") and la.key_down("B") end,
+      when   = function() return la.key_down("<") and la.key_down(">") end,
       action = function(vars)
         vars.counter = vars.counter + 1
         welcome(vars)

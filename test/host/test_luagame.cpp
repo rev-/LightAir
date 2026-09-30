@@ -134,8 +134,8 @@ int main() {
         { "games/upkeep.lua",     0x0005 },
         { "games/kingofhill.lua", 0x0006 },
         { "games/virus.lua",      0x0007 },
-        { "games/festasportsasso.lua", 0x0008 },
-        { "games/tirobersaglio.lua",   0x0009 },
+        { "games/custom/festasportsasso.lua", 0x0008 },
+        { "games/custom/tirobersaglio.lua",   0x0009 },
     };
     static LightAir_LuaGame shared;   // the one loaded-game instance
     static LightAir_LuaGame scanner;  // manifest-scan scratch instance
@@ -738,7 +738,7 @@ int main() {
     // start -> shone -> clock out -> stats screen -> the staff's A+B
     // chord, which hands the projector on and welcomes the next visitor.
     {
-        bool ok = shared.load("games/festasportsasso.lua");
+        bool ok = shared.load("games/custom/festasportsasso.lua");
         CHECK(ok, "festasportsasso loads");
         const LightAir_Game& fs = shared.descriptor();
         // The two structural consequences of a game that never ends.
@@ -890,13 +890,18 @@ int main() {
         CHECK(!strcmp(rawDisp.tray[0], "#2 PUNTI: 53"),
               "score = 10*totem points + players lit");
 
-        // Only the staff's A+B chord starts the next visitor.
-        keys.keyEventCount = 1;
-        keys.keyEvents[0] = { 0, 'A', KeyState::PRESSED };
-        CHECK(restart && !restart->condition(keys, nrr), "A alone does not restart");
+        // Only the staff's < + > chord starts the next visitor.  A+B is
+        // the firmware's in-game menu chord and must leave the turn alone.
         keys.keyEventCount = 2;
+        keys.keyEvents[0] = { 0, 'A', KeyState::HELD };
         keys.keyEvents[1] = { 0, 'B', KeyState::HELD };
-        CHECK(restart && restart->condition(keys, nrr), "A+B restarts the turn");
+        CHECK(restart && !restart->condition(keys, nrr), "A+B does not restart");
+        keys.keyEventCount = 1;
+        keys.keyEvents[0] = { 0, '<', KeyState::PRESSED };
+        CHECK(restart && !restart->condition(keys, nrr), "< alone does not restart");
+        keys.keyEventCount = 2;
+        keys.keyEvents[1] = { 0, '>', KeyState::HELD };
+        CHECK(restart && restart->condition(keys, nrr), "< + > restarts the turn");
         out = GameOutput();
         if (restart) restart->onTransition(disp, out);
         *fs.currentState = 0;
@@ -1057,7 +1062,7 @@ int main() {
         LightAir_Radio       rad2(tr2, 2, 0x42, 0, 0);
         LightAir_GameRunner  run2;
 
-        CHECK(shared.load("games/festasportsasso.lua"),
+        CHECK(shared.load("games/custom/festasportsasso.lua"),
               "festasportsasso loads for the binding-set test");
         const LightAir_Game& g2 = shared.descriptor();
 

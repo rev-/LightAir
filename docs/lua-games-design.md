@@ -4,8 +4,8 @@ Move every game ruleset (FreeForAll, Teams, Flag, KingOfHill, Outflow, Upkeep)
 and the totem behaviours they use out of the firmware and into one `.lua` file
 per game, stored on flash and exchangeable as plain files over HTTP.
 
-All six rulesets are ported under `games/`, plus two that only exist as Lua
-(Virus and FestaSportSasso):
+All six rulesets are ported under `games/`, plus the ones that only exist
+as Lua (Virus, and the two festival-stand rulesets under `games/custom/`):
 
 | File | Notes |
 |---|---|
@@ -16,9 +16,20 @@ All six rulesets are ported under `games/`, plus two that only exist as Lua
 | `games/outflow.lua` | energy-only, passive drain, a projector that never recharges |
 | `games/upkeep.lua` | CP ownership, text monitor var ("myPts/enemyPts") |
 | `games/virus.lua` | new game: infection tag; uses a custom message id |
-| `games/festasportsasso.lua` | new game: a King of Hill that never ends — 500 s turns inside one endless match, restarted by an admin A+B chord |
+| `games/custom/festasportsasso.lua` | stand ruleset, **not flashed**: a King of Hill that never ends — 500 s turns inside one endless match, restarted by an admin `<`+`>` chord |
+| `games/custom/tirobersaglio.lua` | stand ruleset, **not flashed**: a six-panel shooting gallery for children, same `<`+`>` hand-over |
 | `games/lib/std.lua` | pure-Lua standard library (see §"API layering") |
 | `games/lib/projector.lua` | the projector object: profile, energy, recharge, range, splash, inventory (see `docs/projector.md`) |
+
+`games/*.lua` and `games/lib/*.lua` are embedded in the firmware by
+`tools/embed_games.py` and seeded into `/games/stock` and `/games/lib` on
+every boot.  `games/custom/*.lua` is **not** embedded: those rulesets only
+matter to a festival stand, so they are uploaded over HTTP (Settings →
+Share games) to the devices that need them, where they land in
+`/games/custom`.  They are still loaded and exercised by the host suite.
+Seeding deletes any file in `/games/stock` or `/games/lib` the bundle no
+longer carries, so a game moved out of the bundle leaves devices on their
+next boot — and an uploaded copy is never shadowed by a stale stock one.
 
 Vocabulary rule: the API and the game files use the project's non-violent
 terms — *shine* (project light), *lit* (be illuminated), *shone*
@@ -253,8 +264,7 @@ The spec details the games rely on:
   optional, and leaving them out is what makes an always-on ruleset like
   FestaSportSasso or TiroBersaglio possible.  No `scoring_state`: the runner never sees its
   entry condition, so it never collects scores, never floods `MSG_END_GAME`,
-  never announces a winner and never arms its own end-screen A+B reboot —
-  which is what leaves that chord free for the ruleset's own use.  No
+  never announces a winner and never offers its end-screen restart.  No
   `time_left_var`: the 0xF1 activation reply reports `0xFFFF` instead of a
   countdown, so a totem activated at any moment never arms its self-revert
   watchdog.  A `countdown_in` var still ticks normally, so such a game can
@@ -273,7 +283,7 @@ enumeration (`key_at`), so a ruleset can act on keys it never named and no
 layout knowledge lives on either side of the boundary.  A key the report
 does not list is up: it lists only what is not OFF this poll, and it lists
 every such key, which is what makes a chord like
-`la.key_down("A") and la.key_down("B")` (FestaSportSasso's turn restart)
+`la.key_down("<") and la.key_down(">")` (FestaSportSasso's turn restart)
 work at all.
 
 **Constant tables (data, not calls; pushed once at load)** — `la.msg.*`

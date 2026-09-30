@@ -12,7 +12,8 @@
 //                      playable with no upload step.  /games/stock and
 //                      /games/lib are firmware territory: seedDefaults()
 //                      overwrites every file there, unconditionally, on
-//                      every boot — there is no HTTP path that can ever
+//                      every boot, and deletes any file there the bundle
+//                      no longer carries — there is no HTTP path that can ever
 //                      write to either directory (see GameFileServer),
 //                      so there is nothing to preserve and nothing to
 //                      hash-check.  A custom ruleset is a FILE the

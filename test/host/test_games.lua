@@ -98,7 +98,10 @@ local function mk_pkt(fields)
 end
 
 local files = { "freeforall", "teams", "flag", "kingofhill", "outflow", "upkeep",
-                "virus", "festasportsasso", "tirobersaglio" }
+                "virus",
+                -- Not flashed: games/custom/ is uploaded over HTTP (Settings
+                -- -> Share games) to the stands that need it.  Still tested.
+                "custom/festasportsasso", "custom/tirobersaglio" }
 local failures = 0
 local totem_sizes = {}
 
@@ -876,7 +879,7 @@ do
   local function check(cond, what, msg) if not cond then fail(what, msg) end end
 
   libcache = {}                       -- a projector of its own for this copy
-  local g = dofile(ROOT .. "festasportsasso.lua")
+  local g = dofile(ROOT .. "custom/festasportsasso.lua")
   local v = {}
   for _, c in ipairs(g.config) do v[c.id] = c.default end
   for _, x in ipairs(g.vars)   do v[x.id] = x.default end
@@ -969,7 +972,7 @@ do
 
   local function fresh()
     libcache = {}                   -- a projector of its own for this copy
-    g = dofile(ROOT .. "tirobersaglio.lua")
+    g = dofile(ROOT .. "custom/tirobersaglio.lua")
     v = {}
     for _, c in ipairs(g.config) do v[c.id] = c.default end
     for _, x in ipairs(g.vars)   do v[x.id] = x.default end
@@ -1087,11 +1090,11 @@ do
   check(scored, "tray", "the stats screen never showed the score line")
 
   -- ---- the staff's key hands over to the next child ------------------
-  la.key_down = function(k) return k == "A" or k == "B" end
+  la.key_down = function(k) return k == "<" or k == ">" end
   local n = v.counter
   tick(nil)
   check(state == S_PRE and v.counter == n + 1, "handover",
-        "A+B did not start the next child's turn")
+        "< + > did not start the next child's turn")
   check(v.hits == 0 and v.red == 0 and v.energy_left == v.pool * v.charges,
         "handover", "the next child inherited the last one's turn")
   la.key_down = function(k, pad) return false end
@@ -1118,7 +1121,7 @@ end
 do
   local CP_HOLD = 17
   local cases = {
-    { file = "festasportsasso", tight = -45, hold = -66, owner_arg = 1 },
+    { file = "custom/festasportsasso", tight = -45, hold = -66, owner_arg = 1 },
     { file = "kingofhill",      tight = -45, hold = -66, owner_arg = 1 },
     { file = "upkeep",          tight = -45, hold = -66, owner_arg = 0 },
   }
@@ -1241,7 +1244,7 @@ do
   -- projectors never are.
   local lists = {
     freeforall = true, teams = true, flag = true, kingofhill = true,
-    upkeep = true, virus = true, festasportsasso = true, outflow = false,
+    upkeep = true, virus = true, ["custom/festasportsasso"] = true, outflow = false,
   }
   for f, projectors in pairs(lists) do
     local g = fresh_game(f)

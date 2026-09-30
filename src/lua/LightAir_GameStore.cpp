@@ -9,6 +9,7 @@ LightAir_GameStore* LightAir_GameStore::s_instance = nullptr;
 #include <FS.h>
 #include <LittleFS.h>
 #include <esp_heap_caps.h>
+#include <string.h>
 #include "LightAir_LuaGame.h"
 #include "LightAir_GamesBundle.h"
 
@@ -56,8 +57,53 @@ bool LightAir_GameStore::begin() {
 // file there is what "the game is a file" actually means, and it
 // survives a firmware update untouched because seeding never looks at
 // that directory at all.
+//
+// Seeding also PRUNES: a file in /games/stock or /games/lib that the
+// bundle no longer carries is deleted (see pruneDir()).  That is how a
+// game the firmware stops shipping — games/custom/*.lua in the repository,
+// uploaded over HTTP only where it is wanted — actually leaves a device.
 // ----------------------------------------------------------------
+// A file in firmware territory that the bundle no longer carries is a game
+// this firmware stopped shipping.  It has to go: nothing else can remove
+// it (no HTTP path reaches these directories), and left in /games/stock it
+// would keep its menu slot AND win the duplicate-typeId check against the
+// copy a stand uploads to /games/custom — the very file meant to replace
+// it.  Removal is collected first and done after the directory walk, so
+// the iterator never runs over a directory it is deleting from.
+static bool isEmbedded(const char* path) {
+    for (const EmbeddedGameFile& ef : kEmbeddedGames)
+        if (strcmp(ef.path, path) == 0) return true;
+    return false;
+}
+
+static void pruneDir(const char* dirPath) {
+    static constexpr uint8_t BATCH = 8;
+    char    doomed[BATCH][64];
+    uint8_t n;
+    do {
+        n = 0;
+        File dir = LittleFS.open(dirPath);
+        if (!dir || !dir.isDirectory()) return;
+        for (File f = dir.openNextFile(); f && n < BATCH; f = dir.openNextFile()) {
+            if (f.isDirectory()) continue;
+            char path[64];
+            snprintf(path, sizeof(path), "%s/%s", dirPath, f.name());
+            f.close();
+            if (!isEmbedded(path)) memcpy(doomed[n++], path, sizeof(path));
+        }
+        dir.close();
+        for (uint8_t i = 0; i < n; i++) {
+            if (LittleFS.remove(doomed[i]))
+                Log.infoln("GameStore: removed %s (no longer shipped)", doomed[i]);
+            else
+                Log.errorln("GameStore: cannot remove %s", doomed[i]);
+        }
+    } while (n == BATCH);   // a full batch may have left more behind
+}
+
 void LightAir_GameStore::seedDefaults() {
+    pruneDir(LuaDefaults::STOCK_DIR);
+    pruneDir(LuaDefaults::LIB_DIR);
     for (const EmbeddedGameFile& ef : kEmbeddedGames) {
         File f = LittleFS.open(ef.path, "w");
         if (!f) {

@@ -4,7 +4,9 @@
 The bundle seeds LittleFS on first boot (and whenever the on-flash
 copy differs byte-for-byte from the embedded one — see
 LightAir_GameStore::seedDefaults) so a freshly flashed device has the
-stock games without needing the HTTP upload path.  Run from the
+stock games without needing the HTTP upload path.  games/custom/*.lua
+is deliberately NOT embedded (the glob does not recurse): those rulesets
+are uploaded over HTTP only to the devices that need them.  Run from the
 repository root:
 
     python3 tools/embed_games.py
