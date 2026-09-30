@@ -39,7 +39,10 @@ enum class StripEffect : uint8_t {
     BlinkFast,    // Blink at a fixed fast period (~150 ms half-cycle).
     Chase,        // a single lit LED roams around the zone's index list.
     Alternate,    // zone split into two interleaved colours, swapping each half-period.
-    Sparse,       // every Nth LED (stride = `density`) lit; twinkles per pulseStyle.
+    Sparse,       // random twinkle: each LED runs its own staggered cycle and
+                  //   lights in ~1 of every `density` of them, so WHICH LEDs
+                  //   shine changes all the time; envelope per pulseStyle.
+                  //   density 1 = every LED, every cycle, in step (a flash).
     VerticalScan, // one cross-rectangle "rung" lit, ping-ponging along the length.
 };
 
@@ -64,7 +67,7 @@ struct StripAnimation {
                                   //   one-shot: total number of cycles to play
                                   //   before yielding to the background.
                                   //   0 = continuous loop / single one-shot cycle.
-    uint8_t         density;      // Sparse stride (every Nth LED); smaller = denser.
+    uint8_t         density;      // Sparse: 1-in-N chance an LED lights per cycle; smaller = denser.
     StripPulseStyle pulseStyle;   // Sparse / brightness envelope shape.
 
     StripAnimation()

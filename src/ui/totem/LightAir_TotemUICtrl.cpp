@@ -8,8 +8,13 @@ constexpr uint16_t kStatelessPeriod = 2000;
 constexpr uint16_t kBaseIdlePeriod  = 1800;
 constexpr uint16_t kCPIdlePeriod    = 1500;
 constexpr uint16_t kFlagIdlePeriod  = 1800;
-constexpr uint16_t kBonusIdlePeriod = 2500;
-constexpr uint16_t kMalusIdlePeriod =  400;
+// BONUS and MALUS idles must read apart without colour: BONUS is a slow,
+// soft shimmer (each LED fades in and out over 2 s), MALUS a fast, hard
+// crackle (each LED snaps on for 80 ms of a 240 ms cycle).
+constexpr uint16_t kBonusIdlePeriod = 2000;
+constexpr uint16_t kMalusIdlePeriod =  240;
+constexpr uint8_t  kBonusIdleChance = 2;    // ~half the LEDs per cycle
+constexpr uint8_t  kMalusIdleChance = 3;    // ~a third, but 8x as often
 constexpr uint16_t kFlagMissPeriod  = 1500;
 constexpr uint16_t kControlPeriod   = 1500;
 constexpr uint16_t kContestPeriod   =  600;
@@ -154,22 +159,22 @@ void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
         }
 
         case TotemUIEvent::BonusIdle: {
-            // Slow, smooth, sparse green twinkle — "good, soft".
+            // Slow, soft random twinkle over the whole frame — "good".
             StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Sparse,
                                  periodOr(cmd, kBonusIdlePeriod),
                                  0,0,0, StripZone::All, 0,
-                                 /*density*/ 4, StripPulseStyle::Smooth };
+                                 kBonusIdleChance, StripPulseStyle::Smooth };
             _strip.loop(a);
             _rgb.set(cmd.r, cmd.g, cmd.b);
             break;
         }
 
         case TotemUIEvent::MalusIdle: {
-            // Fast, hard, sparse red flicker — "bad, pointy".
+            // Fast, hard random crackle over the whole frame — "bad".
             StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Sparse,
                                  periodOr(cmd, kMalusIdlePeriod),
                                  0,0,0, StripZone::All, 0,
-                                 /*density*/ 4, StripPulseStyle::Hard };
+                                 kMalusIdleChance, StripPulseStyle::Hard };
             _strip.loop(a);
             _rgb.set(cmd.r, cmd.g, cmd.b);
             break;

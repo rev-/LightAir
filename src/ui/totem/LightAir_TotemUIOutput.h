@@ -33,8 +33,8 @@ enum class TotemUIEvent : uint8_t {
     BaseIdle,      // base ready: breathing perimeter ring, team colour + rhythm.
     CPIdle,        // control point unclaimed: roaming dot on the perimeter, grey.
     FlagIdle,      // flag at home: breathing vertical scan, team colour + rhythm.
-    BonusIdle,     // bonus ready: slow smooth green sparkle.
-    MalusIdle,     // malus ready: fast hard red flicker (sparse).
+    BonusIdle,     // bonus ready: slow, soft random twinkle (green).
+    MalusIdle,     // malus ready: fast, hard random crackle (red).
 
     FlagMissing,   // flag away from home: faint spine "heartbeat" in flag colour.
     Control,       // CP owned: perimeter wipe settling to a steady ring.

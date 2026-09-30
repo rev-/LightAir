@@ -79,7 +79,8 @@ $(BUILD)/test_radio: test_radio.cpp $(ROOT)/src/radio/LightAir_Radio.cpp
 radio: $(BUILD)/test_radio
 	$(BUILD)/test_radio
 
-$(BUILD)/test_strip: test_strip.cpp $(ROOT)/src/ui/totem/strip/LightAir_LEDStrip_HW.cpp
+$(BUILD)/test_strip: test_strip.cpp $(ROOT)/src/ui/totem/strip/LightAir_LEDStrip_HW.cpp \
+                  $(ROOT)/src/ui/totem/LightAir_TotemUICtrl.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 

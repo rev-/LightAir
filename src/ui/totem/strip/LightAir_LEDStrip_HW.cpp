@@ -12,6 +12,16 @@ const uint8_t* kStations[TotemLedLayout::kStationCount] = {
 };
 const uint8_t kStationSizes[TotemLedLayout::kStationCount] = { 2, 3, 3, 3, 2 };
 
+// Deterministic integer hash (a murmur3-style finaliser): the twinkle's
+// "random" choices are a pure function of LED index and cycle number, so a
+// frame is reproducible — which is what lets the host test pin the look.
+inline uint32_t mix32(uint32_t x) {
+    x ^= x >> 16; x *= 0x7feb352dU;
+    x ^= x >> 15; x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
+
 // Scale an 8-bit colour channel by an 8-bit brightness (0..255).
 inline uint8_t scale8c(uint8_t c, uint8_t b) {
     return (uint8_t)(((uint16_t)c * b) / 255);
@@ -213,23 +223,40 @@ void LightAir_LEDStrip_HW::renderAnim(const StripAnimation& a, uint32_t elapsed)
         }
 
         case StripEffect::Sparse: {
-            // Every `density`-th LED in the zone, brightness-modulated.
-            uint8_t stride = a.density ? a.density : 3;
-            uint8_t bright;
-            if (a.pulseStyle == StripPulseStyle::Hard) {
-                bright = (cyclePhase < (uint32_t)(period / 2)) ? 255 : 40;
-            } else {
-                uint8_t p   = (uint8_t)((cyclePhase * 255) / period);
-                uint8_t tri = (p < 128) ? (uint8_t)(p * 2) : (uint8_t)((255 - p) * 2);
-                bright = 40 + (uint8_t)(((uint16_t)tri * (255 - 40)) / 255);
-            }
-            uint8_t n = zoneCount(a.zone);
-            for (uint8_t i = 0; i < n; i += stride) {
-                uint8_t led = zoneLed(a.zone, i);
-                if (led < _numLeds)
-                    _leds[led] = CRGB(scale8c(a.r, bright),
-                                      scale8c(a.g, bright),
-                                      scale8c(a.b, bright));
+            // A twinkle.  Every LED runs its own cycle of `period`, offset
+            // from the others, and in each of its cycles lights with a
+            // 1-in-`density` chance — so which LEDs shine changes all the
+            // time and no two pulse in step.  The envelope carries the
+            // meaning without relying on colour:
+            //   Smooth — fades up and back down over the whole cycle;
+            //   Hard   — full on for the first third, then dark.
+            // density 1 keeps every LED in the same cycle: a synchronous
+            // flash, which is what a claim burst wants.
+            const uint8_t chance = a.density ? a.density : 3;
+            const uint8_t n      = zoneCount(a.zone);
+            for (uint8_t i = 0; i < n; i++) {
+                const uint8_t led = zoneLed(a.zone, i);
+                if (led >= _numLeds) continue;
+
+                uint32_t ph = cyclePhase;
+                if (chance > 1) {
+                    const uint32_t local = elapsed + mix32(led * 2654435761U) % period;
+                    const uint32_t cycle = local / period;
+                    ph = local % period;
+                    if (mix32(led ^ (cycle * 0x9e3779b9U)) % chance != 0) continue;
+                }
+
+                uint8_t bright;
+                if (a.pulseStyle == StripPulseStyle::Hard) {
+                    if (ph >= (uint32_t)(period / 3)) continue;
+                    bright = 255;
+                } else {
+                    const uint8_t p = (uint8_t)((ph * 255) / period);
+                    bright = (p < 128) ? (uint8_t)(p * 2) : (uint8_t)((255 - p) * 2);
+                }
+                _leds[led] = CRGB(scale8c(a.r, bright),
+                                  scale8c(a.g, bright),
+                                  scale8c(a.b, bright));
             }
             break;
         }

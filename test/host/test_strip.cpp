@@ -13,6 +13,7 @@ uint32_t g_millis = 1000;
 CFastLED FastLED;
 
 #include "ui/totem/strip/LightAir_LEDStrip_HW.h"
+#include "ui/totem/LightAir_TotemUICtrl.h"
 
 static int failures = 0;
 #define CHECK(cond, msg) do { \
@@ -81,6 +82,75 @@ int main() {
         strip.play(fill(200, 500));            // arrives while the first runs
         CHECK(frameAt(strip, 9300) == 100, "late arrival does not interrupt");
         CHECK(frameAt(strip, 9600) == 200, "late arrival plays after it");
+    }
+
+
+    // ---- 4. BONUS / MALUS idles: a real twinkle, told apart without colour --
+    // They used to light a fixed LED subset (every 4th: one per side, none on
+    // the bottom) pulsing in unison.  Driven through the real totem UI
+    // controller, so the shipped periods and densities are what is pinned.
+    {
+        printf("bonus/malus twinkle:\n");
+        struct NoRGB : LightAir_TotemRGB {
+            void set(uint8_t, uint8_t, uint8_t) override {}
+            void off() override {}
+        };
+        struct Look {
+            bool     everLit[13] = {};
+            int      distinctSets = 0;   // how many different lit-sets were seen
+            int      midLevels    = 0;   // frames with a pixel strictly between 0 and full
+            int      onEdges      = 0;   // off->on transitions, all LEDs
+            int      maxLit       = 0;
+        };
+        auto watch = [&](TotemUIEvent ev, uint8_t r, uint8_t g) {
+            LightAir_LEDStrip_HW s;
+            s.begin(13, 13);
+            NoRGB rgb;
+            LightAir_TotemUICtrl ui(rgb, s);
+            TotemUIOutput out;
+            out.trigger(ev, r, g, 0);
+            g_millis = 20000;
+            ui.apply(out);
+            Look L;
+            uint16_t seen[64]; int nSeen = 0;
+            bool was[13] = {};
+            for (uint32_t t = 0; t < 10000; t += 10) {
+                g_millis = 20000 + t;
+                ui.update();
+                uint16_t mask = 0; int lit = 0; bool mid = false;
+                for (int i = 0; i < 13; i++) {
+                    const uint8_t v = FastLED.pixels[i].r | FastLED.pixels[i].g;
+                    const bool on = v > 0;
+                    if (on) { mask |= (uint16_t)(1u << i); lit++; L.everLit[i] = true; }
+                    if (on && !was[i]) L.onEdges++;
+                    was[i] = on;
+                    const uint8_t full = r | g;
+                    if (v > 0 && v < full) mid = true;
+                }
+                if (mid) L.midLevels++;
+                if (lit > L.maxLit) L.maxLit = lit;
+                bool known = false;
+                for (int k = 0; k < nSeen; k++) if (seen[k] == mask) known = true;
+                if (!known && nSeen < 64) seen[nSeen++] = mask;
+            }
+            L.distinctSets = nSeen;
+            return L;
+        };
+        const Look B = watch(TotemUIEvent::BonusIdle,   0, 180);
+        const Look M = watch(TotemUIEvent::MalusIdle, 200,   0);
+
+        bool allB = true, allM = true;
+        for (int i = 0; i < 13; i++) { allB &= B.everLit[i]; allM &= M.everLit[i]; }
+        CHECK(allB, "BONUS: every LED takes part, bottom side included");
+        CHECK(allM, "MALUS: every LED takes part, bottom side included");
+        CHECK(B.distinctSets > 20 && M.distinctSets > 20,
+              "the lit LEDs change over time (not one fixed subset)");
+        CHECK(B.maxLit < 13 && M.maxLit < 13, "an idle twinkles; it never floods the frame");
+        CHECK(B.midLevels > 500, "BONUS is soft: LEDs fade through in-between levels");
+        CHECK(M.midLevels == 0,  "MALUS is hard: every LED is fully on or off");
+        CHECK(M.onEdges > 3 * B.onEdges, "MALUS blinks several times faster than BONUS");
+        printf("  bonus: sets=%d on-edges=%d  malus: sets=%d on-edges=%d\n",
+               B.distinctSets, B.onEdges, M.distinctSets, M.onEdges);
     }
 
     printf("\n%s\n", failures ? "STRIP TESTS FAILED" : "STRIP TESTS PASS");
