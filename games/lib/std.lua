@@ -188,6 +188,10 @@ end
 --
 -- cfg.projector_ok(vars), optional: false turns a projector bonus into
 -- the LIFE bonus — for a player whose projector in hand is their role.
+--
+-- cfg.on_malus_life(vars), optional: called when a MALUS LIFE takes the
+-- player out.  No player's LIT did it, so a ruleset that credits "LIT by
+-- <name>" on the way out sets that name to "TOTEM" here.
 -- ----------------------------------------------------------------
 local function default_start_lives(vars)  return vars.start_lives or 0 end
 local function default_start_energy(vars) return vars.start_energy or 0 end
@@ -219,6 +223,7 @@ function std.pickup_effect(cfg)
 
   local function lose_life(vars)
     if lives then vars[lives] = 0 else vars[energy] = 0 end
+    if cfg.on_malus_life then cfg.on_malus_life(vars) end
     la.show("MALUS LIFE", 2000)
     la.ui("Malus")          -- the ruleset's own "Down" follows as it goes out
   end

@@ -445,13 +445,16 @@ end
 --     reload_ms — how long this profile's recharge takes, in milliseconds
 --   Both are ordinary game vars, which is what lets the display bind to
 --   them without the projector reaching into the display layer.
+--
+--   The bar only ever shows while the pool is EMPTY, so it covers the wait
+--   until energy starts coming back — for every recharge mode, that is the
+--   recharge_delay_ms idle and nothing more.  A "ramp" projector starts
+--   trickling the moment the idle ends, the pool leaves zero and the bar
+--   gives way to the number; timing the bar to the whole refill made it
+--   vanish a third of the way across.
 -- ================================================================
 local function reload_total_ms(vars, p)
-  local delay = stretch(val(vars, p.recharge_delay_ms, 0))
-  if p.recharge == "ramp" then
-    return delay + stretch(val(vars, p.recharge_ms, 0))
-  end
-  return delay
+  return stretch(val(vars, p.recharge_delay_ms, 0))
 end
 
 local function publish_reload(vars, started_at, p)
@@ -635,6 +638,35 @@ function P.drop(vars, id)
     active_idx = active_idx - 1                    -- the removal shifted us down
   end
   return true
+end
+
+-- ================================================================
+--   strip(vars) — out of the game.
+--
+--   Everything a BONUS can hand out — the standard catalogue and a game's
+--   own profiles, unless declared bonus = false — is dropped, DIM is
+--   lifted, and the baseline comes back in hand with its own banked pool.
+--   Role and practice projectors (bonus = false: Virus's VIRUS, a stand's
+--   TRIAL) are kept: they are what the player IS, not what they picked up.
+--   Silent: going out has its own cue.  Call it from the transition that
+--   takes a player out, BEFORE a respawn writes the pool — the pool it
+--   writes must be the baseline's, not the one of a projector about to go.
+-- ================================================================
+function P.strip(vars)
+  P.set_dim(vars, false)
+  local in_hand = slots[active_idx].id
+  slots[active_idx].energy = get_energy(vars)      -- bank before reshuffling
+  for i = #slots, 2, -1 do
+    local p = defs[slots[i].id]
+    if p and p.bonus ~= false then table.remove(slots, i) end
+  end
+  local idx = find_slot(in_hand)
+  if idx then
+    active_idx = idx                               -- a kept role projector
+  else
+    active_idx = 1                                 -- skip the banking step:
+    activate(vars, 1)                              --   that slot is gone
+  end
 end
 
 local function cycle(vars, dir)
@@ -889,10 +921,18 @@ local function tick_recharge(vars, p, now)
   end
 
   -- ramp: one unit every recharge_ms / max, stepped in integers.
+  --
+  -- Standard policy for a ramp: the trickle STARTS when the idle ends, the
+  -- first unit arriving at that instant, so an empty pool fills at an even
+  -- rate from then on — never before.  ramp_at is otherwise left at the
+  -- last beam, and counting from there would hand back everything "earned"
+  -- during the idle in one lump the moment it ends (15 of FAST's 30).
   local total_ms = stretch(val(vars, p.recharge_ms, 0))
   local step_ms  = (max > 0) and (total_ms // max) or 0
   if step_ms < 1 then step_ms = 1 end
   local s = slots[active_idx]
+  local ramp_from = release_at + delay_ms
+  if s.ramp_at < ramp_from then s.ramp_at = ramp_from end
   while now >= s.ramp_at and get_energy(vars) < max do
     set_energy(vars, get_energy(vars) + 1)
     s.ramp_at = s.ramp_at + step_ms

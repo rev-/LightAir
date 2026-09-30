@@ -495,6 +495,43 @@ do
     check(v.energy == 4, "ramp", "ramp did not reach full, got " .. v.energy)
   end
 
+  -- ---- ramp policy: the bar covers the idle, the trickle starts after it
+  -- FAST, as shipped: 30 energy, 1500 ms idle, 3000 ms to refill.  Emptied
+  -- and released, it must show a bar for the idle alone, give back nothing
+  -- during it, then exactly one unit at its end and one per 100 ms after —
+  -- not the lump "earned" since the last beam.
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = { energy = "energy", spent = "energy_spent",
+                              reload = "reload", reload_ms = "reload_ms" } }
+    local v = { energy = 0, energy_spent = 0, start_energy = 10, recharge_secs = 1,
+                reload = 0, reload_ms = 0 }
+    P.reset(v)
+    P.grant(v, 2)                                   -- FAST
+    la.trigger_down = function() return true end
+    for _ = 1, 400 do
+      if v.energy == 0 then break end
+      P.tick(v); clock = clock + 150
+    end
+    check(v.energy == 0, "ramp", "could not empty FAST")
+    clock = clock + 2000;  P.tick(v)                -- a dead trigger, held
+    la.trigger_down = function() return false end
+    local release = clock
+    P.tick(v)
+    check(v.reload == release and v.reload_ms == 1500, "ramp",
+          "FAST's bar is " .. tostring(v.reload_ms) .. " ms from " .. tostring(v.reload) ..
+          "; expected the 1500 ms idle from the release")
+    clock = release + 1499;  P.tick(v)
+    check(v.energy == 0, "ramp", "energy came back during the idle: " .. v.energy)
+    clock = release + 1500;  P.tick(v)
+    check(v.energy == 1, "ramp", "the trickle did not start with one unit: " .. v.energy)
+    clock = release + 1600;  P.tick(v)
+    check(v.energy == 2, "ramp", "the trickle is not one unit per 100 ms: " .. v.energy)
+    clock = release + 1500 + 3000;  P.tick(v)
+    check(v.energy == 30, "ramp", "the trickle did not refill in 3 s: " .. v.energy)
+    la.trigger_down = function() return false end
+  end
+
   -- ---- the reload bar's clock is the release, not the zero-crossing
   do
     clock, shine_busy_until = 0, 0
@@ -1285,6 +1322,23 @@ do
     end
     check(not has(bo, "TRIAL") and not has(bo, "VIRUS"), f,
           "a practice / role projector is offered as a BONUS")
+
+    -- Each powered projector's icon must reach the ENERGY cell: the cell
+    -- names an icon_var, and holding the projector writes its icon there.
+    if projectors then
+      local iv
+      for _, m in ipairs(g.monitor) do
+        if m.var == "energy" and m.icon_var then iv = m.icon_var end
+      end
+      check(iv ~= nil, f, "the energy cell has no icon_var: projector icons never show")
+      for _, name in ipairs({ "SPLASH", "FAST", "LONG", "STRONG" }) do
+        local g2, v2, P2 = fresh_game(f)
+        claim(g2, v2, B, name)
+        local want = la.icons[P2.active_profile().icon]
+        check(iv and want and v2[iv] == want, f,
+              "holding " .. name .. " left the energy cell's icon at " .. tostring(iv and v2[iv]))
+      end
+    end
     for _, l in ipairs(bo or {}) do check(#l <= 8, f, "option '" .. l .. "' over 8 chars") end
   end
 
@@ -1331,8 +1385,23 @@ do
     end
     check(out_rule ~= nil, f, "no rule takes a player with 0 lives out")
     if out_rule then
+      out.shows = {}
       out_rule.action(v)
       check(not P.dimmed(), f, "going out did not lift DIM")
+      check(P.active_id() == 0 and P.owned_count() == 1, f,
+            "going out kept a powered projector (in hand: " .. P.active_id() ..
+            ", held: " .. P.owned_count() .. ")")
+      local credited = false
+      for _, t in ipairs(out.shows) do if t == "LIT by TOTEM" then credited = true end end
+      check(credited, f, "a MALUS LIFE out is not credited to TOTEM")
+      for _, r in ipairs(g.rules) do
+        if r.to == g.initial_state and r.from ~= g.initial_state then
+          r.action(v)
+          check(P.active_id() == 0 and v.energy == P.max_energy(v), f,
+                "respawn wrote " .. v.energy .. " into a pool of " .. P.max_energy(v))
+          break
+        end
+      end
     end
   end
 

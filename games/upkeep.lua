@@ -18,16 +18,22 @@ local proj = la.lib("projector")
 -- energy per beam, a full refill after the configured idle, both
 -- read from this game's own config vars.
 proj.define{ vars = { energy = "energy", spent = "energy_spent",
-                      reload = "reload", reload_ms = "reload_ms" } }
+                      reload = "reload", reload_ms = "reload_ms",
+                      icon = "energy_icon" } }
 
 -- This player's starting lives: what on_begin loads, what a respawn
 -- restores, and the S of a BONUS LIFE (lives += S, capped at 2*S).  One
 -- resolver for all three, so a future per-role value changes it here only.
 local function my_start_lives(vars) return vars.start_lives end
 
+-- Who put us down, for the tray: a player's short name, or "TOTEM" for
+-- a MALUS LIFE.  Declared before the pickup helper, whose hook sets it.
+local shone_by = nil
+
 -- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
 local pickup = std.pickup_effect{ proj = proj, lives = "lives",
-                                  start_lives = my_start_lives }
+                                  start_lives = my_start_lives,
+                                  on_malus_life = function() shone_by = "TOTEM" end }
 
 local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
@@ -58,7 +64,6 @@ local cp_ids        = {}
 local cp_owner      = {}
 local respawn_at    = 0
 local can_respawn   = false
-local shone_by      = nil       -- short name of whoever put us down
 local imm           = std.immunity(3000)
 
 local function is_opponent(id) return la.team_of(id) ~= my_team end
@@ -178,6 +183,10 @@ return {
     -- how long it takes.  Both written by projector.lua.
     { id = "reload",       default = 0 },
     { id = "reload_ms",    default = 0 },
+    -- The icon of the projector in hand (an la.icons value), written by
+    -- projector.lua and read by the energy cell: FAST, LONG, … replace
+    -- the standard energy glyph while they are the one in use.
+    { id = "energy_icon",  default = la.icons.ENERGY },
     { id = "shone_times",  default = 0  },
     -- Text slot: bound to the LCD like an int slot, but a char buffer.
     { id = "score_str",    text = true, len = 8, default = "0/0" },
@@ -190,7 +199,8 @@ return {
     -- the wait began, because a refill starts at the trigger's RELEASE,
     -- not when the pool hit zero.
     { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME },
-      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload" },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload",
+      icon_var = "energy_icon" },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
     { var = "score_str",    icon = "SCORE",  col = 1, row = 1, states = { S.IN_GAME } },
     { var = "game_time",    icon = "TIME",   col = 0, row = 0, states = { S.GAME_END } },
@@ -304,7 +314,7 @@ return {
         -- feedback, so no transient line competes for the tray.
         la.show("Go to base", 0)
         la.show("LIT by " .. (shone_by or "?"), 0)
-        proj.set_dim(vars, false)   -- a DIM malus lasts until going out
+        proj.strip(vars)            -- going out loses powered projectors and DIM
         la.ui("Down")
       end },
     { from = S.OUT_GAME, to = S.GAME_END,

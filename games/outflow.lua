@@ -30,7 +30,6 @@ local PICKUP_RSSI = -55         -- ~2 m: BONUS/MALUS claim gate
 
 -- ---- Private state ------------------------------------------------
 local pending_shone    = false   -- fatal lit received this cycle
-local shone_by         = nil     -- short name of whoever put us down
 local pending_depleted = false   -- drain zeroed energy this cycle
 local respawn_at       = 0
 local last_drain       = 0
@@ -56,7 +55,11 @@ local function my_start_energy(vars) return vars.start_energy end
 
 -- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
 -- No lives: LIFE works on energy.  No projector bonuses (see totem_slots).
-local pickup = std.pickup_effect{ proj = proj, start_energy = my_start_energy }
+-- Who put us down, for the tray: a player's short name, or "TOTEM" for
+-- a MALUS LIFE.  Declared before the pickup helper, whose hook sets it.
+local shone_by = nil
+local pickup = std.pickup_effect{ proj = proj, start_energy = my_start_energy,
+                                  on_malus_life = function() shone_by = "TOTEM" end }
 
 local function game_over()
   la.show("Game over!", 3000)
@@ -188,7 +191,7 @@ return {
         -- not a base, so the instruction says so.
         la.show("Wait to respawn", 0)
         la.show("LIT by " .. (shone_by or "?"), 0)
-        proj.set_dim(vars, false)   -- a DIM malus lasts until going out
+        proj.strip(vars)            -- going out loses powered projectors and DIM
         la.ui("Down")
       end },
     { from = S.IN_GAME, to = S.OUT_GAME,
@@ -201,7 +204,7 @@ return {
         -- Nobody to credit: the drain did it.
         la.show("Wait to respawn", 0)
         la.show("Drained out!", 0)
-        proj.set_dim(vars, false)   -- a DIM malus lasts until going out
+        proj.strip(vars)            -- going out loses powered projectors and DIM
         la.ui("Down")
       end },
     { from = S.OUT_GAME, to = S.GAME_END,

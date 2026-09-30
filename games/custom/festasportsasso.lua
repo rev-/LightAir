@@ -67,7 +67,8 @@ local P_TRIAL = 20
 
 proj.define{
   vars     = { energy = "energy", spent = "energy_spent",
-               reload = "reload", reload_ms = "reload_ms" },
+               reload = "reload", reload_ms = "reload_ms",
+               icon = "energy_icon" },
   profiles = {
     -- bonus = false: a practice projector is not a BONUS totem's to give.
     { id = P_TRIAL, name = "TRIAL", bonus = false, cost = 0, max_energy = "start_energy",
@@ -80,9 +81,14 @@ proj.define{
 -- resolver for all three, so a future per-role value changes it here only.
 local function my_start_lives(vars) return vars.start_lives end
 
+-- Who put us down, for the tray: a player's short name, or "TOTEM" for
+-- a MALUS LIFE.  Declared before the pickup helper, whose hook sets it.
+local shone_by = nil
+
 -- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
 local pickup = std.pickup_effect{ proj = proj, lives = "lives",
-                                  start_lives = my_start_lives }
+                                  start_lives = my_start_lives,
+                                  on_malus_life = function() shone_by = "TOTEM" end }
 
 -- Hand the welcome screen its practice projector.  proj.reset() rebuilds
 -- the inventory down to the baseline, so this runs after every reset that
@@ -125,7 +131,6 @@ local cp_ids      = {}          -- [i] = device id of the i-th CP totem
 local cp_owner    = {}          -- [i] = last announced owner slot or CP_NONE
 local respawn_at  = 0
 local can_respawn = false
-local shone_by    = nil         -- short name of whoever put us down
 local imm         = std.immunity(3000)
 
 local function cp_index(sender)
@@ -211,7 +216,7 @@ local function go_down(vars)
   vars.shone_times = vars.shone_times + 1
   respawn_at  = la.now() + vars.respawn_secs * 1000
   can_respawn = false
-  proj.set_dim(vars, false)         -- a DIM malus lasts until going out
+  proj.strip(vars)                  -- going out loses powered projectors and DIM
   la.show("VAI ALLA BASE", 0)
   la.show("Illuminato da " .. (shone_by or "?"), 0)
   la.ui("Down")
@@ -306,6 +311,10 @@ return {
     -- how long it takes.  Both written by projector.lua.
     { id = "reload",       default = 0 },
     { id = "reload_ms",    default = 0 },
+    -- The icon of the projector in hand (an la.icons value), written by
+    -- projector.lua and read by the energy cell: FAST, LONG, … replace
+    -- the standard energy glyph while they are the one in use.
+    { id = "energy_icon",  default = la.icons.ENERGY },
     -- Battery, read on the welcome screen: between turns is the only
     -- moment anyone looks at a projector without playing it, so it is
     -- where a flat one has to be caught.  Text, because "4.05V" reads and
@@ -333,7 +342,8 @@ return {
     -- the wait began, because a refill starts at the trigger's RELEASE,
     -- not when the pool hit zero.
     { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.ACTIVE },
-      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload" },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload",
+      icon_var = "energy_icon" },
     { var = "points",       icon = "SCORE",  col = 1, row = 1,
       states = { S.ACTIVE, S.DOWN, S.SUB_END } },
     -- Stats screen: counter + lit/shone above, energy spent + points below.

@@ -256,6 +256,23 @@ the wait began, and how long it takes — and `bindBarVariable` reads both
 through pointers. Pressing again clears the anchor, because with a refill
 recharge nothing comes back until the next release either.
 
+The bar only shows while the pool is **empty**, so it times the wait until
+energy starts coming back, and nothing more: `recharge_delay_ms` for every
+mode. A `ramp` projector (FAST) starts trickling the instant that idle
+ends, the pool leaves zero and the number takes over. Timing the bar to the
+whole refill made it vanish a third of the way across.
+
+The cell's **icon** follows the projector in hand. The projector writes an
+`la.icons` value into the var it is given as `vars.icon`, and the energy
+row reads it through `icon_var`; every game that offers projector bonuses
+wires both, and the host suite fails one that does not:
+
+```lua
+proj.define{ vars = { ..., icon = "energy_icon" } }
+vars    = { ..., { id = "energy_icon", default = la.icons.ENERGY } }
+monitor = { { var = "energy", ..., icon_var = "energy_icon" } }
+```
+
 A monitor row spells it:
 
 ```lua
@@ -324,6 +341,13 @@ Nothing recharges between an accepted beam and its release, because until
 that release the wait has not begun — otherwise a player who had been idle
 would see the pool refill on the very tick they emptied it.
 
+**Ramp policy.** A `ramp` recharge trickles from the **end of the wait**:
+the first unit arrives the instant `recharge_delay_ms` has passed since the
+release, then one every `recharge_ms / max_energy`. Nothing is credited for
+the wait itself. (It used to count from the last beam, so the moment the
+wait ended it paid out everything "earned" during it at once — half of
+FAST's pool in one jump.)
+
 ---
 
 ## 10. Pickups: projector bonuses and DIM
@@ -363,9 +387,19 @@ the ramp, and doubles the cooldown. A profile that declares no cooldown
 nothing would not be "longer". The factors are constants at the top of
 `projector.lua`.
 
-The ruleset lifts DIM when the player goes out of the game (its IN→OUT
-rule), and `reset()` lifts it too. Virus has no OUT state, so it lifts DIM
-on infection. Lifting does not refill the pool; the ordinary recharge does.
+**Going out loses what was picked up.** A ruleset calls `proj.strip(vars)`
+in the rule that takes a player out (IN→OUT). It drops every projector a
+BONUS can hand out, lifts DIM, and puts the baseline back in hand with its
+own banked pool. Projectors declared `bonus = false` (a role such as VIRUS,
+a practice TRIAL) are kept. It must run before a respawn writes the pool,
+or the respawn would fill the powered projector instead (FAST came back
+with 50 energy in a pool of 30). `reset()` lifts DIM too. Virus has no OUT
+state, so it lifts DIM on infection. Lifting does not refill the pool; the
+ordinary recharge does.
+
+A MALUS LIFE takes the player out with no player to credit, so the
+"LIT by …" line reads `LIT by TOTEM`: `std.pickup_effect` calls the game's
+`on_malus_life` hook, which sets the name.
 
 The optics push now always carries an integer cooldown (0 when the profile
 declares none), because a projector with no cooldown must undo a dimmed

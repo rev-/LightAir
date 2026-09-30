@@ -41,13 +41,14 @@ local PICKUP_RSSI = -55     -- ~2 m: BONUS/MALUS claim gate
 -- refill after the configured idle, both read from this game's own config.
 local proj = la.lib("projector")
 proj.define{ vars = { energy = "energy", spent = "energy_spent",
-                      reload = "reload", reload_ms = "reload_ms" } }
+                      reload = "reload", reload_ms = "reload_ms",
+                      icon = "energy_icon" } }
 
 -- ---- Private game state -----------------------------------------
 -- Anything that is NOT shown on the LCD, NOT edited in the menu and
 -- NOT part of winner election can live as plain Lua locals.
 local respawn_at         = 0      -- la.now() when respawn fires
-local shone_by           = nil    -- short name of whoever put us down
+local shone_by           = nil    -- who put us down: a player's short name, or "TOTEM"
 local lit_at             = {}     -- [senderId] = la.now() of last accepted lit
 
 -- This player's starting lives: what on_begin loads, what a respawn
@@ -67,7 +68,9 @@ local function apply_pickup(vars, pkt, malus)
   -- the two maluses.
   local cue
   if malus then
-    if     label == "LIFE" then vars.lives = 0; cue = "Malus"   -- OUT rule fires next tick
+    if     label == "LIFE" then
+      vars.lives = 0; cue = "Malus"                 -- OUT rule fires next tick
+      shone_by = "TOTEM"                            -- no player to credit
     elseif label == "DIM"  then proj.set_dim(vars, true); cue = "MalusDim" end
   elseif label == "LIFE" then
     local s = my_start_lives(vars)                  -- +S lives, capped at 2*S
@@ -121,6 +124,10 @@ return {
     -- how long it takes.  Both written by projector.lua.
     { id = "reload",       default = 0 },
     { id = "reload_ms",    default = 0 },
+    -- The icon of the projector in hand (an la.icons value), written by
+    -- projector.lua and read by the energy cell: FAST, LONG, … replace
+    -- the standard energy glyph while they are the one in use.
+    { id = "energy_icon",  default = la.icons.ENERGY },
     { id = "shone_times",  default = 0  },
   },
 
@@ -133,7 +140,8 @@ return {
     -- the wait began, because a refill starts at the trigger's RELEASE,
     -- not when the pool hit zero.
     { var = "energy",      icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME },
-      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload" },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload",
+      icon_var = "energy_icon" },
     { var = "time_left",   icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
     { var = "points",      icon = "SCORE",  col = 1, row = 1, states = { S.IN_GAME } },
     -- end-game screen (config vars can be monitored too)
@@ -260,7 +268,7 @@ return {
         -- not a base, so the instruction says so.
         la.show("Wait to respawn", 0)
         la.show("LIT by " .. (shone_by or "?"), 0)
-        proj.set_dim(vars, false)   -- a DIM malus lasts until going out
+        proj.strip(vars)            -- going out loses powered projectors and DIM
         la.ui("Down")
       end },
 

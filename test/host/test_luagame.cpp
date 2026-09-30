@@ -1489,6 +1489,62 @@ int main() {
         g_millisStep = 0;
     }
 
+
+    // ---- 22. A powered projector's icon reaches the energy cell -------------
+    // The firmware has the bitmaps and the binding reads an icon var, but a
+    // game has to connect the two.  Through the real binding and runner: a
+    // BONUS totem set to FAST is claimed, and the energy cell's icon must
+    // follow — then going out must put the standard glyph back.
+    {
+        FakeDisplay          raw6;
+        LightAir_DisplayCtrl d6(raw6);
+        LightAir_InputCtrl   in6;
+        LightAir_RadioTestTransport tr6;
+        LightAir_Radio       rad6(tr6, 2, 0x42, 0, 0);
+        rad6.begin();
+        LightAir_GameRunner  run6;
+        run6.clearRoster();
+        run6.addToRoster(2);
+
+        CHECK(shared.load("games/freeforall.lua"), "freeforall loads for the icon test");
+        const LightAir_Game& g6 = shared.descriptor();
+
+        // BONUS options are LIFE, then the standard catalogue in id order:
+        // SPLASH (1), FAST (2), ... — so FAST is option 3.
+        const LightAir_TotemRequirement* bReq = nullptr;
+        for (uint8_t i = 0; i < g6.totemRequirementCount; i++)
+            if (g6.totemRequirements[i].roleId == TotemRoleId_BONUS()) bReq = &g6.totemRequirements[i];
+        uint8_t fastOpt = 0;
+        for (uint8_t k = 0; bReq && k < bReq->optionCount; k++)
+            if (!strcmp(bReq->optionLabels[k], "FAST")) fastOpt = (uint8_t)(k + 1);
+        CHECK(fastOpt > 0, "FAST is a BONUS option");
+        run6.clearTotems();
+        run6.addTotem(254, TotemRoleId_BONUS(), fastOpt);
+
+        g_millisStep = 1;
+        run6.begin(g6, d6, in6, rad6, nullptr);
+
+        const int* icon = nullptr;
+        for (uint8_t i = 0; i < g6.monitorCount; i++)
+            if (!strcmp(g6.monitorVars[i].name, "energy") && g6.monitorVars[i].iconVar)
+                icon = g6.monitorVars[i].iconVar;
+        CHECK(icon != nullptr, "the energy cell reads an icon var");
+        CHECK(icon && *icon == ICON_ENERGY, "baseline in hand: the standard energy glyph");
+
+        const uint8_t ready = 0;
+        tr6.push(254, 0, 0, RadioMsg::MSG_BONUS_BEACON, 0x42, 70000, 0, &ready, 1);
+        g_millis += 20; run6.update();
+        CHECK(icon && *icon == ICON_FAST, "BONUS FAST puts the FAST icon in the energy cell");
+
+        // Shone to zero: out of the game, and FAST goes with it.
+        *slotOf(g6, "lives") = 0;
+        g_millis += 20; run6.update();
+        CHECK(*g6.currentState == 1, "out of the game");
+        CHECK(icon && *icon == ICON_ENERGY, "going out puts the standard glyph back");
+
+        g_millisStep = 0;
+    }
+
     printf(failures == 0 ? "\nLUAGAME HOST TESTS PASS\n" : "\n%d FAILURES\n", failures);
     return failures == 0 ? 0 : 1;
 }

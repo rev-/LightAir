@@ -66,7 +66,8 @@ local pending_infected = false   -- a viral lit reached us this cycle
 local P_VIRUS = 11
 proj.define{
   vars     = { energy = "energy", spent = "energy_spent",
-               reload = "reload", reload_ms = "reload_ms" },
+               reload = "reload", reload_ms = "reload_ms",
+               icon = "energy_icon" },
   profiles = {
     { id = 0, name = "CLEAN", cooldown_ms = 0,
       max_energy = "energy_max",
@@ -159,6 +160,10 @@ return {
     -- how long it takes.  Both written by projector.lua.
     { id = "reload",       default = 0 },
     { id = "reload_ms",    default = 0 },
+    -- The icon of the projector in hand (an la.icons value), written by
+    -- projector.lua and read by the energy cell: FAST, LONG, … replace
+    -- the standard energy glyph while they are the one in use.
+    { id = "energy_icon",  default = la.icons.ENERGY },
     { id = "energy_max", default = 50 },
     { id = "time_left",  default = 600, countdown_in = { S.CLEAN, S.VIRUS } },
     { id = "clean_left", default = 0  },   -- clean players remaining
@@ -178,7 +183,8 @@ return {
     -- the wait began, because a refill starts at the trigger's RELEASE,
     -- not when the pool hit zero.
     { var = "energy",     icon = "ENERGY", col = 1, row = 1, states = { S.CLEAN, S.VIRUS },
-      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload" },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload",
+      icon_var = "energy_icon" },
     -- VIRUS screen
     { var = "role",       icon = "ROLE",   col = 0, row = 0, states = { S.VIRUS } },
     { var = "infections", icon = "SCORE",  col = 1, row = 0, states = { S.VIRUS } },
