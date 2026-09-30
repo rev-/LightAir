@@ -140,6 +140,22 @@ void Enlight::buildGoertzTab(uint32_t phase) {
         _goertzTab[i] = kernelEntry(_goertzPeriod, i + phase);
 }
 
+void Enlight::applyCalib(const EnlightCalib& cal) {
+    _cal = cal;
+    buildGoertzTab(_cal.phaseOff);
+}
+
+void Enlight::settle(void (*idle)(void*), void* ctx) {
+    setCooldown(0);      // a delivered result then releases the device at once
+    discardResult();
+    while (_active) {
+        poll();          // delivers (and drops) the result once cycles end
+        if (!_active) break;
+        if (idle) idle(ctx);
+        vTaskDelay(1);
+    }
+}
+
 /* ============================================================
  *   begin()
  * ============================================================ */

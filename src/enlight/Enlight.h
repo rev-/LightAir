@@ -176,6 +176,7 @@ public:
 
     // Set cooldown time, in milliseconds
     void setCooldown(int64_t ms) { _cooldown = ms * 1000; }
+    int64_t cooldownMs() const { return _cooldown / 1000; }
 
     // Set repetitions  = number of DMA cycles before classify.
     // 1 cycle = _periodsPerCycle sine periods (13 at V6R2 defaults = 7.8 ms).
@@ -183,6 +184,7 @@ public:
     // zero-repetition run would wrap past the end-of-run test and never
     // complete — which poll() can only report as a permanently busy device.
     void setRepetitions(uint32_t reps) { _repetitions = reps ? reps : 1; }
+    uint32_t repetitions() const { return _repetitions; }
     uint32_t cycleTime() const { return _repetitions*EnlightDefaults::MS_PER_REP; }
 
     // Non-blocking start
@@ -243,6 +245,21 @@ public:
     // Rebuild the Goertzel kernel table with the given phase offset.
     // Safe to call outside of an active run().
     void buildGoertzTab(uint32_t phase);
+
+    // Replace the calibration in use.  classify() reads _cal live, so the
+    // copy plus a Goertzel table rebuilt at the new phase is ALL it takes
+    // for a new calibration to take effect — no reboot.  Main loop only,
+    // and never while busy(): the cycle task correlates against the table.
+    // Does not touch NVS; persisting is the caller's decision.
+    void applyCalib(const EnlightCalib& cal);
+
+    // Bring the device to rest: throw away whatever run is in flight or
+    // undelivered, wait for its cycles to finish, and skip any cooldown.
+    // Leaves isActive() false, so the next run() is accepted.  Blocking —
+    // at most one run's duration — and it calls idle() (if given) while it
+    // waits, so a caller servicing a radio loop can keep doing so.  Sets
+    // the cooldown to 0 as a side effect: save cooldownMs() first to keep it.
+    void settle(void (*idle)(void*) = nullptr, void* ctx = nullptr);
 
     // Single source of truth for the FAR kernel formula.
     // Returns KERN_MAG * cos(2π * phaseIdx / gp).  Used by buildGoertzTab()
