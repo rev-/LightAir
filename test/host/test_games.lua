@@ -207,6 +207,41 @@ for _, f in ipairs(files) do
            { id = 2, team = 1, vals = { 3, 1 } } })
   end
 
+  -- Respawn bar: every ruleset with a respawn wait shows a bar filling
+  -- over it in the state where the player waits, anchored on the instant
+  -- the wait began — and every rule that enters that state starts it.
+  local has_respawn = false
+  for _, c in ipairs(game.config) do
+    if c.id == "respawn_secs" then has_respawn = true end
+  end
+  if has_respawn then
+    local bar
+    for _, m in ipairs(game.monitor) do
+      if m.bar and m.fill_var == "respawn_ms" then bar = m end
+    end
+    step("respawn bar", function()
+      assert(bar, "no bar row fills over respawn_ms")
+      assert(bar.start_var == "respawn_from", "the respawn bar is not anchored on respawn_from")
+      local in_bar = {}
+      for _, st in ipairs(bar.states) do in_bar[st] = true end
+      local entered = 0
+      for i, r in ipairs(game.rules) do
+        if in_bar[r.to] and not in_bar[r.from] and r.action then
+          vars.respawn_ms, vars.respawn_from = 0, 0
+          vars.respawn_secs = 25
+          clock = clock + 1234
+          r.action(vars)
+          assert(vars.respawn_ms == 25000 and vars.respawn_from == clock
+                 and vars.respawn_zero == 0,
+                 "rule " .. i .. " enters the wait without starting its bar (" ..
+                 tostring(vars.respawn_ms) .. " ms from " .. tostring(vars.respawn_from) .. ")")
+          entered = entered + 1
+        end
+      end
+      assert(entered > 0, "no rule enters the respawn bar's state")
+    end)
+  end
+
   -- totem sections: validate + encode every TotemVM program
   local vm = dofile(arg[0]:match("(.*/)") .. "totemvm.lua")
   for role, prog in pairs(game.totems or {}) do
@@ -496,15 +531,16 @@ do
   end
 
   -- ---- ramp policy: the bar covers the idle, the trickle starts after it
-  -- FAST, as shipped: 30 energy, 1500 ms idle, 3000 ms to refill.  Emptied
-  -- and released, it must show a bar for the idle alone, give back nothing
-  -- during it, then exactly one unit at its end and one per 100 ms after —
+  -- FAST against a 30-energy, 10 s baseline: 30 energy, an idle of
+  -- 10000/2 - 500 = 4500 ms, then one unit every 10 ms.  Emptied and
+  -- released, it must show a bar for the idle alone, give back nothing
+  -- during it, then exactly one unit at its end and one per 10 ms after —
   -- not the lump "earned" since the last beam.
   do
     clock, shine_busy_until = 0, 0
     local P = fresh{ vars = { energy = "energy", spent = "energy_spent",
                               reload = "reload", reload_ms = "reload_ms" } }
-    local v = { energy = 0, energy_spent = 0, start_energy = 10, recharge_secs = 1,
+    local v = { energy = 0, energy_spent = 0, start_energy = 30, recharge_secs = 10,
                 reload = 0, reload_ms = 0 }
     P.reset(v)
     P.grant(v, 2)                                   -- FAST
@@ -518,17 +554,17 @@ do
     la.trigger_down = function() return false end
     local release = clock
     P.tick(v)
-    check(v.reload == release and v.reload_ms == 1500, "ramp",
+    check(v.reload == release and v.reload_ms == 4500, "ramp",
           "FAST's bar is " .. tostring(v.reload_ms) .. " ms from " .. tostring(v.reload) ..
-          "; expected the 1500 ms idle from the release")
-    clock = release + 1499;  P.tick(v)
+          "; expected the 4500 ms idle from the release")
+    clock = release + 4499;  P.tick(v)
     check(v.energy == 0, "ramp", "energy came back during the idle: " .. v.energy)
-    clock = release + 1500;  P.tick(v)
+    clock = release + 4500;  P.tick(v)
     check(v.energy == 1, "ramp", "the trickle did not start with one unit: " .. v.energy)
-    clock = release + 1600;  P.tick(v)
-    check(v.energy == 2, "ramp", "the trickle is not one unit per 100 ms: " .. v.energy)
-    clock = release + 1500 + 3000;  P.tick(v)
-    check(v.energy == 30, "ramp", "the trickle did not refill in 3 s: " .. v.energy)
+    clock = release + 4510;  P.tick(v)
+    check(v.energy == 2, "ramp", "the trickle is not one unit per 10 ms: " .. v.energy)
+    clock = release + 4500 + 290;  P.tick(v)
+    check(v.energy == 30, "ramp", "the trickle did not refill at 10 ms a unit: " .. v.energy)
     la.trigger_down = function() return false end
   end
 
@@ -603,7 +639,7 @@ do
     check(P.active_id() == 0, "inventory", "dropping the active one did not fall back")
   end
 
-  -- ---- range policy gates, and fails open when uncalibrated -------
+  -- ---- range is a label: nothing gates on distance ----------------
   do
     clock, shine_busy_until = 0, 0
     local P = fresh{ vars = BASE_VARS,
@@ -612,13 +648,12 @@ do
     P.reset(v)
 
     shine_result = { status = "player", id = 7, metres = 4, r = 0, ang = 0 }
-    check(P.result(v) == 7, "range", "a target inside range was rejected")
+    local id, metres = P.result(v)
+    check(id == 7 and metres == 4, "range", "a target inside the label was rejected")
 
     shine_result.metres = 25
-    local id, why = P.result(v)
-    check(id == nil and why == "far", "range", "a target beyond range was accepted")
+    check(P.result(v) == 7, "range", "range_m gated a hit; it is a label only")
 
-    -- No reference calibration: metres is 0 and the gate must not fire.
     shine_result.metres = 0
     check(P.result(v) == 7, "range", "an uncalibrated device gated on distance")
 
@@ -790,8 +825,8 @@ do
 
       -- A ramp needs a duration to ramp over, or it would never fill.
       if prof.recharge == "ramp" then
-        check((prof.recharge_ms or 0) > 0, "standard",
-              key .. " ramps but declares no recharge_ms")
+        check(prof.recharge_step_ms ~= nil or (prof.recharge_ms or 0) ~= 0, "standard",
+              key .. " ramps but declares neither recharge_step_ms nor recharge_ms")
       end
     end
 
@@ -818,8 +853,81 @@ do
     check(others == 0, "SPLASH", others .. " other standard profiles declare a splash")
   end
 
+  -- ---- the standard catalogue is stated relative to the baseline -----
+  -- Resolved across the menu, so a strong baseline cannot out-shoot a
+  -- "powered" projector built on fixed numbers.  The relations read the
+  -- baseline of THEIR module instance, so S must come from the one defined.
+  do
+    local P = fresh{ vars = BASE_VARS }
+    local S = P.standard
+    local function r(p, field, v) return p[field](v) end
+    for _, c in ipairs({ { 10, 5 }, { 30, 10 }, { 60, 20 }, { 25, 15 } }) do
+      local e, secs = c[1], c[2]
+      local v  = mk_vars(e, secs)
+      local R  = secs * 1000
+      local tag = string.format("pool %d / %d s: ", e, secs)
+      -- FAST: the baseline's pool, half its cooldown, an idle of half its
+      -- recharge less half a second, then 10 ms a unit.
+      check(r(S.FAST, "max_energy", v) == e, "relations", tag .. "FAST pool")
+      check(r(S.FAST, "cooldown_ms", v) == 25, "relations", tag .. "FAST cooldown")
+      check(r(S.FAST, "recharge_delay_ms", v) == R // 2 - 500, "relations", tag .. "FAST idle")
+      check(S.FAST.recharge == "ramp" and S.FAST.recharge_step_ms == 10,
+            "relations", "FAST does not trickle at 10 ms a unit")
+      check(r(S.FAST, "cycles", v) == 10, "relations", tag .. "FAST cycles")
+      -- STRONG / SPLASH: half the pool, half the recharge, twice the cooldown.
+      for _, k in ipairs({ "STRONG", "SPLASH" }) do
+        check(r(S[k], "max_energy", v) == math.max(1, e // 2), "relations", tag .. k .. " pool")
+        check(r(S[k], "recharge_delay_ms", v) == R // 2, "relations", tag .. k .. " recharge")
+        check(r(S[k], "cooldown_ms", v) == 100, "relations", tag .. k .. " cooldown")
+        check(r(S[k], "cycles", v) == 10, "relations", tag .. k .. " cycles")
+      end
+      check(S.STRONG.strength == 3, "relations", "STRONG does not weigh 3")
+      check(r(S.SPLASH, "strength", v) == 1, "relations", tag .. "SPLASH strength")
+      -- LONG: half the pool, the same recharge, five times the cycles,
+      -- half the cooldown.
+      check(r(S.LONG, "max_energy", v) == math.max(1, e // 2), "relations", tag .. "LONG pool")
+      check(r(S.LONG, "recharge_delay_ms", v) == R, "relations", tag .. "LONG recharge")
+      check(r(S.LONG, "cycles", v) == 50, "relations", tag .. "LONG cycles")
+      check(r(S.LONG, "cooldown_ms", v) == 25, "relations", tag .. "LONG cooldown")
+      check(r(S.LONG, "strength", v) == 1, "relations", tag .. "LONG strength")
+      -- Every projector costs what the baseline costs.
+      for k, prof in pairs(S) do
+        check(r(prof, "cost", v) == 1, "relations", tag .. k .. " cost")
+      end
+    end
+
+    -- They follow a game's own baseline, not the library's.
+    local Q = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 0, cycles = 8, cooldown_ms = 80, max_energy = 7 } } }
+    local v = mk_vars(50)
+    local QS = Q.standard
+    check(QS.LONG.cycles(v) == 40 and QS.FAST.cooldown_ms(v) == 40 and QS.STRONG.max_energy(v) == 3,
+          "relations", "a game's own baseline did not reach the standard profiles")
+
+    -- A pool never halves to nothing.
+    local O = fresh{ vars = BASE_VARS, profiles = { { id = 0, max_energy = 1 } } }
+    check(O.standard.STRONG.max_energy(mk_vars(1)) == 1, "relations", "a pool of 1 halved to 0")
+  end
+
+  -- ---- the baseline restores its own beam after a long one ----------
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = BASE_VARS }
+    local reps
+    local real = la.shine_config
+    la.shine_config = function(t) if t.reps then reps = t.reps end end
+    local v = mk_vars(30)
+    P.reset(v)
+    check(reps == 10, "optics", "the baseline pushed " .. tostring(reps) .. " cycles, expected 10")
+    P.grant(v, P.standard.LONG.id)
+    check(reps == 50, "optics", "LONG pushed " .. tostring(reps) .. " cycles, expected 50")
+    P.select(v, 0)
+    check(reps == 10, "optics", "back on the baseline Enlight kept " .. tostring(reps) .. " cycles")
+    la.shine_config = real
+  end
+
   la.trigger_down = function(n) return false end
-  print("OK   projector     baseline=shiner, refill/ramp, bar clock, FIFO, range, payload, clamps, splash, SPLASH profile")
+  print("OK   projector     baseline, refill/ramp, bar clock, FIFO, range label, payload, clamps, splash, SPLASH profile, BASE relations")
 end
 
 -- ================================================================
@@ -1472,7 +1580,8 @@ do
     package.loaded_projector = nil
     local P = dofile(ROOT .. "lib/projector.lua")
     P.define{ vars = { energy = "energy", spent = "energy_spent",
-                       reload = "reload", reload_ms = "reload_ms" } }
+                       reload = "reload", reload_ms = "reload_ms" },
+              profiles = { { id = 20, name = "NOCOOL", cooldown_ms = 0, max_energy = 5 } } }
     local pushed
     local real = la.shine_config
     la.shine_config = function(t) if t.cooldown_ms then pushed = t.cooldown_ms end end
@@ -1480,16 +1589,18 @@ do
                 reload = 0, reload_ms = 0 }
     clock = 0
     P.reset(v)
-    check(pushed == 0, "dim", "baseline did not push an explicit 0 cooldown")
+    check(pushed == 50, "dim", "baseline did not push its 50 ms cooldown: " .. tostring(pushed))
     P.set_dim(v, true)
-    check(pushed > 0, "dim", "dimmed baseline cooldown is still 0")
+    check(pushed == 100, "dim", "dimmed baseline cooldown " .. tostring(pushed) .. ", expected 100")
     check(v.reload_ms == 8000, "dim", "dimmed recharge is " .. v.reload_ms .. " ms, expected 8000")
     check(v.energy == 10, "dim", "dimmed pool left energy " .. v.energy)
     P.set_dim(v, false)
-    check(pushed == 0 and v.reload_ms == 4000, "dim", "lifting DIM did not restore the optics / recharge")
-    P.grant(v, 4)                       -- STRONG: 900 ms cooldown
+    check(pushed == 50 and v.reload_ms == 4000, "dim", "lifting DIM did not restore the optics / recharge")
+    P.grant(v, 4)                       -- STRONG: twice the baseline's 50 ms
     P.set_dim(v, true)
-    check(pushed == 1800, "dim", "STRONG dimmed cooldown " .. tostring(pushed) .. ", expected 1800")
+    check(pushed == 200, "dim", "STRONG dimmed cooldown " .. tostring(pushed) .. ", expected 200")
+    P.grant(v, 20)                      -- no cooldown at all: the floor
+    check(pushed == 250, "dim", "a dimmed 0 cooldown got " .. tostring(pushed) .. ", expected the 250 floor")
     P.reset(v)
     check(not P.dimmed(), "dim", "reset did not lift DIM")
     la.shine_config = real

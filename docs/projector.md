@@ -74,11 +74,15 @@ with the baselines subtracted in step 2, where they are finally known.
 both per-device and per-profile, which would break the file-sharing model
 the whole architecture rests on.
 
-### Fails open
+### `range_m` is a label
 
-A device with no reference calibration reports 0 metres, and a profile
-that declares no `range_m` gates on nothing.  Either way the behaviour is
-what it was before ranges existed — an uncalibrated device stays playable.
+The projector does not gate on the estimate either, for now.  A profile's
+`range_m` is a label (what the profile is meant to reach: BASE 40 m, FAST
+30 m, LONG no limit, STRONG and SPLASH 40 m), and `proj.result()` hands
+back every player hit with its estimated distance.  Until the open
+questions below are measured, refusing a hit on that number would turn
+estimation error into missed shots.  What actually buys reach is a
+profile's `cycles`: more integration, more gain.
 
 ### Open questions
 
@@ -174,14 +178,46 @@ refill, so it reads and feels different in the hand.
 ## 6. The standard catalogue
 
 Four ready-made profiles a game can drop into its `profiles` list, each
-with its own icon, shine feedback, optics and economy:
+with its own icon, shine feedback, optics and economy.
 
-| | id | cycles | cooldown | range | recharge | cost / pool | strength | ready |
+### Why they are relative to the baseline
+
+The menu owns the baseline's pool and recharge. With a catalogue of fixed
+numbers, a host who set up a strong baseline (a big pool, a fast refill)
+made every "powered" projector a weaker version of the one already in
+hand. So every standard profile states its values as **relations to the
+baseline's resolved value**, read through the game's config vars on the
+tick:
+
+```lua
+cycles      = proj.rel("cycles", function(r) return r * 5 end),
+cooldown_ms = proj.rel("cooldown_ms", function(k) return k // 2 end),
+cost        = proj.rel("cost"),                       -- same as the baseline
+```
+
+That includes the values the baseline fixes today (cycles, cooldown):
+they may become menu values, and a relation keeps holding when they do.
+`proj.rel` follows a game's *own* baseline (id 0) when it declares one, and
+clamps the result to the field's limits, like a literal at load. Every
+receiver resolves against the same config, so a profile looked up by id
+from a splash beacon means the same thing on every device.
+
+| | id | pool | recharge | cooldown | cycles | strength | range label | ready |
 |---|---|---|---|---|---|---|---|---|
-| SPLASH | 1 | 20 | 900 ms | 12 m | refill 6000 ms | 2 / 8 | 1 + burst | 600 ms |
-| FAST | 2 | 4 | 60 ms | 20 m | ramp 1500→3000 ms | 1 / 30 | 1 | 150 ms |
-| LONG | 3 | 30 | 400 ms | device max | refill 4000 ms | 1 / 20 | 1 | 400 ms |
-| STRONG | 4 | 15 | 900 ms | 20 m | refill 6000 ms | 1 / 8 | **3** | 400 ms |
+| BASE | 0 | menu (`start_energy`) | refill, menu (`recharge_secs`) | 50 ms | 10 | 1 | 40 m | 0 |
+| SPLASH | 1 | B/2 | refill, B/2 | 2·B | B | B + burst | 40 m | 600 ms |
+| FAST | 2 | B | ramp: idle B/2 − 500 ms, then 10 ms per unit | B/2 | B | B | 30 m | 150 ms |
+| LONG | 3 | B/2 | refill, B | B/2 | 5·B | B | none | 400 ms |
+| STRONG | 4 | B/2 | refill, B/2 | 2·B | B | **3** | 40 m | 400 ms |
+
+B is the baseline's value. Every projector costs what the baseline costs
+(1). A halved pool rounds down, never below 1. At the menu defaults (30
+energy, 10 s) that is: FAST 30 energy, 4.5 s idle then 0.3 s of trickle;
+STRONG and SPLASH 15 energy back in 5 s; LONG 15 energy of 400 ms beams.
+
+The baseline declares its optics outright. It used to leave `cycles` to
+whatever Enlight held, so switching back from LONG kept LONG's beam; a
+profile that names no `cycles` now takes the baseline's.
 
 Every duration a profile declares is in **milliseconds**. Seconds are too
 coarse to separate a projector that snaps back from one that crawls. The
@@ -199,15 +235,8 @@ Ids are **fixed and reserved**, because a projector id travels on the wire:
 a splash beacon names the projector that fired and every receiver looks the
 profile up by that id locally. A game's own profiles start above this range.
 
-FAST's short reach is not an arbitrary nerf — four cycles is a short
-integration and therefore genuinely less gain, so gating it keeps the
-profile from producing unreliable long-range hits. LONG's `range_m = 0`
-leaves the profile out of the way entirely and lets the calibrated floor
-decide what the device can see.
-
 STRONG weighs **three standard hits**, which in a lives game is three lives
-from one beam. One energy per shot, but only eight of them and six seconds
-to get them back.
+from one beam.
 
 ### Shine feedback: the burst is the whole action, not each note
 
@@ -277,13 +306,29 @@ A monitor row spells it:
 
 ```lua
 { var = "energy", icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME },
-  bar = true, bar_at = 0, fill_var = "reload_secs", start_var = "reload" }
+  bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload" }
 ```
 
 The row is declarative because binding sets are built once in
 `GameRunner::begin()` and lock on first activation — there is no later
 moment at which the projector could add one. The *timing* behind both
 pointers stays the projector's.
+
+**The respawn wait uses the same shape.** Every ruleset with a respawn
+timer shows a bar in the state where the player waits (OUT_GAME; DOWN in
+festasportsasso), filling over `respawn_secs`. `std.respawn_wait(vars,
+secs)` starts the wait and writes the three vars the row reads:
+
+```lua
+respawn_at = std.respawn_wait(vars, vars.respawn_secs)
+
+{ var = "respawn_zero", icon = "DOWN", col = 1, row = 0, states = { S.OUT_GAME },
+  bar = true, bar_at = 0, fill_var = "respawn_ms", start_var = "respawn_from" }
+```
+
+It is anchored on the instant the wait began, so a hold or a tools menu
+mid-wait cannot restart it. Where the way back is a BASE, the bar covers
+the timer only: once it is full the player still has to reach a base.
 
 ---
 
@@ -343,7 +388,9 @@ would see the pool refill on the very tick they emptied it.
 
 **Ramp policy.** A `ramp` recharge trickles from the **end of the wait**:
 the first unit arrives the instant `recharge_delay_ms` has passed since the
-release, then one every `recharge_ms / max_energy`. Nothing is credited for
+release, then one every `recharge_step_ms` (FAST: 10 ms), or every
+`recharge_ms / max_energy` for a profile that states the whole duration
+instead. Nothing is credited for
 the wait itself. (It used to count from the last beam, so the moment the
 wait ended it paid out everything "earned" during it at once — half of
 FAST's pool in one jump.)
@@ -382,8 +429,8 @@ out), and `MalusDim` for DIM. The grant is quiet
 
 **DIM** (`proj.set_dim(vars, on)`) halves the pool of every held projector
 (current energy is clamped down to it). It doubles the recharge wait and
-the ramp, and doubles the cooldown. A profile that declares no cooldown
-(the baseline) gets `DIM.min_cooldown_ms` instead, because doubling
+the ramp, and doubles the cooldown. A profile whose cooldown is 0
+gets `DIM.min_cooldown_ms` instead, because doubling
 nothing would not be "longer". The factors are constants at the top of
 `projector.lua`.
 
@@ -392,8 +439,7 @@ in the rule that takes a player out (IN→OUT). It drops every projector a
 BONUS can hand out, lifts DIM, and puts the baseline back in hand with its
 own banked pool. Projectors declared `bonus = false` (a role such as VIRUS,
 a practice TRIAL) are kept. It must run before a respawn writes the pool,
-or the respawn would fill the powered projector instead (FAST came back
-with 50 energy in a pool of 30). `reset()` lifts DIM too. Virus has no OUT
+or the respawn would fill the powered projector instead. `reset()` lifts DIM too. Virus has no OUT
 state, so it lifts DIM on infection. Lifting does not refill the pool; the
 ordinary recharge does.
 

@@ -95,6 +95,34 @@ function std.lit_target(cfg)
 end
 
 -- ----------------------------------------------------------------
+-- Respawn wait: start it, and publish it for the OUT_GAME loading bar.
+--
+--   respawn_at = std.respawn_wait(vars, vars.respawn_secs)
+--
+-- Returns the la.now() at which the wait is over.  It also writes the
+-- three vars the bar row reads, which the game must declare:
+--
+--   vars    = { { id = "respawn_zero", default = 0 },  -- pinned at the trigger
+--               { id = "respawn_from", default = 0 },  -- millis the wait began
+--               { id = "respawn_ms",   default = 0 }, ... },
+--   monitor = { { var = "respawn_zero", icon = "DOWN", col = 1, row = 0,
+--                 states = { S.OUT_GAME }, bar = true, bar_at = 0,
+--                 fill_var = "respawn_ms", start_var = "respawn_from" }, ... },
+--
+-- The bar is anchored on the instant the wait began rather than on the
+-- display entering the state, so a hold or a tools menu mid-wait cannot
+-- restart it.  In a ruleset that respawns at a BASE the bar covers the
+-- timer only: once it is full the player still has to reach a base.
+-- ----------------------------------------------------------------
+function std.respawn_wait(vars, secs)
+  local now = la.now()
+  vars.respawn_zero = 0
+  vars.respawn_from = now
+  vars.respawn_ms   = (secs or 0) * 1000
+  return now + vars.respawn_ms
+end
+
+-- ----------------------------------------------------------------
 -- BASE-beacon respawn handler for OUT_GAME (Teams/Flag/Upkeep/KoH).
 -- Gates on a minimum-wait predicate, team match and RSSI proximity,
 -- then calls cfg.on_ready and replies so the BASE animates.

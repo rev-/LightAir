@@ -252,7 +252,7 @@ int main() {
 
     const LightAir_Game& game = ffa->descriptor();
     CHECK(game.configCount == 5, "ffa config count");
-    CHECK(game.monitorCount == 8, "ffa monitor count");
+    CHECK(game.monitorCount == 9, "ffa monitor count (incl. the respawn bar)");
     CHECK(game.ruleCount == 4, "ffa rule count");
     CHECK(game.behaviorCount == 3, "ffa behaviour rows (states 0..2)");
     CHECK(game.directRadioRuleCount == 4,
@@ -338,7 +338,7 @@ int main() {
         printf("  FAIL no energy slot — the rest of this block would segfault\n");
         return ++failures;
     }
-    CHECK(*energy == 50, "energy from config");
+    CHECK(*energy == 30, "energy from config");
     InputReport inputs = {};
     inputs.buttonCount = 1;
     inputs.buttons[0].id = 0;                              // TRIG_1
@@ -346,7 +346,7 @@ int main() {
     RadioReport rr = {};
     out = GameOutput();
     game.behaviors[0].onUpdate(inputs, rr, disp, out);
-    CHECK(*energy == 49, "shine spent energy");
+    CHECK(*energy == 29, "shine spent energy");
     CHECK(out.ui.count == 1, "enlight UI feedback");
 
     // Confirmed lit target -> unicast LIT queued.

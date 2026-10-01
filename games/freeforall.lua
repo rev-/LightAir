@@ -101,8 +101,8 @@ return {
   config = {
     { id = "start_lives",   name = "Lives",    min = 1,  max = 5,   step = 1,  default = 3   },
     { id = "respawn_secs",  name = "Respawn",  min = 5,  max = 120, step = 5,  default = 30  },
-    { id = "start_energy",  name = "Energy",   min = 10, max = 100, step = 10, default = 50  },
-    { id = "recharge_secs", name = "Recharge", min = 0,  max = 20,  step = 5,  default = 10  },
+    { id = "start_energy",  name = "Energy",   min = 10, max = 60,  step = 5,  default = 30  },
+    { id = "recharge_secs", name = "Recharge", min = 5,  max = 20,  step = 5,  default = 10  },
     { id = "game_time",     name = "Time",     min = 60, max = 900, step = 60, default = 900 },
   },
 
@@ -115,8 +115,13 @@ return {
   -- replaces the hand-rolled tickGameTime() of the C++ rulesets.
   vars = {
     { id = "lives",        default = 3  },
-    { id = "energy",       default = 50 },
+    { id = "energy",       default = 30 },
     { id = "time_left",    default = 900, countdown_in = { S.IN_GAME, S.OUT_GAME } },
+    -- The respawn wait, for the OUT_GAME loading bar: written when
+    -- the wait starts.
+    { id = "respawn_zero", default = 0 },
+    { id = "respawn_from", default = 0 },
+    { id = "respawn_ms",   default = 0 },
     { id = "points",       default = 0  },
     { id = "energy_spent", default = 0  },
     -- The projector's reload clock, read by the energy cell's bar:
@@ -143,6 +148,10 @@ return {
       bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload",
       icon_var = "energy_icon" },
     { var = "time_left",   icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
+    -- Out: a bar filling over the respawn time, from the instant the
+    -- wait began.
+    { var = "respawn_zero", icon = "DOWN",   col = 1, row = 0, states = { S.OUT_GAME },
+      bar = true, bar_at = 0, fill_var = "respawn_ms", start_var = "respawn_from" },
     { var = "points",      icon = "SCORE",  col = 1, row = 1, states = { S.IN_GAME } },
     -- end-game screen (config vars can be monitored too)
     { var = "game_time",    icon = "TIME",   col = 0, row = 0, states = { S.GAME_END } },
@@ -262,6 +271,11 @@ return {
       action = function(vars)
         vars.shone_times = vars.shone_times + 1
         respawn_at = la.now() + vars.respawn_secs * 1000
+        -- The OUT_GAME bar fills over the same wait, anchored on its start
+        -- (std.respawn_wait() does this for the other rulesets).
+        vars.respawn_zero = 0
+        vars.respawn_from = la.now()
+        vars.respawn_ms   = vars.respawn_secs * 1000
         -- Two persistent lines for the whole wait, credit on top: who put
         -- us down, and what to do about it.  The "Down" cue is the moment
         -- feedback, so no transient line competes for the tray.  Here the way back is the clock,

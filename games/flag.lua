@@ -136,8 +136,8 @@ return {
   config = {
     { id = "start_lives",   name = "Lives",        min = 1,  max = 5,   step = 1,  default = 3   },
     { id = "respawn_secs",  name = "Respawn",      min = 5,  max = 120, step = 5,  default = 30  },
-    { id = "start_energy",  name = "Energy",       min = 10, max = 100, step = 10, default = 50  },
-    { id = "recharge_secs", name = "Recharge",     min = 0,  max = 20,  step = 5,  default = 10  },
+    { id = "start_energy",  name = "Energy",       min = 10, max = 60,  step = 5,  default = 30  },
+    { id = "recharge_secs", name = "Recharge",     min = 5,  max = 20,  step = 5,  default = 10  },
     { id = "game_time",     name = "Time",         min = 60, max = 900, step = 60, default = 900 },
     { id = "friendly_fire", name = "FriendlyFire", min = 0,  max = 1,   step = 1,  default = 0   },
     { id = "end_points",    name = "EndPoints",    min = 0,  max = 10,  step = 1,  default = 0   },
@@ -145,8 +145,13 @@ return {
 
   vars = {
     { id = "lives",        default = 3  },
-    { id = "energy",       default = 50 },
+    { id = "energy",       default = 30 },
     { id = "time_left",    default = 900, countdown_in = { S.IN_GAME, S.OUT_GAME } },
+    -- The respawn wait, for the OUT_GAME loading bar: written by
+    -- std.respawn_wait() when the wait starts.
+    { id = "respawn_zero", default = 0 },
+    { id = "respawn_from", default = 0 },
+    { id = "respawn_ms",   default = 0 },
     { id = "flags",        default = 0  },      -- personal captures
     { id = "energy_spent", default = 0  },
     -- The projector's reload clock, read by the energy cell's bar:
@@ -171,6 +176,10 @@ return {
       bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload",
       icon_var = "energy_icon" },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
+    -- Out: a bar filling over the respawn time, from the instant the
+    -- wait began.
+    { var = "respawn_zero", icon = "DOWN",   col = 1, row = 0, states = { S.OUT_GAME },
+      bar = true, bar_at = 0, fill_var = "respawn_ms", start_var = "respawn_from" },
     { var = "flags",        icon = "FLAG",   col = 1, row = 1, states = { S.IN_GAME } },
     { var = "game_time",    icon = "TIME",   col = 0, row = 0, states = { S.GAME_END } },
     { var = "flags",        icon = "FLAG",   col = 1, row = 0, states = { S.GAME_END } },
@@ -309,7 +318,7 @@ return {
       action = function(vars)
         if has_flag then drop_flag() end   -- carrier shone: flag returns home
         vars.shone_times = vars.shone_times + 1
-        respawn_at  = la.now() + vars.respawn_secs * 1000
+        respawn_at  = std.respawn_wait(vars, vars.respawn_secs)
         can_respawn = false
         -- Two persistent lines for the whole wait, credit on top: who put
         -- us down, and what to do about it.  The "Down" cue is the moment

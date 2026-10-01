@@ -10,8 +10,7 @@
 -- projectors the player is carrying.
 --
 -- It replaces std.shiner, which was the same idiom with one fixed
--- profile.  A game that declares nothing but the baseline behaves exactly
--- as it did under the shiner.
+-- profile.
 --
 -- ---- Layering ----------------------------------------------------
 --
@@ -94,6 +93,7 @@ local LIM = {
   -- crawls.
   recharge_delay_ms = { 0, 60000 },
   recharge_ms       = { 0, 60000 },
+  recharge_step_ms  = { 1, 60000 },
   max_owned         = { 1,  8 },
 }
 
@@ -135,10 +135,14 @@ end
 -- ================================================================
 --   THE BASELINE
 --
---   Reproduces std.shiner exactly: one energy per beam, a full refill
---   after the configured idle, pool and delay read from the game's own
---   config vars.  A game that declares no profiles gets this and
---   behaves as it did before the projector existed.
+--   One energy per beam, a full refill after the configured idle, pool
+--   and delay read from the game's own config vars.  Its optics are
+--   declared outright rather than left to whatever Enlight last held:
+--   a baseline with no cycles of its own would inherit the previous
+--   projector's, so switching back from LONG would keep LONG's beam.
+--
+--   range_m is a LABEL here and everywhere: what the profile is meant to
+--   reach.  Nothing gates on it (see result()).
 -- ================================================================
 -- ICON_ENERGY, resolved once: a profile that names no icon, or names one
 -- the firmware does not carry, keeps the standard energy glyph.
@@ -147,6 +151,9 @@ local ICON_FALLBACK = (la.icons and la.icons.ENERGY) or 0
 local BASELINE = {
   id                  = 0,
   name                = "BASE",
+  cycles              = 10,
+  cooldown_ms         = 50,
+  range_m             = 40,
   cost                = 1,
   max_energy          = "start_energy",
   recharge            = "refill",
@@ -154,11 +161,51 @@ local BASELINE = {
   recharge_delay_ms   = function(vars) return (vars.recharge_secs or 0) * 1000 end,
   strength            = 1,
   role_tag            = 0,
-  range_m             = 0,
   rssi_min            = 0,
   target_immunity_ms  = 0,
   ready_ms            = 0,
 }
+
+-- ================================================================
+--   Relations to the baseline.
+--
+--   A powered projector is a power-up only relative to the baseline it
+--   replaces in hand.  Fixed numbers cannot promise that: the menu owns
+--   the baseline's pool and recharge, so a strong enough baseline would
+--   out-shoot every "powered" one.  So the standard profiles state their
+--   values as functions of the baseline's RESOLVED value — whatever this
+--   game declared for id 0, read through its config vars on the tick.
+--
+--   Every field is stated that way, including the ones the baseline
+--   fixes today (cycles, cooldown): they may become menu values, and a
+--   relation keeps holding when they do.
+--
+--     cycles = proj.rel("cycles", function(r) return r * 5 end)
+--     cost   = proj.rel("cost")                   -- same as the baseline
+--
+--   The result is clamped to the field's LIM, like a literal at load.
+-- ================================================================
+local function base_value(vars, field)
+  local b = defs[0]
+  return val(vars, b and b[field], 0)
+end
+
+local function rel(field, f)
+  local lim = LIM[field]
+  return function(vars)
+    local v = base_value(vars, field)
+    if f then v = f(v) end
+    if lim then v = clamp(v, lim[1], lim[2]) end
+    return v
+  end
+end
+P.rel = rel
+
+local function half(x)       return x // 2 end
+local function twice(x)      return x * 2 end
+-- A pool may never round down to nothing: a projector with no energy
+-- could be held but never fired.
+local function half_pool(x)  return math.max(1, x // 2) end
 
 -- ================================================================
 --   STANDARD PROFILES
@@ -170,12 +217,25 @@ local BASELINE = {
 --   own profiles should start above this range.
 --
 --     profiles = { proj.standard.SPLASH, { id = 10, name = "MINE", ... } }
+--
+--   Each is the baseline with a few relations changed (B = baseline):
+--
+--             pool   recharge               cooldown  cycles  strength
+--     FAST    B      ramp: B/2 - 500 ms     B/2       B       B
+--                    idle, then 10 ms/unit
+--     STRONG  B/2    B/2                    2B        B       3
+--     SPLASH  B/2    B/2                    2B        B       B + splash
+--     LONG    B/2    B                      B/2       5B      B
+--
+--   Every one costs what the baseline costs.  Every receiver resolves
+--   these against the same config, so a profile looked up by id from a
+--   splash beacon means the same thing on every device.
 -- ================================================================
 P.standard = {
-  -- SPLASH — the burst projector.  A heavy, slow shot whose point is not
-  -- the direct hit but what it does to everyone standing near the person
-  -- it lands on: the direct hit is a single standard hit, while the
-  -- beacon it triggers hands out two at close range and one further out.
+  -- SPLASH — the burst projector.  The point is not the direct hit but
+  -- what it does to everyone standing near the person it lands on: the
+  -- direct hit is a single standard hit, while the beacon it triggers
+  -- hands out two at close range and one further out.
   --
   -- It is the ONLY profile that declares a splash.  Splash is loud, in
   -- radio traffic and in play, and a field where every projector splashed
@@ -185,25 +245,24 @@ P.standard = {
     name     = "SPLASH",
     icon     = "SPLASH",
 
-    -- Optics: a long integration for a heavy shot, and a cooldown that
-    -- makes it a considered shot rather than a held trigger.
-    cycles      = 20,
-    cooldown_ms = 900,
-    range_m     = 12,        -- a burst weapon, not a sniper
+    -- Optics: the baseline's beam, twice the wait between beams, so it is
+    -- a considered shot rather than a held trigger.
+    cycles      = rel("cycles"),
+    cooldown_ms = rel("cooldown_ms", twice),
+    range_m     = 40,        -- label only
 
-    -- Economy: few charges, slow to come back.  The reload bar earns its
-    -- keep on this one.
-    cost              = 2,
-    max_energy        = 8,
+    -- Economy: half the pool, back in half the time.
+    cost              = rel("cost"),
+    max_energy        = rel("max_energy", half_pool),
     recharge          = "refill",
-    recharge_delay_ms = 6000,
+    recharge_delay_ms = rel("recharge_delay_ms", half),
 
     -- Handling: heavy to bring up after a switch.
     ready_ms = 600,
 
     -- Effect.  target_immunity_ms stops the same target absorbing the
     -- direct hit twice inside one burst's echo.
-    strength           = 1,
+    strength           = rel("strength"),
     target_immunity_ms = 1500,
 
     splash = {
@@ -224,28 +283,28 @@ P.standard = {
     },
   },
 
-  -- FAST — a light, quick beam.  Four cycles is a short integration and
-  -- therefore genuinely less gain, so the 20 m reach is the honest limit
-  -- of what it can resolve rather than an arbitrary nerf.  It is the only
-  -- standard profile that ramps: the pool trickles back rather than
-  -- arriving all at once, which suits a projector meant to be held down.
+  -- FAST — the baseline's beam with half the wait between beams, and a
+  -- pool that comes back sooner and trickles rather than arriving all at
+  -- once, which suits a projector meant to be held down: an idle of half
+  -- the baseline's recharge less half a second, then one unit every
+  -- 10 ms.  It is the only standard profile that ramps.
   FAST = {
     id       = 2,
     name     = "FAST",
     icon     = "FAST",
 
-    cycles      = 4,
-    cooldown_ms = 60,
-    range_m     = 20,
+    cycles      = rel("cycles"),
+    cooldown_ms = rel("cooldown_ms", half),
+    range_m     = 30,        -- label only
 
-    cost              = 1,
-    max_energy        = 30,
+    cost              = rel("cost"),
+    max_energy        = rel("max_energy"),
     recharge          = "ramp",
-    recharge_delay_ms = 1500,
-    recharge_ms       = 3000,
+    recharge_delay_ms = rel("recharge_delay_ms", function(ms) return ms // 2 - 500 end),
+    recharge_step_ms  = 10,
 
     ready_ms = 150,
-    strength = 1,
+    strength = rel("strength"),
 
     -- Two even rising ticks: light, quick, unmistakably not the heavy ones.
     shine_action = {
@@ -255,26 +314,25 @@ P.standard = {
     },
   },
 
-  -- LONG — thirty cycles of integration, and the reach of whatever the
-  -- device can actually see: range_m = 0 leaves the profile out of the way
-  -- and lets the calibrated floor decide.  Slow to bring up, slow between
-  -- beams, and worth it at distance.
+  -- LONG — five times the baseline's integration, which is what reaches
+  -- further.  Half the pool, but each beam is five times the light and
+  -- the wait between beams is half the baseline's.  Slow to bring up.
   LONG = {
     id       = 3,
     name     = "LONG",
     icon     = "LONG",
 
-    cycles      = 30,
-    cooldown_ms = 400,
-    range_m     = 0,             -- whatever this device can resolve
+    cycles      = rel("cycles", function(r) return r * 5 end),
+    cooldown_ms = rel("cooldown_ms", half),
+    range_m     = 0,         -- label only: no limit
 
-    cost              = 1,
-    max_energy        = 20,
+    cost              = rel("cost"),
+    max_energy        = rel("max_energy", half_pool),
     recharge          = "refill",
-    recharge_delay_ms = 4000,
+    recharge_delay_ms = rel("recharge_delay_ms"),
 
     ready_ms = 400,
-    strength = 1,
+    strength = rel("strength"),
 
     -- A short chirp then a long held tone: reads as "reaching out".
     shine_action = {
@@ -285,21 +343,21 @@ P.standard = {
   },
 
   -- STRONG — the heavy hitter: one beam weighs three standard hits, which
-  -- in a lives game is three lives at once.  Eight of them, a long wait
-  -- between, and a long wait to get them back.
+  -- in a lives game is three lives at once.  Half the pool, back in half
+  -- the time, and twice the wait between beams.
   STRONG = {
     id       = 4,
     name     = "STRONG",
     icon     = "STRONG",
 
-    cycles      = 15,
-    cooldown_ms = 900,
-    range_m     = 20,
+    cycles      = rel("cycles"),
+    cooldown_ms = rel("cooldown_ms", twice),
+    range_m     = 40,        -- label only
 
-    cost              = 1,
-    max_energy        = 8,
+    cost              = rel("cost"),
+    max_energy        = rel("max_energy", half_pool),
     recharge          = "refill",
-    recharge_delay_ms = 6000,
+    recharge_delay_ms = rel("recharge_delay_ms", half),
 
     ready_ms = 400,
     strength = 3,
@@ -478,7 +536,9 @@ local function activate(vars, idx)
 
   -- Optics.  Queued by the verb and applied in the OUTPUT phase, so this
   -- can never reconfigure Enlight mid-measurement.
-  la.shine_config{ reps = val(vars, p.cycles, nil),
+  -- A profile that names no cycles takes the baseline's, never whatever
+  -- Enlight was left holding by the projector before it.
+  la.shine_config{ reps = val(vars, p.cycles, nil) or base_value(vars, "cycles"),
                    cooldown_ms = cooldown_of(vars, p) }
   if la.shine_action then la.shine_action(p.shine_action) end
   if var.name then vars[var.name] = p.name or "" end
@@ -719,23 +779,17 @@ end
 --   result() — interpret the measurement
 --
 --   Returns the target's player id, plus the estimated distance, or nil
---   when there is nothing to act on.  The second return is the reason,
---   so a ruleset can tell "missed" from "out of reach" and say so.
+--   when there is nothing to act on.  The second return is the reason
+--   (the measurement's status), so a ruleset can tell a miss from a
+--   totem.
 --
---   Fails OPEN on distance: a device with no reference calibration
---   reports 0 metres, and a profile that declares no range_m gates on
---   nothing.  Either way the behaviour is what it was before ranges
---   existed, which is what keeps an uncalibrated device playable.
+--   Nothing gates on distance.  A profile's range_m is a label for now:
+--   the estimate is not trustworthy enough to refuse a hit on (see
+--   docs/projector.md §2), and reach is what a profile's cycles buy.
 -- ================================================================
 function P.result(vars)
   local status, id, metres = la.shine_result()
   if status ~= "player" then return nil, status end
-
-  local p = active()
-  local reach = val(vars, p.range_m, 0)
-  if reach > 0 and metres > 0 and metres > reach then
-    return nil, "far"
-  end
   return id, metres
 end
 
@@ -920,15 +974,21 @@ local function tick_recharge(vars, p, now)
     return
   end
 
-  -- ramp: one unit every recharge_ms / max, stepped in integers.
+  -- ramp: one unit every recharge_step_ms when the profile names one,
+  -- otherwise every recharge_ms / max, stepped in integers.
   --
   -- Standard policy for a ramp: the trickle STARTS when the idle ends, the
   -- first unit arriving at that instant, so an empty pool fills at an even
   -- rate from then on — never before.  ramp_at is otherwise left at the
   -- last beam, and counting from there would hand back everything "earned"
-  -- during the idle in one lump the moment it ends (15 of FAST's 30).
-  local total_ms = stretch(val(vars, p.recharge_ms, 0))
-  local step_ms  = (max > 0) and (total_ms // max) or 0
+  -- during the idle in one lump the moment it ends.
+  local step_ms
+  if p.recharge_step_ms ~= nil then
+    step_ms = stretch(val(vars, p.recharge_step_ms, 1))
+  else
+    local total_ms = stretch(val(vars, p.recharge_ms, 0))
+    step_ms = (max > 0) and (total_ms // max) or 0
+  end
   if step_ms < 1 then step_ms = 1 end
   local s = slots[active_idx]
   local ramp_from = release_at + delay_ms

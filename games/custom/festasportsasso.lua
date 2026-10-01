@@ -214,7 +214,7 @@ end
 -- "Down" cue is the moment feedback, so no transient line competes.
 local function go_down(vars)
   vars.shone_times = vars.shone_times + 1
-  respawn_at  = la.now() + vars.respawn_secs * 1000
+  respawn_at  = std.respawn_wait(vars, vars.respawn_secs)
   can_respawn = false
   proj.strip(vars)                  -- going out loses powered projectors and DIM
   la.show("VAI ALLA BASE", 0)
@@ -290,8 +290,8 @@ return {
   config = {
     { id = "start_lives",   name = "Lives",     min = 1,  max = 5,   step = 1,  default = 3   },
     { id = "respawn_secs",  name = "Respawn",   min = 5,  max = 120, step = 5,  default = 30  },
-    { id = "start_energy",  name = "Energy",    min = 10, max = 100, step = 10, default = 50  },
-    { id = "recharge_secs", name = "Recharge",  min = 0,  max = 20,  step = 5,  default = 10  },
+    { id = "start_energy",  name = "Energy",    min = 10, max = 60,  step = 5,  default = 30  },
+    { id = "recharge_secs", name = "Recharge",  min = 5,  max = 20,  step = 5,  default = 10  },
     -- One visitor's turn, not the match: the match never ends.
     { id = "sub_time",      name = "SubTime",   min = 60, max = 900, step = 10, default = 500 },
     -- Visitors already served before this device booted (0 on the
@@ -302,8 +302,13 @@ return {
 
   vars = {
     { id = "lives",        default = 3   },
-    { id = "energy",       default = 50  },
+    { id = "energy",       default = 30  },
     { id = "time_left",    default = 500, countdown_in = { S.ACTIVE, S.DOWN } },
+    -- The respawn wait, for the DOWN loading bar: written by
+    -- std.respawn_wait() when the wait starts.
+    { id = "respawn_zero", default = 0 },
+    { id = "respawn_from", default = 0 },
+    { id = "respawn_ms",   default = 0 },
     { id = "points",       default = 0   },
     { id = "energy_spent", default = 0   },
     -- The projector's reload clock, read by the energy cell's bar:
@@ -336,6 +341,10 @@ return {
       states = { S.PRE_START } },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1,
       states = { S.PRE_START, S.ACTIVE, S.DOWN } },
+    -- Out: a bar filling over the respawn time, from the instant the
+    -- wait began.
+    { var = "respawn_zero", icon = "DOWN",   col = 1, row = 0, states = { S.DOWN },
+      bar = true, bar_at = 0, fill_var = "respawn_ms", start_var = "respawn_from" },
     { var = "lives",        icon = "LIFE",   col = 0, row = 0, states = { S.ACTIVE } },
     -- Energy, and — while the pool is empty — a bar filling over the
     -- recharge.  The projector owns both the duration and the instant

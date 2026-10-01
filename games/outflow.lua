@@ -86,6 +86,11 @@ return {
   vars = {
     { id = "energy",       default = 100 },
     { id = "time_left",    default = 900, countdown_in = { S.IN_GAME, S.OUT_GAME } },
+    -- The respawn wait, for the OUT_GAME loading bar: written by
+    -- std.respawn_wait() when the wait starts.
+    { id = "respawn_zero", default = 0 },
+    { id = "respawn_from", default = 0 },
+    { id = "respawn_ms",   default = 0 },
     { id = "points",       default = 100 },   -- start at 100; self-depletion costs 1
     { id = "shone_times",  default = 0   },
     { id = "depletions",   default = 0   },
@@ -96,6 +101,10 @@ return {
     { var = "energy",       icon = "ENERGY", col = 0, row = 0, states = { S.IN_GAME } },
     { var = "points",       icon = "SCORE",  col = 1, row = 0, states = { S.IN_GAME } },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
+    -- Out: a bar filling over the respawn time, from the instant the
+    -- wait began.
+    { var = "respawn_zero", icon = "DOWN",   col = 1, row = 0, states = { S.OUT_GAME },
+      bar = true, bar_at = 0, fill_var = "respawn_ms", start_var = "respawn_from" },
     { var = "shone_times",  icon = "LIFE",   col = 1, row = 1, states = { S.IN_GAME } },
     { var = "game_time",    icon = "TIME",   col = 0, row = 0, states = { S.GAME_END } },
     { var = "points",       icon = "SCORE",  col = 1, row = 0, states = { S.GAME_END } },
@@ -184,7 +193,7 @@ return {
       action = function(vars)
         vars.shone_times = vars.shone_times + 1
         pending_shone = false
-        respawn_at    = la.now() + vars.respawn_secs * 1000
+        respawn_at    = std.respawn_wait(vars, vars.respawn_secs)
         -- Two persistent lines for the whole wait, credit on top: who put
         -- us down, and what to do about it.  The "Down" cue is the moment
         -- feedback, so no transient line competes for the tray.  Here the way back is the clock,
@@ -200,7 +209,7 @@ return {
         vars.depletions = vars.depletions + 1
         vars.points     = vars.points - 1
         pending_depleted = false
-        respawn_at       = la.now() + vars.respawn_secs * 1000
+        respawn_at       = std.respawn_wait(vars, vars.respawn_secs)
         -- Nobody to credit: the drain did it.
         la.show("Wait to respawn", 0)
         la.show("Drained out!", 0)

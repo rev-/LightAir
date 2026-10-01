@@ -53,30 +53,25 @@ local virus_bg = {
 local virus_set        = {}      -- [playerId] = true once infected
 local virus_count      = 0
 local pending_infected = false   -- a viral lit reached us this cycle
--- The two roles are two projectors.  They differ in exactly two things:
--- how long Enlight must cool between beams, and the role tag the beam
--- carries — so the cooldown stops being hand-timed here and becomes the
--- optics' own, and "is this beam viral" rides the payload field meant for
--- it instead of colliding with the projector's strength byte.
---
--- Both draw on energy_max, which become_virus() lowers for the virus, so
--- the pool rule the game already had is untouched.
--- CLEAN is the baseline, so everyone starts holding it; VIRUS is granted
--- on infection and never given back, which is the shape of the game.
+-- The two roles are two projectors.  A clean player holds the plain
+-- baseline, exactly as in every other game; everything special about the
+-- virus lives in the VIRUS projector, granted on infection and never given
+-- back, which is the shape of the game.  It is the baseline with three
+-- things changed: how long Enlight must cool between beams (virus_cooldown,
+-- the optics' own rather than hand-timed here), a pool of energy_max, which
+-- become_virus() lowers to a fifth, and the role tag the beam carries — so
+-- "is this beam viral" rides the payload field meant for it instead of
+-- colliding with the projector's strength byte.
 local P_VIRUS = 11
 proj.define{
   vars     = { energy = "energy", spent = "energy_spent",
                reload = "reload", reload_ms = "reload_ms",
                icon = "energy_icon" },
   profiles = {
-    { id = 0, name = "CLEAN", cooldown_ms = 0,
-      max_energy = "energy_max",
-      recharge_delay_ms = function(v) return (v.recharge_secs or 0) * 1000 end,
-      role_tag = 0 },
     -- bonus = false: the virus's projector is a role, not a pickup.
     { id = P_VIRUS, name = "VIRUS", bonus = false, cooldown_ms = "virus_cooldown",
       max_energy = "energy_max",
-      recharge_delay_ms = function(v) return (v.recharge_secs or 0) * 1000 end,
+      recharge_delay_ms = proj.rel("recharge_delay_ms"),
       role_tag = 1 },
   },
 }
@@ -146,14 +141,14 @@ return {
   config = {
     -- Host must pick a player id that is present in the session.
     { id = "virus_id",       name = "Virus",    min = 1,   max = 16,   step = 1,   default = 1    },
-    { id = "start_energy",   name = "Energy",   min = 10,  max = 100,  step = 10,  default = 50   },
-    { id = "recharge_secs",  name = "Recharge", min = 0,   max = 20,   step = 5,   default = 10   },
+    { id = "start_energy",   name = "Energy",   min = 10,  max = 60,   step = 5,   default = 30   },
+    { id = "recharge_secs",  name = "Recharge", min = 5,   max = 20,   step = 5,   default = 10   },
     { id = "virus_cooldown", name = "CoolMs",   min = 250, max = 3000, step = 250, default = 1000 },
     { id = "game_time",      name = "Time",     min = 60,  max = 900,  step = 60,  default = 600  },
   },
 
   vars = {
-    { id = "energy",     default = 50 },
+    { id = "energy",     default = 30 },
     { id = "energy_spent", default = 0 },
     -- The projector's reload clock, read by the energy cell's bar:
     -- reload = millis the wait began (0 = not waiting), reload_ms =
@@ -164,7 +159,7 @@ return {
     -- projector.lua and read by the energy cell: FAST, LONG, … replace
     -- the standard energy glyph while they are the one in use.
     { id = "energy_icon",  default = la.icons.ENERGY },
-    { id = "energy_max", default = 50 },
+    { id = "energy_max", default = 30 },
     { id = "time_left",  default = 600, countdown_in = { S.CLEAN, S.VIRUS } },
     { id = "clean_left", default = 0  },   -- clean players remaining
     { id = "infections", default = 0  },   -- players this device infected
