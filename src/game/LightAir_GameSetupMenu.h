@@ -103,9 +103,6 @@ private:
     static constexpr uint8_t MAX_DISC = GameDefaults::MAX_PARTICIPANTS;
     uint8_t _seenIds[MAX_DISC] = {};
     uint8_t _seenCount = 0;
-    // The DM's roster from MSG_START_COUNTDOWN (bit N = player ID N);
-    // 0 = not received, commitToRunner() then uses _seenIds.
-    uint32_t _startRoster = 0;
 
     // Pre-start countdown (seconds); set at entry of runPreStart, read by renderSummary.
     uint8_t _countdownSecs = GameDefaults::COUNTDOWN_DEFAULT_S;

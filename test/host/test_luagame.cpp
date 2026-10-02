@@ -1015,20 +1015,6 @@ int main() {
             CHECK(*tm.value == 1800, "an unlisted value is refused, not clamped onto the list");
         }
 
-        // la.roster() and la.session_seed(): the runner's roster in ID order.
-        LightAir_GameRunner cr;
-        cr.clearRoster();
-        cr.addToRoster(9); cr.addToRoster(3); cr.addToRoster(16);
-        *cg.currentState = cg.initialState;
-        cg.onBegin(disp, radio, &ui, cr);
-        int* rn = slotOf(cg, "roster_n");
-        int* rf = slotOf(cg, "roster_first");
-        int* rl = slotOf(cg, "roster_last");
-        int* sd = slotOf(cg, "seed");
-        CHECK(rn && *rn == 3, "la.roster() lists every player in the roster");
-        CHECK(rf && rl && *rf == 3 && *rl == 16, "la.roster() is in ID order, up to ID 16");
-        CHECK(sd && *sd >= 0 && *sd <= 255, "la.session_seed() is a byte");
-
         // Refused declarations, each for its own reason.
         struct Bad { const char* body; const char* why; };
         const Bad bads[] = {

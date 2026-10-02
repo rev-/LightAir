@@ -170,28 +170,6 @@ static int l_player_count(lua_State* L) {
     lua_pushinteger(L, g_luaCtx.runner ? g_luaCtx.runner->rosterCount() : 0);
     return 1;
 }
-// la.roster() -> { id, ... }: the players in this match, in ID order.
-//
-// The DM's list, sent with the start signal, so it is the same on every
-// device — which is what lets a ruleset draw from it.  (A device that
-// missed it falls back to the players it heard itself.)
-static int l_roster(lua_State* L) {
-    lua_newtable(L);
-    if (!g_luaCtx.runner) return 1;
-    int n = 0;
-    for (uint8_t id = 1; id < PlayerDefs::MAX_PLAYER_ID; id++) {
-        if (g_luaCtx.runner->inRoster(id)) {
-            lua_pushinteger(L, id);
-            lua_rawseti(L, -2, ++n);
-        }
-    }
-    return 1;
-}
-// la.session_seed() -> 0..255, the same on every device in the match.
-static int l_session_seed(lua_State* L) {
-    lua_pushinteger(L, g_luaCtx.runner ? g_luaCtx.runner->sessionSeed() : 0);
-    return 1;
-}
 static int l_player_short(lua_State* L) {
     lua_Integer id = luaL_checkinteger(L, 1);
     if (id < 0 || id >= PlayerDefs::MAX_PLAYER_ID) id = 0;
@@ -619,7 +597,6 @@ void LightAir_LuaGame::registerKernel() {
     static const Verb kVerbs[] = {
         { "now", l_now }, { "my_id", l_my_id }, { "my_team", l_my_team },
         { "team_of", l_team_of }, { "player_count", l_player_count },
-        { "roster", l_roster }, { "session_seed", l_session_seed },
         { "sensor", l_sensor },
         { "player_short", l_player_short }, { "team_short", l_team_short },
         { "totem_for_role", l_totem_for_role },

@@ -341,11 +341,7 @@ work at all.
 at load time.
 
 **Identity / queries** — `la.my_id()`, `la.my_team()`, `la.team_of(id)`,
-`la.player_count()` (roster size), `la.roster()` (the players in the
-match, in ID order — the DM's list, sent with the start signal, so it is
-the same on every device), `la.session_seed()` (0..255, the session
-token: a random byte every device in the match agrees on, for a draw such
-as Virus's first virus), `la.player_short(id)`,
+`la.player_count()` (roster size), `la.player_short(id)`,
 `la.team_short(team)` (the team's label, "O"/"X"/… from the one table in
 `config.h` — a game file never spells the names out for itself),
 `la.totem_for_role(role, idx)`, `la.totem_option(id)` → `index, label`

@@ -139,12 +139,7 @@ constexpr uint8_t MSG_ROSTER        = 0xA2;
 constexpr uint8_t MSG_JOIN              = 0xA4;
 
 // Countdown-start broadcast from DM to all joined players.
-// payload[0]    = countdown_secs / 10 (multiply by 10 to recover; 0 = no delay).
-// payload[1..4] = the DM's roster, uint32 little-endian, bit N = player ID N.
-//                 The authoritative list of who is playing: each device's
-//                 own sightings can miss a JOIN, and a ruleset drawing from
-//                 the roster (la.roster) needs every device to agree.
-//                 Optional on receipt: a 1-byte payload keeps the local list.
+// payload[0] = countdown_secs / 10 (multiply by 10 to recover; 0 = no delay).
 constexpr uint8_t MSG_START_COUNTDOWN   = 0xA6;
 
 // End-of-game signal; forces any device still in-game into scoringState.

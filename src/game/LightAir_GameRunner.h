@@ -128,16 +128,6 @@ public:
     void    setTeam(uint8_t id, uint8_t team);
     uint8_t teamOf(uint8_t id)  const;
 
-    // Is this player ID in the roster?  la.roster() lists them in ID order.
-    bool inRoster(uint8_t id) const {
-        return id < 32 && ((_expectedPlayerMask >> id) & 1u);
-    }
-
-    // A random byte every device in the match agrees on: the DM's session
-    // token, which each player adopts from the config blob.  Lets a ruleset
-    // make a random draw (Virus's first virus) without a radio exchange.
-    uint8_t sessionSeed() const;
-
     // Number of players registered in the roster (for game logic, e.g.
     // Virus's "last clean player" condition via la.player_count()).
     uint8_t rosterCount() const {

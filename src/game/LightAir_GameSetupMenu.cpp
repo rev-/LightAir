@@ -345,7 +345,6 @@ void LightAir_GameSetupMenu::runIdSettings() {
 
 MenuResult LightAir_GameSetupMenu::runWaiter() {
     recordSeen(_radio.playerId());
-    _startRoster = 0;
     uint32_t nextBroadcast = 0;
     bool joined = false;
 
@@ -400,8 +399,6 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
 
             if (ev.packet.msgType == GameDefaults::MSG_START_COUNTDOWN && joined) {
                 uint8_t secs = (ev.packet.payloadLen >= 1) ? (uint8_t)(ev.packet.payload[0] * 10) : 0;
-                if (ev.packet.payloadLen >= 5)
-                    memcpy(&_startRoster, ev.packet.payload + 1, 4);
                 runCountdownSequence(secs);
                 commitToRunner();
                 return MenuResult::Confirmed;
@@ -1121,17 +1118,8 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
             !((ev.key == 'A' || ev.key == 'B') && ev.state != KeyState::PRESSED)) {
             switch (ev.key) {
                 case 'A': {
-                    // The countdown, then the roster everyone will play with:
-                    // the DM's own list, so a draw from it agrees everywhere.
-                    _startRoster = 0;
-                    for (uint8_t i = 0; i < _seenCount; i++) {
-                        const uint8_t id = _seenIds[i];
-                        if (!TotemDefs::isTotemId(id) && id > 0 && id < PlayerDefs::MAX_PLAYER_ID)
-                            _startRoster |= (1u << id);
-                    }
-                    uint8_t payload[5] = { (uint8_t)(_countdownSecs / 10) };
-                    memcpy(payload + 1, &_startRoster, 4);
-                    _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, payload, sizeof(payload), 2);
+                    uint8_t payload = _countdownSecs / 10;
+                    _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, &payload, 1, 2);
                     runCountdownSequence(_countdownSecs);
                     commitToRunner();
                     return MenuResult::Confirmed;
@@ -1272,17 +1260,10 @@ void LightAir_GameSetupMenu::commitToRunner() {
     // outgoing packet for the duration of the game.
     _radio.setTeam(_teams[_radio.playerId()]);
 
-    // Add players to roster: the DM's list when the start signal carried
-    // one, so every device plays with the same roster; otherwise (the DM
-    // itself before it sent one, or an older DM) the players seen here.
-    if (_startRoster != 0) {
-        for (uint8_t id = 1; id < PlayerDefs::MAX_PLAYER_ID; id++)
-            if (_startRoster & (1u << id)) _runner.addToRoster(id);
-    } else {
-        for (uint8_t i = 0; i < _seenCount; i++) {
-            uint8_t id = _seenIds[i];
-            if (!TotemDefs::isTotemId(id)) _runner.addToRoster(id);
-        }
+    // Add players to roster.
+    for (uint8_t i = 0; i < _seenCount; i++) {
+        uint8_t id = _seenIds[i];
+        if (!TotemDefs::isTotemId(id)) _runner.addToRoster(id);
     }
 
     // Add configured totems to roster + totem list.

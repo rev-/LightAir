@@ -106,10 +106,6 @@ void LightAir_GameRunner::clearRoster() {
     _expectedPlayerMask = 0;
 }
 
-uint8_t LightAir_GameRunner::sessionSeed() const {
-    return _radio ? _radio->sessionToken() : 0;
-}
-
 void LightAir_GameRunner::addToRoster(uint8_t id) {
     if (id == 0 || id >= PlayerDefs::MAX_PLAYER_ID) return;  // totem IDs and reserved silently ignored
     _expectedPlayerMask |= (1u << id);

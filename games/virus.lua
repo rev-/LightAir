@@ -1,10 +1,9 @@
 -- ================================================================
 -- LightAir game: Virus — infection tag.  Last clean player wins.
 --
--- One player, drawn at random, starts as the VIRUS.  Every device makes
--- the same draw: the roster is the DM's (la.roster) and the seed is the
--- session's (la.session_seed), so nobody has to announce it.  The role is
--- stated on the LCD ("VIRUS" / "CLEAN"),
+-- One player starts as the VIRUS (chosen by the host with the
+-- virus_id config var — pick a player who is actually in the
+-- session).  The role is stated on the LCD ("VIRUS" / "CLEAN"),
 -- and a red pulsing background alert marks the infected device.
 --
 -- The virus pays for its power:
@@ -100,15 +99,6 @@ local function note_infected(vars, id)
   end
 end
 
--- The first virus: a player from the match roster, picked by the seed
--- every device shares.  A device with no roster at all (a stand-alone
--- test) plays the virus itself rather than nobody doing so.
-local function first_virus()
-  local ids = la.roster()
-  if #ids == 0 then return la.my_id() end
-  return ids[(la.session_seed() % #ids) + 1]
-end
-
 local function become_virus(vars)
   if not virus_set[la.my_id()] then
     virus_set[la.my_id()] = true
@@ -149,6 +139,8 @@ return {
   score_msg     = MSG.SCORE_COLLECT,
 
   config = {
+    -- Host must pick a player id that is present in the session.
+    { id = "virus_id",       name = "Virus",    min = 1,   max = 16,   step = 1,   default = 1    },
     { id = "start_energy",   name = "Energy",   min = 10,  max = 60,   step = 5,   default = 30   },
     { id = "recharge_secs",  name = "Recharge", min = 5,   max = 20,   step = 5,   default = 10   },
     { id = "virus_cooldown", name = "CoolMs",   min = 250, max = 3000, step = 250, default = 1000 },
@@ -224,12 +216,11 @@ return {
     was_active       = false
     release_at       = 0
 
-    -- Patient zero: the same random draw on every device (see the header).
-    local first = first_virus()
-    virus_set[first] = true
+    -- Everybody knows the patient zero from the config blob.
+    virus_set[vars.virus_id] = true
     virus_count     = 1
     vars.clean_left = la.player_count() - 1
-    if la.my_id() == first then
+    if la.my_id() == vars.virus_id then
       pending_infected = true     -- the CLEAN->VIRUS rule fires on tick 1
     end
     la.ui("GameStart")
