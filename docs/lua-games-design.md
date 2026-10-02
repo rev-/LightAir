@@ -92,7 +92,15 @@ naturally:
 1. Boot: game store scans `/games/stock/*.lua` then `/games/custom/*.lua`,
    extracts `{name, type_id, path}` manifests for the game list.
 2. DM selects a game → the file is loaded, slots are allocated, `ConfigVar[]`
-   is synthesized from the `config` table (name/min/max/step/default).
+   is synthesized from the `config` table (name/min/max/step/default, or
+   name/choices/default).
+   A `choices` entry lists its values in menu order, each with the label
+   the menu shows in its place (up to 8 entries, labels of 1..8
+   characters): `choices = { { 0, "OFF" }, { 1, "ON" } }`.  The values
+   need not be contiguous or sorted; the game still reads the plain value.
+   It replaces min/max/step (naming both is refused), the default must be
+   listed, and a config blob carrying an unlisted value leaves the slot
+   as it was.
 3. The existing S4a menu edits the slots; the existing config blob
    (`game_serialize_config`) broadcasts them; non-DM devices apply the blob
    into their own slots for the same file.
@@ -168,7 +176,9 @@ return {
   scoring_state = S.GAME_END,     -- optional; omit for a game with no end
   score_msg     = la.msg.SCORE_COLLECT,
 
-  config  = { { id, name, min, max, step, default }, ... },
+  config  = { { id, name, min, max, step, default }          -- numeric
+            | { id, name, default, choices = { { value, "LABEL" }, ... } },  -- listed
+              ... },
   vars    = { { id, default, countdown_in = {...}?, text = true?, len = N? }, ... },
   monitor = { { var, icon, col, row, states = {...} }, ... },
   winners = { { var, dir = "max"|"min" }, ... },
@@ -331,7 +341,11 @@ work at all.
 at load time.
 
 **Identity / queries** — `la.my_id()`, `la.my_team()`, `la.team_of(id)`,
-`la.player_count()` (roster size), `la.player_short(id)`,
+`la.player_count()` (roster size), `la.roster()` (the players in the
+match, in ID order — the DM's list, sent with the start signal, so it is
+the same on every device), `la.session_seed()` (0..255, the session
+token: a random byte every device in the match agrees on, for a draw such
+as Virus's first virus), `la.player_short(id)`,
 `la.team_short(team)` (the team's label, "O"/"X"/… from the one table in
 `config.h` — a game file never spells the names out for itself),
 `la.totem_for_role(role, idx)`, `la.totem_option(id)` → `index, label`

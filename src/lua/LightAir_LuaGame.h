@@ -154,6 +154,10 @@ private:
     // Synthesized descriptor tables
     ConfigVar  _configVars[LuaDefaults::MAX_VARS];
     char       _cfgNames[LuaDefaults::MAX_VARS][LuaDefaults::MAX_CFG_NAME];
+    // Config choices, one pool shared by all of this game's config vars.
+    int        _choiceVals[LuaDefaults::MAX_CHOICE_POOL];
+    char       _choiceLabels[LuaDefaults::MAX_CHOICE_POOL][GameDefaults::CONFIG_CHOICE_LABEL_LEN];
+    uint8_t    _choiceCount = 0;
     MonitorVar _monitorVars[LuaDefaults::MAX_MONITOR];
     WinnerVar  _winnerVars[GameDefaults::MAX_WINNER_VARS];
     StateRule  _rules[LuaDefaults::MAX_RULES];

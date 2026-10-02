@@ -565,11 +565,76 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
             fieldStr(L, e, "name", _cfgNames[configCount],
                      LuaDefaults::MAX_CFG_NAME, true);
             _slots[slot].val = (int)fieldInt(L, e, "default", 0, false);
-            _configVars[configCount].name  = _cfgNames[configCount];
-            _configVars[configCount].value = &_slots[slot].val;
-            _configVars[configCount].min   = (int)fieldInt(L, e, "min", 0, true);
-            _configVars[configCount].max   = (int)fieldInt(L, e, "max", 0, true);
-            _configVars[configCount].step  = (int)fieldInt(L, e, "step", 1, false);
+            ConfigVar& cv = _configVars[configCount];
+            cv.name         = _cfgNames[configCount];
+            cv.value        = &_slots[slot].val;
+            cv.choiceCount  = 0;
+            cv.choiceValues = nullptr;
+            cv.choiceLabels = nullptr;
+
+            lua_getfield(L, e, "choices");
+            if (lua_isnil(L, -1)) {
+                lua_pop(L, 1);
+                cv.min  = (int)fieldInt(L, e, "min", 0, true);
+                cv.max  = (int)fieldInt(L, e, "max", 0, true);
+                cv.step = (int)fieldInt(L, e, "step", 1, false);
+            } else {
+                // choices = { { value, "LABEL" }, ... }: a fixed list, in the
+                // order the menu steps through it.  It replaces min/max/step,
+                // so naming both is a contradiction, not a refinement.
+                if (!lua_istable(L, -1))
+                    luaL_error(L, "config '%s': choices must be a list", id);
+                int ct = lua_absindex(L, -1);
+                lua_getfield(L, e, "min");
+                lua_getfield(L, e, "max");
+                lua_getfield(L, e, "step");
+                const bool ranged = !lua_isnil(L, -3) || !lua_isnil(L, -2) || !lua_isnil(L, -1);
+                lua_pop(L, 3);
+                if (ranged)
+                    luaL_error(L, "config '%s': choices replace min/max/step", id);
+                int nc = (int)lua_rawlen(L, ct);
+                if (nc < 1 || nc > GameDefaults::MAX_CONFIG_CHOICES)
+                    luaL_error(L, "config '%s': %d choices (1..%d)", id, nc,
+                               (int)GameDefaults::MAX_CONFIG_CHOICES);
+                if (_choiceCount + nc > LuaDefaults::MAX_CHOICE_POOL)
+                    luaL_error(L, "too many config choices");
+                const uint8_t first = _choiceCount;
+                for (int k = 1; k <= nc; k++) {
+                    lua_rawgeti(L, ct, k);
+                    if (!lua_istable(L, -1))
+                        luaL_error(L, "config '%s': choice %d must be { value, label }", id, k);
+                    lua_rawgeti(L, -1, 1);
+                    lua_rawgeti(L, -2, 2);
+                    if (!lua_isinteger(L, -2) || !lua_isstring(L, -1))
+                        luaL_error(L, "config '%s': choice %d must be { value, label }", id, k);
+                    const int   v   = (int)lua_tointeger(L, -2);
+                    const char* lbl = lua_tostring(L, -1);
+                    if (strlen(lbl) == 0 || strlen(lbl) >= GameDefaults::CONFIG_CHOICE_LABEL_LEN)
+                        luaL_error(L, "config '%s': label '%s' must be 1..%d chars", id, lbl,
+                                   (int)GameDefaults::CONFIG_CHOICE_LABEL_LEN - 1);
+                    for (uint8_t j = first; j < _choiceCount; j++)
+                        if (_choiceVals[j] == v)
+                            luaL_error(L, "config '%s': value %d listed twice", id, v);
+                    _choiceVals[_choiceCount] = v;
+                    strcpy(_choiceLabels[_choiceCount], lbl);
+                    _choiceCount++;
+                    lua_pop(L, 3);
+                }
+                lua_pop(L, 1);                             // choices
+                cv.choiceCount  = (uint8_t)nc;
+                cv.choiceValues = &_choiceVals[first];
+                cv.choiceLabels = &_choiceLabels[first];
+                cv.min = cv.max = _choiceVals[first];
+                for (int k = 1; k < nc; k++) {
+                    const int v = _choiceVals[first + k];
+                    if (v < cv.min) cv.min = v;
+                    if (v > cv.max) cv.max = v;
+                }
+                cv.step = 1;
+                if (configChoiceIndex(cv, *cv.value) < 0)
+                    luaL_error(L, "config '%s': default %d is not one of its choices",
+                               id, *cv.value);
+            }
             configCount++;
             lua_pop(L, 1);
         }
@@ -1273,6 +1338,7 @@ void LightAir_LuaGame::unload() {
     _countdownCount = 0;
     _progCount = 0;
     _optLabelCount = 0;
+    _choiceCount = 0;
     _stateMax = 0;
     memset(&_game, 0, sizeof(_game));
 }

@@ -74,9 +74,19 @@ enum class VarType : uint8_t { INT, CHARS, BAR };
 // ----------------------------------------------------------------
 // ConfigVar — one variable shown and edited in the pre-game config menu.
 //
-// All ConfigVars are integer values.  The menu lets the player
-// adjust the value in increments of step within [min, max].
-// step = 0 is treated as 1 by the config menu.
+// All ConfigVars are integer values, in one of two forms:
+//
+//   numeric (choiceCount == 0): the menu adjusts the value in increments
+//     of step within [min, max]; step = 0 is treated as 1.
+//
+//   choices (choiceCount > 0): the value is one of choiceValues, in the
+//     order declared, and the menu shows the matching choiceLabels entry
+//     in its place ("ON" for 1, "10 min" for 600).  The values need not
+//     be contiguous or sorted.  min/max still bound them, so code that
+//     only clamps stays correct; configChoiceIndex() is the real check.
+//
+// A zero-initialised ConfigVar is the numeric form, so a C++ game that
+// never mentions choices keeps its aggregate initialisers unchanged.
 // ----------------------------------------------------------------
 struct ConfigVar {
     const char* name;   // ≤12 chars; shown in config menu
@@ -84,7 +94,38 @@ struct ConfigVar {
     int         min;
     int         max;
     int         step;   // 0 treated as 1
+    uint8_t     choiceCount;                                   // 0 = numeric
+    const int*  choiceValues;
+    const char (*choiceLabels)[GameDefaults::CONFIG_CHOICE_LABEL_LEN];
 };
+
+// Index of value v in a choices ConfigVar, or -1 when v is not one of
+// them (or the var is numeric).
+inline int configChoiceIndex(const ConfigVar& var, int v) {
+    for (uint8_t i = 0; i < var.choiceCount; i++)
+        if (var.choiceValues[i] == v) return i;
+    return -1;
+}
+
+// The value one press of < (dir -1) or > (dir +1) leads to in the config
+// menu.  A numeric var moves by step within [min, max]; a choices var
+// moves to the neighbouring entry of its list, stopping at either end, and
+// a value that is somehow not in the list starts from the first entry.
+inline int configStepValue(const ConfigVar& var, int dir) {
+    if (var.choiceCount > 0) {
+        int i = configChoiceIndex(var, *var.value);
+        if (i < 0) return var.choiceValues[0];
+        i += dir;
+        if (i < 0) i = 0;
+        if (i >= var.choiceCount) i = var.choiceCount - 1;
+        return var.choiceValues[i];
+    }
+    const int step = var.step ? var.step : 1;
+    int val = *var.value + dir * step;
+    if (val < var.min) val = var.min;
+    if (val > var.max) val = var.max;
+    return val;
+}
 
 // ----------------------------------------------------------------
 // MonitorVar — one variable displayed on the LCD during the game.

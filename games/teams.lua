@@ -74,7 +74,8 @@ return {
     { id = "start_energy",  name = "Energy",       min = 10, max = 60,  step = 5,  default = 30  },
     { id = "recharge_secs", name = "Recharge",     min = 5,  max = 20,  step = 5,  default = 10  },
     { id = "game_time",     name = "Time",         min = 60, max = 900, step = 60, default = 900 },
-    { id = "friendly_fire", name = "FriendlyFire", min = 0,  max = 1,   step = 1,  default = 0   },
+    { id = "friendly_fire", name = "FriendlyFire", default = 0,
+      choices = { { 0, "OFF" }, { 1, "ON" } } },
     { id = "end_points",    name = "EndPoints",    min = 0,  max = 50,  step = 5,  default = 0   },
   },
 

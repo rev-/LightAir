@@ -81,6 +81,15 @@ bool game_apply_config(const LightAir_Game& game,
         int32_t val;
         memcpy(&val, buf + pos, 4);
         pos += 4;
+        // A choices var only takes a value from its list, checked as sent:
+        // clamping first could turn an unknown value into a listed one.
+        // Anything else (a sender with a different file) keeps what this
+        // device holds, which is a listed value: the default, or the last
+        // one applied.
+        if (var.choiceCount > 0) {
+            if (configChoiceIndex(var, (int)val) >= 0) *var.value = (int)val;
+            continue;
+        }
         if (val < var.min) val = var.min;
         if (val > var.max) val = var.max;
         *var.value = (int)val;

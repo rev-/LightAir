@@ -139,7 +139,12 @@ constexpr uint8_t MSG_ROSTER        = 0xA2;
 constexpr uint8_t MSG_JOIN              = 0xA4;
 
 // Countdown-start broadcast from DM to all joined players.
-// payload[0] = countdown_secs / 10 (multiply by 10 to recover; 0 = no delay).
+// payload[0]    = countdown_secs / 10 (multiply by 10 to recover; 0 = no delay).
+// payload[1..4] = the DM's roster, uint32 little-endian, bit N = player ID N.
+//                 The authoritative list of who is playing: each device's
+//                 own sightings can miss a JOIN, and a ruleset drawing from
+//                 the roster (la.roster) needs every device to agree.
+//                 Optional on receipt: a 1-byte payload keeps the local list.
 constexpr uint8_t MSG_START_COUNTDOWN   = 0xA6;
 
 // End-of-game signal; forces any device still in-game into scoringState.
@@ -333,6 +338,10 @@ namespace GameDefaults {
     constexpr uint8_t  MSG_JOIN               = RadioMsg::MSG_JOIN;
     constexpr uint8_t  MSG_START_COUNTDOWN    = RadioMsg::MSG_START_COUNTDOWN;
     constexpr uint8_t  COUNTDOWN_DEFAULT_S    = 20;   // default pre-game countdown in seconds
+    // A config var may list its values with a label each (ConfigVar
+    // choices): at most this many per var, labels of up to 8 characters.
+    constexpr uint8_t  MAX_CONFIG_CHOICES      = 8;
+    constexpr uint8_t  CONFIG_CHOICE_LABEL_LEN = 9;   // 8 chars + null
     constexpr uint32_t ROSTER_WINDOW_MS  = 3000; // ms to collect presence broadcasts during discovery
     constexpr uint32_t ROSTER_RETRY_MS        = 1000; // ms between own re-broadcasts during discovery
     constexpr uint32_t PRESTART_BROADCAST_MS  = 2000; // ms between MSG_ROSTER broadcasts on pre-start screen
@@ -369,6 +378,7 @@ namespace LuaDefaults {
     constexpr uint8_t  MAX_TEXT_LEN    = 16;     // capacity of one text slot (incl. NUL)
     constexpr uint8_t  MAX_VAR_ID      = 20;     // max chars of a var/config id
     constexpr uint8_t  MAX_CFG_NAME    = 13;     // menu label buffer (12 chars + NUL)
+    constexpr uint8_t  MAX_CHOICE_POOL = 32;     // config choices (value + label) per game, all vars
     constexpr uint8_t  MAX_RULES       = 16;     // state-transition rules per game
     constexpr uint8_t  MAX_MSG_RULES   = 24;     // (state, msgType) handler pairs
     constexpr uint8_t  MAX_MONITOR     = 16;     // monitor entries per game

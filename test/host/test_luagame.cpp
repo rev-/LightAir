@@ -967,6 +967,111 @@ int main() {
         }
     }
 
+    // ---- 15b. Config choices: a list of values, each with its label ----
+    // The menu shows the label and steps through the list in its declared
+    // order; the blob still carries the plain value, and a value outside
+    // the list never lands.  Bad declarations are refused at load.
+    {
+        CHECK(shared.load("test/host/fixtures/choices.lua"), "choices fixture loads");
+        const LightAir_Game& cg = shared.descriptor();
+        CHECK(cg.configCount == 3, "choices fixture config count");
+        if (cg.configCount == 3) {
+            const ConfigVar& ff = cg.configVars[0];
+            const ConfigVar& tm = cg.configVars[1];
+            const ConfigVar& lv = cg.configVars[2];
+            CHECK(ff.choiceCount == 2 && tm.choiceCount == 3 && lv.choiceCount == 0,
+                  "choice counts reached the descriptor; a numeric var has none");
+            CHECK(!strcmp(ff.choiceLabels[0], "OFF") && !strcmp(ff.choiceLabels[1], "ON"),
+                  "ON/OFF labels");
+            CHECK(ff.choiceValues[0] == 0 && ff.choiceValues[1] == 1, "ON/OFF values");
+            CHECK(tm.min == 300 && tm.max == 1800, "min/max bound the listed values");
+            CHECK(*tm.value == 600 && configChoiceIndex(tm, 600) == 0, "default is the first listed");
+            CHECK(configChoiceIndex(tm, 900) == -1, "an unlisted value has no index");
+
+            // Menu stepping: list order, stopping at the ends.
+            CHECK(configStepValue(tm, +1) == 300, "> steps to the next listed value, not the next larger");
+            *tm.value = 1800;
+            CHECK(configStepValue(tm, +1) == 1800, "> stops at the end of the list");
+            CHECK(configStepValue(tm, -1) == 300, "< steps back in list order");
+            *tm.value = 600;
+            CHECK(configStepValue(tm, -1) == 600, "< stops at the start of the list");
+            *ff.value = 0;
+            CHECK(configStepValue(ff, +1) == 1, "OFF > ON");
+            CHECK(configStepValue(lv, +1) == 5 && configStepValue(lv, -1) == 1,
+                  "a numeric var still steps by step within min/max");
+
+            // The blob carries the plain values; an unlisted one keeps ours.
+            uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
+            *ff.value = 1; *tm.value = 1800; *lv.value = 5;
+            uint16_t len = game_serialize_config(cg, blob, sizeof(blob), nullptr, nullptr, 7, nullptr);
+            CHECK(len > 0, "choices blob serializes");
+            *ff.value = 0; *tm.value = 600; *lv.value = 1;
+            CHECK(game_apply_config(cg, blob, len, nullptr, nullptr, nullptr, nullptr),
+                  "choices blob applies");
+            CHECK(*ff.value == 1 && *tm.value == 1800 && *lv.value == 5, "values round-trip");
+            int32_t bad = 900;                          // time: not listed, but in range
+            memcpy(blob + 2 + 4, &bad, 4);
+            game_apply_config(cg, blob, len, nullptr, nullptr, nullptr, nullptr);
+            CHECK(*tm.value == 1800, "an unlisted value is refused, not clamped onto the list");
+        }
+
+        // la.roster() and la.session_seed(): the runner's roster in ID order.
+        LightAir_GameRunner cr;
+        cr.clearRoster();
+        cr.addToRoster(9); cr.addToRoster(3); cr.addToRoster(16);
+        *cg.currentState = cg.initialState;
+        cg.onBegin(disp, radio, &ui, cr);
+        int* rn = slotOf(cg, "roster_n");
+        int* rf = slotOf(cg, "roster_first");
+        int* rl = slotOf(cg, "roster_last");
+        int* sd = slotOf(cg, "seed");
+        CHECK(rn && *rn == 3, "la.roster() lists every player in the roster");
+        CHECK(rf && rl && *rf == 3 && *rl == 16, "la.roster() is in ID order, up to ID 16");
+        CHECK(sd && *sd >= 0 && *sd <= 255, "la.session_seed() is a byte");
+
+        // Refused declarations, each for its own reason.
+        struct Bad { const char* body; const char* why; };
+        const Bad bads[] = {
+            { "{ { 0, \"OFF\" }, { 0, \"ZERO\" } }",         "listed twice" },
+            { "{ { 0, \"TOOLONGLABEL\" } }",                 "1..8 chars" },
+            { "{}",                                           "choices (1.." },
+            { "{ 1, 2 }",                                     "{ value, label }" },
+            { "{ {0,\"A\"},{1,\"B\"},{2,\"C\"},{3,\"D\"},{4,\"E\"},{5,\"F\"},{6,\"G\"},{7,\"H\"},{8,\"I\"} }",
+                                                              "choices (1.." },
+        };
+        const char* path = "test/host/build/badchoices.lua";
+        for (const Bad& b : bads) {
+            FILE* f = fopen(path, "w");
+            fprintf(f, "return { api = 1, type_id = 0x7F08, name = \"Bad\", initial_state = 0,\n"
+                       "  config = { { id = \"x\", name = \"X\", default = 0, choices = %s } },\n"
+                       "  vars = {}, monitor = {}, winners = {}, totem_slots = {}, teams = 0,\n"
+                       "  rules = {}, update = {} }\n", b.body);
+            fclose(f);
+            CHECK(!shared.load(path), b.why);
+            CHECK(strstr(shared.loadError(), b.why) != nullptr, shared.loadError());
+        }
+        // A default outside the list, and choices beside min/max.
+        {
+            FILE* f = fopen(path, "w");
+            fprintf(f, "return { api = 1, type_id = 0x7F08, name = \"Bad\", initial_state = 0,\n"
+                       "  config = { { id = \"x\", name = \"X\", default = 2, choices = { {0,\"OFF\"},{1,\"ON\"} } } },\n"
+                       "  vars = {}, monitor = {}, winners = {}, totem_slots = {}, teams = 0,\n"
+                       "  rules = {}, update = {} }\n");
+            fclose(f);
+            CHECK(!shared.load(path) && strstr(shared.loadError(), "not one of its choices"),
+                  "a default outside the list is refused");
+            f = fopen(path, "w");
+            fprintf(f, "return { api = 1, type_id = 0x7F08, name = \"Bad\", initial_state = 0,\n"
+                       "  config = { { id = \"x\", name = \"X\", min = 0, max = 1, default = 0, choices = { {0,\"OFF\"},{1,\"ON\"} } } },\n"
+                       "  vars = {}, monitor = {}, winners = {}, totem_slots = {}, teams = 0,\n"
+                       "  rules = {}, update = {} }\n");
+            fclose(f);
+            CHECK(!shared.load(path) && strstr(shared.loadError(), "replace min/max/step"),
+                  "choices beside min/max are refused");
+        }
+        remove(path);
+    }
+
     // ---- 16. A shine action's TOTAL length is the burst, not each note ----
     // Several projectors have to be tellable apart by their pattern, not by
     // the pitch of one note — so a multi-step action has to fit inside the

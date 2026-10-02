@@ -345,6 +345,7 @@ void LightAir_GameSetupMenu::runIdSettings() {
 
 MenuResult LightAir_GameSetupMenu::runWaiter() {
     recordSeen(_radio.playerId());
+    _startRoster = 0;
     uint32_t nextBroadcast = 0;
     bool joined = false;
 
@@ -399,6 +400,8 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
 
             if (ev.packet.msgType == GameDefaults::MSG_START_COUNTDOWN && joined) {
                 uint8_t secs = (ev.packet.payloadLen >= 1) ? (uint8_t)(ev.packet.payload[0] * 10) : 0;
+                if (ev.packet.payloadLen >= 5)
+                    memcpy(&_startRoster, ev.packet.payload + 1, 4);
                 runCountdownSequence(secs);
                 commitToRunner();
                 return MenuResult::Confirmed;
@@ -675,11 +678,22 @@ void LightAir_GameSetupMenu::renderConfigEntry(uint8_t cursor, uint8_t total) {
         if (idx < 0 || idx >= (int8_t)total) continue;
 
         const ConfigVar& var = _game->configVars[idx];
+        const uint8_t y = DisplayDefaults::FONT_HEIGHT * row;
         char buf[20];
-        snprintf(buf, sizeof(buf), "%s%-8s%d",
-                 (delta == 0) ? ">" : " ",
-                 var.name, *var.value);
-        _display.print(0, DisplayDefaults::FONT_HEIGHT * row, buf);
+        snprintf(buf, sizeof(buf), "%s%s", (delta == 0) ? ">" : " ", var.name);
+        _display.print(0, y, buf);
+
+        // The value is right-aligned in its own column: names run up to 12
+        // characters in a proportional font, so a fixed-width field after
+        // them could not keep the values lined up (or apart from the name).
+        // A choices var shows its label; a value outside its list (never
+        // expected) shows the number, so it is visible rather than blank.
+        const int ci = configChoiceIndex(var, *var.value);
+        if (ci >= 0) snprintf(buf, sizeof(buf), "%s", var.choiceLabels[ci]);
+        else         snprintf(buf, sizeof(buf), "%d", *var.value);
+        const uint16_t w = _display.textWidth(buf);
+        _display.print((uint8_t)(DisplayDefaults::SCREEN_WIDTH - (w < DisplayDefaults::SCREEN_WIDTH ? w : 0)),
+                       y, buf);
     }
     printLegend("^V Nav  <> Chg  X:Exit", DisplayDefaults::BOTTOM_LINE_Y);
     _display.flush();
@@ -702,7 +716,6 @@ void LightAir_GameSetupMenu::runConfigSubmenu() {
         MenuKeyEvent ev = waitForKey();
         char key = ev.key;
         const ConfigVar& var = _game->configVars[cursor];
-        int step = var.step ? var.step : 1;
 
         // Action buttons (B) only respond to PRESS
         if ((key == 'B') && ev.state != KeyState::PRESSED) continue;
@@ -714,20 +727,11 @@ void LightAir_GameSetupMenu::runConfigSubmenu() {
             case 'V':
                 if (cursor < n - 1) { cursor++; renderConfigEntry(cursor, n); }
                 break;
-            case '<': {
-                int val = *var.value - step;
-                if (val < var.min) val = var.min;
-                *var.value = val;
+            case '<':
+            case '>':
+                *var.value = configStepValue(var, key == '>' ? 1 : -1);
                 renderConfigEntry(cursor, n);
                 break;
-            }
-            case '>': {
-                int val = *var.value + step;
-                if (val > var.max) val = var.max;
-                *var.value = val;
-                renderConfigEntry(cursor, n);
-                break;
-            }
             case 'B': return;
         }
     }
@@ -1117,8 +1121,17 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
             !((ev.key == 'A' || ev.key == 'B') && ev.state != KeyState::PRESSED)) {
             switch (ev.key) {
                 case 'A': {
-                    uint8_t payload = _countdownSecs / 10;
-                    _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, &payload, 1, 2);
+                    // The countdown, then the roster everyone will play with:
+                    // the DM's own list, so a draw from it agrees everywhere.
+                    _startRoster = 0;
+                    for (uint8_t i = 0; i < _seenCount; i++) {
+                        const uint8_t id = _seenIds[i];
+                        if (!TotemDefs::isTotemId(id) && id > 0 && id < PlayerDefs::MAX_PLAYER_ID)
+                            _startRoster |= (1u << id);
+                    }
+                    uint8_t payload[5] = { (uint8_t)(_countdownSecs / 10) };
+                    memcpy(payload + 1, &_startRoster, 4);
+                    _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, payload, sizeof(payload), 2);
                     runCountdownSequence(_countdownSecs);
                     commitToRunner();
                     return MenuResult::Confirmed;
@@ -1259,10 +1272,17 @@ void LightAir_GameSetupMenu::commitToRunner() {
     // outgoing packet for the duration of the game.
     _radio.setTeam(_teams[_radio.playerId()]);
 
-    // Add players to roster.
-    for (uint8_t i = 0; i < _seenCount; i++) {
-        uint8_t id = _seenIds[i];
-        if (!TotemDefs::isTotemId(id)) _runner.addToRoster(id);
+    // Add players to roster: the DM's list when the start signal carried
+    // one, so every device plays with the same roster; otherwise (the DM
+    // itself before it sent one, or an older DM) the players seen here.
+    if (_startRoster != 0) {
+        for (uint8_t id = 1; id < PlayerDefs::MAX_PLAYER_ID; id++)
+            if (_startRoster & (1u << id)) _runner.addToRoster(id);
+    } else {
+        for (uint8_t i = 0; i < _seenCount; i++) {
+            uint8_t id = _seenIds[i];
+            if (!TotemDefs::isTotemId(id)) _runner.addToRoster(id);
+        }
     }
 
     // Add configured totems to roster + totem list.

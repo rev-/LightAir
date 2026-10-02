@@ -31,6 +31,10 @@ function la.my_id() return 2 end
 function la.my_team() return 0 end
 function la.team_of(id) return id % 2 end
 function la.player_count() return 4 end
+-- The match roster (the DM's, in id order) and the shared random seed.
+roster_ids, session_seed = { 1, 2, 3, 4 }, 0
+function la.roster() local t = {} for i, id in ipairs(roster_ids) do t[i] = id end return t end
+function la.session_seed() return session_seed end
 -- 1 = battery volts, 2/3 = NTC degrees; nil past the end of the list.
 function la.sensor(n) return ({ 4.05, 31.0, 29.5 })[n or 1] end
 function la.player_short(id) return "P" .. tostring(id) end
@@ -1572,6 +1576,39 @@ do
     check(P.active_id() == 11, "virus", "a projector bonus took VIRUS out of a virus's hand")
     check(v.energy == v.energy_max, "virus",
           "the virus's projector bonus did not become LIFE (energy " .. v.energy .. ")")
+  end
+
+  -- Virus: patient zero is drawn from the shared roster by the shared
+  -- seed, so every device agrees without announcing it.  This device is
+  -- player 2; it starts infected exactly when the draw lands on it.
+  do
+    local function starts_infected(ids, seed)
+      roster_ids, session_seed = ids, seed
+      local g, v = fresh_game("virus")
+      local fired = false
+      for _, r in ipairs(g.rules) do
+        if r.from == g.initial_state and r.to ~= g.scoring_state and r.when(v) then
+          fired = true
+        end
+      end
+      return fired, v
+    end
+    for seed = 0, 5 do
+      local ids = { 2, 5, 9 }
+      local fired, v = starts_infected(ids, seed)
+      local picked = ids[seed % 3 + 1]
+      check(fired == (picked == 2), "virus",
+            string.format("seed %d picked %d, but this player (2) %s", seed, picked,
+                          fired and "became the virus" or "stayed clean"))
+      check(v.clean_left == la.player_count() - 1, "virus", "clean_left not one less than the players")
+    end
+    local fired = starts_infected({}, 7)
+    check(fired, "virus", "with no roster at all nobody became the virus")
+    roster_ids, session_seed = { 1, 2, 3, 4 }, 0
+    local g = dofile(ROOT .. "virus.lua")
+    for _, c in ipairs(g.config) do
+      check(c.id ~= "virus_id", "virus", "the first virus is still a config var")
+    end
   end
 
   -- DIM on the projector itself: recharge and cooldown doubled, a
