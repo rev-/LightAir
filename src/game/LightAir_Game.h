@@ -652,4 +652,12 @@ struct LightAir_Game {
     uint8_t        holdAcceptCount;
     void (*onHoldEnter)(LightAir_DisplayCtrl&, GameOutput&);
     void (*onHoldExit)(LightAir_DisplayCtrl&, GameOutput&);
+
+    // ---- Player draws (optional) ----
+    // Game vars the DM fills with a random joined player ID when it starts
+    // the match (Virus's first virus).  The DM's device draws, so there is
+    // one answer, and sends it inside MSG_START_COUNTDOWN: every device
+    // that starts the match has it before onBegin.  Never in the menu.
+    int* const* drawnPlayerVars;
+    uint8_t     drawnPlayerCount;
 };

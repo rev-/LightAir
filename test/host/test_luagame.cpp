@@ -1058,6 +1058,33 @@ int main() {
         remove(path);
     }
 
+    // ---- 15c. draw = "player": a var the DM fills at Start ----------------
+    // Virus's patient zero is not in the config menu: the binding hands the
+    // slot to the setup menu, which writes the drawn ID before onBegin.
+    {
+        CHECK(shared.load("games/virus.lua"), "virus loads");
+        const LightAir_Game& vg = shared.descriptor();
+        CHECK(vg.drawnPlayerCount == 1 && vg.drawnPlayerVars && vg.drawnPlayerVars[0],
+              "virus declares one drawn var");
+        for (uint8_t i = 0; i < vg.configCount; i++)
+            CHECK(strcmp(vg.configVars[i].name, "Virus") != 0, "the first virus is not a menu entry");
+
+        const char* path = "test/host/build/baddraw.lua";
+        const char* bodies[][2] = {
+            { "{ id = \"x\", draw = \"team\" }",              "unknown draw" },
+            { "{ id = \"x\", draw = \"player\", text = true }", "cannot be text" },
+        };
+        for (auto& b : bodies) {
+            FILE* f = fopen(path, "w");
+            fprintf(f, "return { api = 1, type_id = 0x7F09, name = \"Bad\", initial_state = 0,\n"
+                       "  config = {}, vars = { %s }, monitor = {}, winners = {},\n"
+                       "  totem_slots = {}, teams = 0, rules = {}, update = {} }\n", b[0]);
+            fclose(f);
+            CHECK(!shared.load(path) && strstr(shared.loadError(), b[1]), b[1]);
+        }
+        remove(path);
+    }
+
     // ---- 16. A shine action's TOTAL length is the burst, not each note ----
     // Several projectors have to be tellable apart by their pattern, not by
     // the pitch of one note — so a multi-step action has to fit inside the

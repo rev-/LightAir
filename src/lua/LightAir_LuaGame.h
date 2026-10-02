@@ -158,6 +158,9 @@ private:
     int        _choiceVals[LuaDefaults::MAX_CHOICE_POOL];
     char       _choiceLabels[LuaDefaults::MAX_CHOICE_POOL][GameDefaults::CONFIG_CHOICE_LABEL_LEN];
     uint8_t    _choiceCount = 0;
+    // Vars declared draw = "player": the DM fills them at Start.
+    int*       _drawnVars[GameDefaults::MAX_DRAWN_VARS];
+    uint8_t    _drawnCount = 0;
     MonitorVar _monitorVars[LuaDefaults::MAX_MONITOR];
     WinnerVar  _winnerVars[GameDefaults::MAX_WINNER_VARS];
     StateRule  _rules[LuaDefaults::MAX_RULES];

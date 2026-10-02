@@ -399,6 +399,12 @@ MenuResult LightAir_GameSetupMenu::runWaiter() {
 
             if (ev.packet.msgType == GameDefaults::MSG_START_COUNTDOWN && joined) {
                 uint8_t secs = (ev.packet.payloadLen >= 1) ? (uint8_t)(ev.packet.payload[0] * 10) : 0;
+                // The players the DM drew, one byte each after the countdown.
+                if (_game) {
+                    for (uint8_t i = 0; i < _game->drawnPlayerCount; i++)
+                        if (1 + i < ev.packet.payloadLen)
+                            *_game->drawnPlayerVars[i] = ev.packet.payload[1 + i];
+                }
                 runCountdownSequence(secs);
                 commitToRunner();
                 return MenuResult::Confirmed;
@@ -1118,8 +1124,17 @@ MenuResult LightAir_GameSetupMenu::runPreStart() {
             !((ev.key == 'A' || ev.key == 'B') && ev.state != KeyState::PRESSED)) {
             switch (ev.key) {
                 case 'A': {
-                    uint8_t payload = _countdownSecs / 10;
-                    _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, &payload, 1, 2);
+                    // The countdown, then one random joined player (the DM
+                    // included) per drawn var: decided here, once, and sent
+                    // in the start signal so every device that starts has it.
+                    uint8_t payload[1 + GameDefaults::MAX_DRAWN_VARS] = { (uint8_t)(_countdownSecs / 10) };
+                    uint8_t plen = 1;
+                    for (uint8_t i = 0; i < _game->drawnPlayerCount; i++) {
+                        const uint8_t id = drawPlayer();
+                        *_game->drawnPlayerVars[i] = id;
+                        payload[plen++] = id;
+                    }
+                    _radio.broadcast(GameDefaults::MSG_START_COUNTDOWN, payload, plen, 2);
                     runCountdownSequence(_countdownSecs);
                     commitToRunner();
                     return MenuResult::Confirmed;
@@ -1149,6 +1164,17 @@ void LightAir_GameSetupMenu::recordSeen(uint8_t id) {
     for (uint8_t i = 0; i < _seenCount; i++)
         if (_seenIds[i] == id) return;
     if (_seenCount < MAX_DISC) _seenIds[_seenCount++] = id;
+}
+
+// A random player among those who joined (the DM included), or the DM
+// itself if no one else did.  Totems are never drawn.
+uint8_t LightAir_GameSetupMenu::drawPlayer() const {
+    uint8_t ids[MAX_DISC];
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < _seenCount; i++)
+        if (!TotemDefs::isTotemId(_seenIds[i])) ids[n++] = _seenIds[i];
+    if (n == 0) return _radio.playerId();
+    return ids[esp_random() % n];
 }
 
 bool LightAir_GameSetupMenu::wasSeen(uint8_t id) const {

@@ -97,6 +97,14 @@ local function mk_pkt(fields)
   return p
 end
 
+-- A var's value at on_begin: its default, or for draw = "player" the
+-- player the DM drew at Start (player 1 here; this device is player 2).
+drawn_player = 1
+function initial(x)
+  if x.draw == "player" then return drawn_player end
+  return x.default
+end
+
 local files = { "freeforall", "teams", "flag", "kingofhill", "outflow", "upkeep",
                 "virus",
                 -- Not flashed: games/custom/ is uploaded over HTTP (Settings
@@ -112,7 +120,7 @@ for _, f in ipairs(files) do
   -- build the vars "proxy" (plain table with declared defaults)
   vars = {}
   for _, c in ipairs(game.config) do vars[c.id] = c.default end
-  for _, v in ipairs(game.vars) do vars[v.id] = v.default end
+  for _, v in ipairs(game.vars) do vars[v.id] = initial(v) end
 
   local steps = {}
   local function step(what, fn, ...)
@@ -1055,7 +1063,7 @@ do
   local g = dofile(ROOT .. "custom/festasportsasso.lua")
   local v = {}
   for _, c in ipairs(g.config) do v[c.id] = c.default end
-  for _, x in ipairs(g.vars)   do v[x.id] = x.default end
+  for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
 
   clock, shine_busy_until = 0, 0
   g.on_begin(v)
@@ -1148,7 +1156,7 @@ do
     g = dofile(ROOT .. "custom/tirobersaglio.lua")
     v = {}
     for _, c in ipairs(g.config) do v[c.id] = c.default end
-    for _, x in ipairs(g.vars)   do v[x.id] = x.default end
+    for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
     clock, shine_busy_until = 0, 0
     g.on_begin(v)
     state = g.initial_state
@@ -1310,7 +1318,7 @@ do
     local g = dofile(ROOT .. case.file .. ".lua")
     local v = {}
     for _, c in ipairs(g.config) do v[c.id] = c.default end
-    for _, x in ipairs(g.vars)   do v[x.id] = x.default end
+    for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
     clock = 0
     g.on_begin(v)
 
@@ -1398,7 +1406,7 @@ do
     local g = dofile(ROOT .. f .. ".lua")
     local v = {}
     for _, c in ipairs(g.config) do v[c.id] = c.default end
-    for _, x in ipairs(g.vars)   do v[x.id] = x.default end
+    for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
     clock = 0
     g.on_begin(v)
     return g, v, libcache.projector
@@ -1572,6 +1580,32 @@ do
     check(P.active_id() == 11, "virus", "a projector bonus took VIRUS out of a virus's hand")
     check(v.energy == v.energy_max, "virus",
           "the virus's projector bonus did not become LIFE (energy " .. v.energy .. ")")
+  end
+
+  -- Virus: patient zero is the player the DM drew at Start.  This device
+  -- (player 2) starts infected exactly when the draw named it, and every
+  -- device counts the drawn player as infected either way.
+  do
+    for _, case in ipairs({ { 2, true }, { 1, false }, { 7, false } }) do
+      drawn_player = case[1]
+      local g, v = fresh_game("virus")
+      local fired = false
+      for _, r in ipairs(g.rules) do
+        if r.from == g.initial_state and r.to ~= g.scoring_state and r.when(v) then
+          fired = true
+        end
+      end
+      check(fired == case[2], "virus",
+            "drawn player " .. case[1] .. ": this player (2) " ..
+            (fired and "became" or "did not become") .. " the virus")
+      check(v.clean_left == la.player_count() - 1, "virus",
+            "the drawn player was not counted out of the clean ones")
+    end
+    drawn_player = 1
+    local g = dofile(ROOT .. "virus.lua")
+    for _, c in ipairs(g.config) do
+      check(c.id ~= "virus_id", "virus", "the first virus is in the config menu")
+    end
   end
 
   -- DIM on the projector itself: recharge and cooldown doubled, a

@@ -665,6 +665,18 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
             } else {
                 _slots[slot].val = (int)fieldInt(L, e, "default", 0, false);
             }
+            // draw = "player": the DM puts a random joined player's ID here
+            // when it starts the match (see LightAir_Game::drawnPlayerVars).
+            char draw[12];
+            fieldStr(L, e, "draw", draw, sizeof(draw), false);
+            if (draw[0]) {
+                if (strcmp(draw, "player") != 0)
+                    luaL_error(L, "var '%s': unknown draw '%s'", id, draw);
+                if (isText) luaL_error(L, "var '%s': a drawn var cannot be text", id);
+                if (_drawnCount >= GameDefaults::MAX_DRAWN_VARS)
+                    luaL_error(L, "too many drawn vars");
+                _drawnVars[_drawnCount++] = &_slots[slot].val;
+            }
             // countdown_in = { states... }
             lua_getfield(L, e, "countdown_in");
             if (lua_istable(L, -1)) {
@@ -1069,6 +1081,8 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
     // ---- assemble the descriptor ----
     _game.configVars           = _configVars;
     _game.configCount          = configCount;
+    _game.drawnPlayerVars      = _drawnVars;
+    _game.drawnPlayerCount     = _drawnCount;
     _game.monitorVars          = _monitorVars;
     _game.monitorCount         = monitorCount;
     _game.directRadioRules     = directCount ? _directRules : nullptr;
@@ -1339,6 +1353,7 @@ void LightAir_LuaGame::unload() {
     _progCount = 0;
     _optLabelCount = 0;
     _choiceCount = 0;
+    _drawnCount = 0;
     _stateMax = 0;
     memset(&_game, 0, sizeof(_game));
 }

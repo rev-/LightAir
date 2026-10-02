@@ -1,9 +1,10 @@
 -- ================================================================
 -- LightAir game: Virus — infection tag.  Last clean player wins.
 --
--- One player starts as the VIRUS (chosen by the host with the
--- virus_id config var — pick a player who is actually in the
--- session).  The role is stated on the LCD ("VIRUS" / "CLEAN"),
+-- One player, drawn at random among those who joined (the DM included),
+-- starts as the VIRUS: the DM's device draws when it starts the match and
+-- sends the ID with the start signal (virus_id, draw = "player").  The
+-- role is stated on the LCD ("VIRUS" / "CLEAN"),
 -- and a red pulsing background alert marks the infected device.
 --
 -- The virus pays for its power:
@@ -139,8 +140,6 @@ return {
   score_msg     = MSG.SCORE_COLLECT,
 
   config = {
-    -- Host must pick a player id that is present in the session.
-    { id = "virus_id",       name = "Virus",    min = 1,   max = 16,   step = 1,   default = 1    },
     { id = "start_energy",   name = "Energy",   min = 10,  max = 60,   step = 5,   default = 30   },
     { id = "recharge_secs",  name = "Recharge", min = 5,   max = 20,   step = 5,   default = 10   },
     { id = "virus_cooldown", name = "CoolMs",   min = 250, max = 3000, step = 250, default = 1000 },
@@ -148,6 +147,9 @@ return {
   },
 
   vars = {
+    -- Patient zero: a random joined player, drawn by the DM at Start and
+    -- sent with the start signal.  Not in the menu.
+    { id = "virus_id",   draw = "player" },
     { id = "energy",     default = 30 },
     { id = "energy_spent", default = 0 },
     -- The projector's reload clock, read by the energy cell's bar:
@@ -216,7 +218,7 @@ return {
     was_active       = false
     release_at       = 0
 
-    -- Everybody knows the patient zero from the config blob.
+    -- Everybody knows patient zero: the DM drew it and sent it at Start.
     virus_set[vars.virus_id] = true
     virus_count     = 1
     vars.clean_left = la.player_count() - 1

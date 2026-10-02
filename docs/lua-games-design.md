@@ -101,6 +101,11 @@ naturally:
    It replaces min/max/step (naming both is refused), the default must be
    listed, and a config blob carrying an unlisted value leaves the slot
    as it was.
+   A var declared `draw = "player"` is never in the menu: when the DM
+   starts the match, its device draws a random joined player (the DM
+   included, totems never) and sends the ID inside MSG_START_COUNTDOWN, so
+   every device that starts has it in the var before `on_begin`.  Virus
+   draws its first virus this way.
 3. The existing S4a menu edits the slots; the existing config blob
    (`game_serialize_config`) broadcasts them; non-DM devices apply the blob
    into their own slots for the same file.
@@ -179,7 +184,8 @@ return {
   config  = { { id, name, min, max, step, default }          -- numeric
             | { id, name, default, choices = { { value, "LABEL" }, ... } },  -- listed
               ... },
-  vars    = { { id, default, countdown_in = {...}?, text = true?, len = N? }, ... },
+  vars    = { { id, default, countdown_in = {...}?, text = true?, len = N?,
+                draw = "player"? }, ... },
   monitor = { { var, icon, col, row, states = {...} }, ... },
   winners = { { var, dir = "max"|"min" }, ... },
 

@@ -139,7 +139,9 @@ constexpr uint8_t MSG_ROSTER        = 0xA2;
 constexpr uint8_t MSG_JOIN              = 0xA4;
 
 // Countdown-start broadcast from DM to all joined players.
-// payload[0] = countdown_secs / 10 (multiply by 10 to recover; 0 = no delay).
+// payload[0]   = countdown_secs / 10 (multiply by 10 to recover; 0 = no delay).
+// payload[1..] = one byte per drawn var (LightAir_Game::drawnPlayerVars, in
+//                order): the player ID the DM drew for it.
 constexpr uint8_t MSG_START_COUNTDOWN   = 0xA6;
 
 // End-of-game signal; forces any device still in-game into scoringState.
@@ -337,6 +339,10 @@ namespace GameDefaults {
     // choices): at most this many per var, labels of up to 8 characters.
     constexpr uint8_t  MAX_CONFIG_CHOICES      = 8;
     constexpr uint8_t  CONFIG_CHOICE_LABEL_LEN = 9;   // 8 chars + null
+    // Game vars the DM fills with a random joined player at Start
+    // (LightAir_Game::drawnPlayerVars), each sent as one byte in
+    // MSG_START_COUNTDOWN.
+    constexpr uint8_t  MAX_DRAWN_VARS          = 4;
     constexpr uint32_t ROSTER_WINDOW_MS  = 3000; // ms to collect presence broadcasts during discovery
     constexpr uint32_t ROSTER_RETRY_MS        = 1000; // ms between own re-broadcasts during discovery
     constexpr uint32_t PRESTART_BROADCAST_MS  = 2000; // ms between MSG_ROSTER broadcasts on pre-start screen

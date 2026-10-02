@@ -162,6 +162,7 @@ private:
     MenuResult runPreStart();
     void     recordSeen(uint8_t id);
     bool     wasSeen(uint8_t id) const;
+    uint8_t  drawPlayer() const;
     void     renderSummary(uint8_t vScroll);
     void     runCountdownSequence(uint8_t secs);
     void     commitToRunner();
