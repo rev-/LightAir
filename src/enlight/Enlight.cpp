@@ -14,8 +14,6 @@ Enlight::Enlight(const EnlightCalib& cal) : _cal(cal) {}
 Enlight::~Enlight() {
     // The worker holds a pointer to this object, so it has to go first.
     if (_taskHandle) { vTaskDelete(_taskHandle); _taskHandle=nullptr; }
-    heap_caps_free(_ledTxBuf);
-    heap_caps_free(_ledTxBufLow);
     heap_caps_free(_adcTxBuf);
     heap_caps_free(_adcRxBuf);
     heap_caps_free(_goertzTab);
@@ -26,7 +24,8 @@ Enlight::~Enlight() {
  *   1. Round frequency to nearest GOERTZ_GRAIN-multiple period.
  *   2. _periodsPerCycle = floor(ENLIGHT_SPI_MAX_DMA_LEN / waveformBytes).
  *      All buffers are sized once. Cycle duration logged at INFO.
- *   3. Sigma-delta PDM for one period; replicate across DMA buffer.
+ *   3. Sigma-delta PDM for one period at each power, replicated across
+ *      the one LED DMA buffer by EnlightLedWave (full power to start).
  *      desired = (0.5+off) + (0.5-off)*PDM_AMP*sin/cos(theta)
  *   4. Fill ADC TX buffer (fixed command stream).
  * ============================================================ */
@@ -57,61 +56,16 @@ bool Enlight::generateWaveform() {
              (unsigned long)_goertzPeriod, (unsigned long)_periodsPerCycle,
              (double)cycleMs, (double)EnlightDefaults::PDM_AMP_OFFSET);
 
-    _ledTxBuf    = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    _ledTxBufLow = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    const bool ledOk = _ledWave.begin(_periodClocks, _periodsPerCycle,
+                                      EnlightDefaults::LOW_POWER_FACTOR);
     _adcTxBuf    = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
     _adcRxBuf    = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    if (!_ledTxBuf || !_ledTxBufLow || !_adcTxBuf || !_adcRxBuf) {
+    if (!ledOk || !_adcTxBuf || !_adcRxBuf) {
         ESP_LOGE(TAG, "DMA alloc failed"); return false;
     }
     memset(_adcRxBuf, 0, _adcBufBytes);
 
-    if (!generateWaveform(_ledTxBuf,    1.0f))                        return false;
-    if (!generateWaveform(_ledTxBufLow, EnlightDefaults::LOW_POWER_FACTOR)) return false;
-
     buildAdcTxBuffer();
-    return true;
-}
-
-bool Enlight::generateWaveform(uint8_t* buf, float ampScale) {
-    if (!buf) return false;
-    const float base = 0.5f + EnlightDefaults::PDM_AMP_OFFSET;
-    const float swing = 0.5f - EnlightDefaults::PDM_AMP_OFFSET;
-    const float twoPiOverT = 2.0f * (float)M_PI / (float)_periodClocks;
-    // SPI output is hardware-inverted: bit=1 → LED OFF, bit=0 → LED ON.
-    // To scale LED power by ampScale, scale the LED signal (1-SPI), not SPI itself:
-    //   SPI = 1 - (1 - base - swing*A*cos) * ampScale
-    // At ampScale=1 this reduces to base + swing*A*cos (identical to full-power).
-    // At ampScale=0.1, average SPI ≈ 0.96 → LED ON ~4% → dim.
-    // Dry-run one full period to find the periodic steady-state accumulator values,
-    // so the real pass starts in-phase with no transient.
-    float acc_far = 0.0f, acc_near = 0.0f;
-    for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
-        for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
-            const float theta = twoPiOverT * (float)(i + j);
-            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
-            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
-            acc_far  += d_far  - (float)((acc_far  >= 0.5f) ? 1u : 0u);
-            acc_near += d_near - (float)((acc_near >= 0.5f) ? 1u : 0u);
-        }
-    }
-    for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
-        uint8_t byte = 0;
-        for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
-            const float theta = twoPiOverT * (float)(i + j);
-            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
-            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
-            const uint8_t b_far  = (acc_far  >= 0.5f) ? 1u : 0u;
-            const uint8_t b_near = (acc_near >= 0.5f) ? 1u : 0u;
-            acc_far  += d_far  - (float)b_far;
-            acc_near += d_near - (float)b_near;
-            const uint8_t sh = (uint8_t)(6u - j*2u);
-            byte |= (uint8_t)(b_far << (sh+1u)); byte |= (uint8_t)(b_near << sh);
-        }
-        buf[i / PDM_CLKS_PER_BYTE] = byte;
-    }
-    for (uint32_t r = 1; r < _periodsPerCycle; r++)
-        memcpy(buf + r*_waveformBytes, buf, _waveformBytes);
     return true;
 }
 
@@ -200,14 +154,12 @@ bool Enlight::begin(spi_device_handle_t adcHandle) {
 
     _adcDevice = adcHandle;
 
+    // One LED transaction for both powers: the buffer it points at is
+    // rewritten between cycles when a run changes power (see dmaTask).
     memset(&_ledTrans,0,sizeof(_ledTrans));
-    _ledTrans.tx_buffer=_ledTxBuf;
+    _ledTrans.tx_buffer=_ledWave.dmaBuf();
     _ledTrans.flags=SPI_TRANS_MODE_DIO;
     _ledTrans.length=_ledBufBytes*8;
-    memset(&_ledTransLow,0,sizeof(_ledTransLow));
-    _ledTransLow.tx_buffer=_ledTxBufLow;
-    _ledTransLow.flags=SPI_TRANS_MODE_DIO;
-    _ledTransLow.length=_ledBufBytes*8;
     memset(&_adcTrans,0,sizeof(_adcTrans));
     _adcTrans.tx_buffer=_adcTxBuf;
     _adcTrans.rx_buffer=_adcRxBuf;
@@ -283,6 +235,7 @@ bool Enlight::run() {
     _discard         = false;
     _useLowPower    = false;
     _cycleNormScale = 1.0f;
+    _lowSwitchUs    = 0;
     _active=true;
     _firstCycle=true;
     _runStartUs=esp_timer_get_time();
@@ -725,6 +678,11 @@ void Enlight::onCycleDone() {
 // onCycleDone() calls spawnCycle() for the next cycle of the same run, which
 // notifies this task from inside itself — the notification counter is already
 // 1 by the time the take below runs again, so the loop simply continues.
+//
+// It is also the only writer of the LED buffer.  Both of the previous cycle's
+// transfers have completed by the time the take returns, so nothing is
+// reading the buffer, and the rewrite is finished before either transfer of
+// the next cycle is queued — the LED/ADC start sequence is untouched.
 void Enlight::dmaTask(void* arg) {
     Enlight* s=static_cast<TaskArgs*>(arg)->self;
     for (;;) {
@@ -732,10 +690,21 @@ void Enlight::dmaTask(void* arg) {
         if (s->_firstCycle) {
             s->_firstCycle=false;
             const int64_t t0=esp_timer_get_time();
+            // run() asked for full power, and a run that switched to low power
+            // left that waveform in the buffer.  Putting full power back here
+            // hides the rewrite inside the warm-up the AFE needs anyway.
+            s->_ledWave.select(s->_useLowPower);
             while (esp_timer_get_time()-t0 < (int64_t)EnlightDefaults::AFE_STARTUP_MICROS) {}
+        } else if (s->_ledWave.holdsLow() != s->_useLowPower) {
+            // onCycleDone() switched the run to low power after a saturated
+            // cycle.  The rewrite lengthens this one gap between cycles, and
+            // the first period of the next cycle is discarded for settling
+            // anyway.  Timed, so the bench can see what the gap grew by.
+            const int64_t t0=esp_timer_get_time();
+            s->_ledWave.select(s->_useLowPower);
+            s->_lowSwitchUs=(uint32_t)(esp_timer_get_time()-t0);
         }
-        spi_transaction_t& ledTx = s->_useLowPower ? s->_ledTransLow : s->_ledTrans;
-        spi_device_queue_trans(s->_ledDevice,&ledTx,portMAX_DELAY);
+        spi_device_queue_trans(s->_ledDevice,&s->_ledTrans,portMAX_DELAY);
         spi_device_queue_trans(s->_adcDevice,&s->_adcTrans,portMAX_DELAY);
         spi_transaction_t* r;
         spi_device_get_trans_result(s->_ledDevice,&r,portMAX_DELAY);

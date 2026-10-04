@@ -6,7 +6,7 @@ the Arduino/ESP-IDF headers; everything else under test is the **real**
 firmware source compiled for the host.
 
 ```
-make -C test/host        # build + run all five suites
+make -C test/host        # build + run all six suites
 ```
 
 | Target | What it proves |
@@ -15,6 +15,7 @@ make -C test/host        # build + run all five suites
 | `totemvm` | the real `LightAir_TotemVM` interpreter, fed reference-encoder programs, reproduces the five standard roles' behaviour (beacons, animations, ownership windows, scoring, cooldowns), keeps a stored RSSI signed in its `int16_t` registers, and rejects malformed programs |
 | `radio` | `LightAir_Radio`'s reply bookkeeping: every reply to a broadcast reaches the sender (a totem beacon is answered by everyone in range, so closing on the first answer loses the rest), a unicast's slot still closes on its one answer, and timeouts fire only where a missing answer means something |
 | `strip` | the totem LED strip's one-shot queue: animations triggered together play in arrival order instead of replacing one another (two players respawning at one base), the queue is bounded, and a late arrival waits its turn |
+| `ledwave` | the optics LED buffer (`EnlightLedWave`): the one DMA buffer holds a whole cycle of exactly the requested power — every period, the last included — a power switch rewrites it once and a repeated request writes nothing, returning to full power restores the first fill byte for byte, and the low-power period lights the LEDs `LOW_POWER_FACTOR` as long as the full one |
 | `luagame` | the real `LightAir_LuaGame` binding (with the vendored Lua 5.5 core) loads every game file (the flashed ones and `games/custom/`), and a scripted Free-for-All session runs begin / messages / replies / rules / update ticks through the synthesized `LightAir_Game` descriptor exactly as `GameRunner` drives it on-device; a Teams section then proves `pkt.rssi` reaches the Lua handlers (what makes a proximity gate a gate at all) and that a beacon outside the gate draws no reply; a keypad section proves the input verbs reach the whole report — key by name, state ladder, release edge, enumeration of keys the ruleset never named — and a FestaSportSasso section drives one whole turn of the endless ruleset: welcome screen, BASE start on a full clock, shone, clock out, stats screen, admin `<`+`>` restart (and A+B, the firmware's menu chord, leaves it alone); an in-game hold section drives A+B through the real runner with freeforall: a held player still takes and answers a LIT, leaves a BONUS beacon unanswered, cannot read a pending beam, keeps its clock running, and on END GAME exchanges scores at once while the end screen and its cue wait for the tool — then A held alone restarts the end screen and A+B does not; a tools-menu section and a `hold = { accept, on_enter, on_exit }` fixture cover the rest |
 
 Requires `g++` and `lua5.4` (`apt install lua5.4`).  The `games` suite
@@ -26,7 +27,7 @@ runs the pure-Lua game files under the system lua5.4 interpreter; only
 - **games** stops at the first failed `assert` with a Lua traceback;
   the `file:line` points either at `test_games.lua` (the expectation
   that broke) or into the game file that misbehaved.
-- **totemvm** / **radio** / **strip** / **luagame** print one `FAIL: <what> (line N)`
+- **totemvm** / **radio** / **strip** / **ledwave** / **luagame** print one `FAIL: <what> (line N)`
   per failed `CHECK` — the line number is in the corresponding test
   `.cpp` — and exit non-zero at the end of the run.
 - The loud `[E] LuaGame[Faulty] fault … stack traceback …` blocks in

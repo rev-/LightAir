@@ -65,7 +65,15 @@ can actually use. See §3.
 | OLED frame buffer | 1–2 KB | after `display.begin()` | heap |
 | `EnlightCalibRoutine` / `EnlightTestMode` | 1.2 / 1.4 KB | only while the tool is open | heap |
 | Enlight DMA task stack | 4 KB | player path, from `Enlight::begin()` | task stack |
+| Enlight DMA buffers | **~67 KB** | player path, from boot | heap (DMA-capable) |
 | WiFi AP + `WebServer` | tens of KB | only in Settings → Share games | IDF |
+
+The Enlight buffers are the largest single heap cost on a player, and they
+are not transient: they are allocated at boot and held for the device's life.
+One DMA cycle is 13 PDM periods of 2,400 bytes (31.2 KB) for the LEDs, and
+7,801 two-byte ADC conversions each way (2 × 15.6 KB), plus one stored LED
+period per power (2 × 2.4 KB) — see §3 F for why there are two periods rather
+than two whole LED cycles.
 
 The loop task runs on Arduino's default 8 KB stack, and everything above the
 runner shares it: the ~2 KB `GameOutput` each tick, and — during a game load —
@@ -138,6 +146,33 @@ request/reply pairs, and overflowing it loses replies.
 
 Each menu slot costs a manifest plus a placeholder descriptor whether a file
 fills it or not. Done in this branch.
+
+### F. One Enlight LED buffer instead of two · **26.4 KB** · **taken**
+
+A run plays the LED waveform at full power, and drops to `LOW_POWER_FACTOR`
+for the rest of the run once a cycle saturates.  Each power used to have its
+own whole-cycle DMA buffer, 31.2 KB apiece — yet every buffer was one
+2,400-byte period copied thirteen times.  `EnlightLedWave` now keeps one
+period of each power and one DMA buffer, which the cycle task rewrites from
+the other period when a run changes power: 31.2 + 2 × 2.4 KB against 62.4 KB.
+
+What the DMA sends is byte-for-byte what the two buffers sent; only the moment
+the bytes are written moved.  The rewrite runs in the cycle task, after both
+transfers of a cycle have completed and before either of the next is queued,
+so nothing is reading the buffer and the LED/ADC start sequence is untouched.
+The cost is time, not data:
+
+- **Switch to low power** (mid-run, only on a run that saturates): the
+  rewrite lengthens one gap between two cycles, a gap that already holds the
+  whole Goertzel pass over the previous cycle, and the next cycle discards
+  its first period for settling anyway.  Enlight test mode logs how long it
+  took (`lowPowerSwitchUs()`), so the bench can see what the gap grew by.
+- **Back to full power** (the next run): inside the 2 ms AFE warm-up that
+  every run already waits out, so it costs that run nothing.
+
+The DMA buffer must stay DMA-capable and word-aligned, as `heap_caps_malloc`
+returns it.  Otherwise the SPI driver copies it into a same-sized bounce
+buffer on every transfer — the RAM saved here, asked for again at every cycle.
 
 ### Rejected: shrinking `RADIO_MAX_PAYLOAD`
 

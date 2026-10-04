@@ -16,6 +16,9 @@
 #   strip      — the totem LED strip's one-shot queue: several animations
 #                triggered together play in order instead of replacing
 #                one another.
+#   ledwave    — the optics LED buffer: one DMA buffer holds a whole cycle
+#                of exactly the requested power, rewritten only when the
+#                power changes.
 #   luagame    — loads every real game file through the real
 #                LightAir_LuaGame binding (real Lua 5.5 core) and drives
 #                a scripted FFA session through the synthesized
@@ -45,13 +48,14 @@ FW_SRC := $(ROOT)/src/lua/LightAir_LuaGame.cpp \
           $(ROOT)/src/input/LightAir_InputCtrl.cpp \
           $(ROOT)/src/input/SpiAdcSensor.cpp \
           $(ROOT)/src/enlight/SpiAdcBus.cpp \
+          $(ROOT)/src/enlight/EnlightLedWave.cpp \
           $(ROOT)/src/ui/player/display/LightAir_DisplayCtrl.cpp \
           $(ROOT)/src/ui/player/LightAir_UICtrl.cpp
 
 PROGS := $(BUILD)/prog_base0.bin
 
-.PHONY: all games totemvm radio strip luagame clean
-all: games totemvm radio strip luagame
+.PHONY: all games totemvm radio strip ledwave luagame clean
+all: games totemvm radio strip ledwave luagame
 	@echo "ALL HOST TESTS PASS"
 
 games:
@@ -86,6 +90,13 @@ $(BUILD)/test_strip: test_strip.cpp $(ROOT)/src/ui/totem/strip/LightAir_LEDStrip
 
 strip: $(BUILD)/test_strip
 	$(BUILD)/test_strip
+
+$(BUILD)/test_ledwave: test_ledwave.cpp $(ROOT)/src/enlight/EnlightLedWave.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+ledwave: $(BUILD)/test_ledwave
+	$(BUILD)/test_ledwave
 
 $(BUILD)/test_luagame: test_luagame.cpp $(FW_SRC) $(LUA_OBJ)
 	@mkdir -p $(BUILD)

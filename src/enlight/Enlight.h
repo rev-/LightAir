@@ -1,6 +1,7 @@
 #pragma once
 #include "../config.h"
 #include "../nvs_config.h"
+#include "EnlightLedWave.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
@@ -18,7 +19,6 @@ static constexpr uint32_t ADC_BYTES_PER_CONV = 2;
 static constexpr uint32_t ADC_PIPELINE_DELAY = 1;
 static constexpr uint32_t ADC_CHANNELS       = 3;
 static constexpr uint32_t ADC_CLKS_PER_CONV  = 16;
-static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 
 // GOERTZ_GRAIN: period_clocks must be a multiple of ADC_CLKS_PER_CONV*ADC_CHANNELS=48
 // so that every period contains an exact integer number of R/G/B ADC triples.
@@ -29,7 +29,6 @@ static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 // ledFreqHz and ledClockHz are chosen accordingly.
 static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 
-static constexpr float    PDM_AMPLITUDE   = 0.95f;
 static constexpr int32_t  KERN_MAG        = 2048;
 
 // ----------------------------------------------------------------
@@ -110,6 +109,11 @@ public:
     uint32_t goertzPeriod()    const { return _goertzPeriod;    }
     uint32_t periodsPerCycle() const { return _periodsPerCycle; }
     bool     usedLowPower()    const { return _useLowPower;     }
+
+    // How long the last run's switch to low power took, in µs: the rewrite of
+    // the LED buffer between two cycles, which is what that one gap grew by.
+    // 0 when the run never switched.  A bench diagnostic (Enlight test mode).
+    uint32_t lowPowerSwitchUs() const { return _lowSwitchUs;    }
 
     // True while a run() is in progress or its result has not yet been consumed by poll().
     // Non-destructive: does not clear the result. Use this for loop conditions.
@@ -299,17 +303,17 @@ private:
     EnlightColorCoords  _colorCoords   = {0.0f, 0.0f};
     float               _rangeEstM     = 0.0f;  // see rangeEstM(); set by classify()
 
-    // LED DIO SPI
+    // LED DIO SPI.  One DMA buffer for both powers, rewritten by dmaTask
+    // between cycles when a run changes power — see EnlightLedWave.
     spi_device_handle_t _ledDevice    = nullptr;
-    uint8_t*            _ledTxBuf    = nullptr;   // full-power PDM buffer
-    uint8_t*            _ledTxBufLow = nullptr;   // 1/10-amplitude PDM buffer
+    EnlightLedWave      _ledWave;
     size_t              _ledBufBytes = 0;
     spi_transaction_t   _ledTrans    = {};
-    spi_transaction_t   _ledTransLow = {};
 
     // Adaptive power state (reset each run())
     bool      _useLowPower    = false;
     float     _cycleNormScale = 1.0f;  // 1.0 = full power, 10.0 = low-power normalisation
+    uint32_t  _lowSwitchUs    = 0;     // see lowPowerSwitchUs(); written by dmaTask
 
     // ADC SPI
     spi_device_handle_t _adcDevice   = nullptr;
@@ -347,8 +351,7 @@ private:
     struct TaskArgs { Enlight* self; };
     TaskArgs        _taskArgs      = {};
 
-    bool          generateWaveform();                            // allocates both buffers and fills them
-    bool          generateWaveform(uint8_t* buf, float ampScale); // fills one buffer at the given amplitude scale
+    bool          generateWaveform();   // sizes the cycle, allocates the DMA buffers and fills them
     void          buildAdcTxBuffer();
     void          processAdcCycle();
     EnlightResult classify();
