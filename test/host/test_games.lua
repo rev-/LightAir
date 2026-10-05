@@ -1902,6 +1902,154 @@ do
   print("OK   strength      every game that takes hits weighs them by strength, area hits by band, past immunity")
 end
 
+-- ================================================================
+--   Virus: clean on clean is friendly fire; a clean beam puts a virus
+--   down; it comes back by touching a totem, or on time with none.
+-- ================================================================
+do
+  local function fail(what, msg)
+    failures = failures + 1
+    print(string.format("  FAIL %-12s %s: %s", "virus down", what, msg))
+  end
+  local function check(cond, what, msg) if not cond then fail(what, msg) end end
+  local function has(list, x)
+    for _, v in ipairs(list) do if v == x then return true end end
+    return false
+  end
+  local function fresh()
+    libcache = {}
+    local g = dofile(ROOT .. "virus.lua")
+    local v = {}
+    for _, c in ipairs(g.config) do v[c.id] = c.default end
+    for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
+    clock = 0
+    out.radio, out.ui, out.shows = {}, {}, {}
+    g.on_begin(v)
+    return g, v, { state = g.initial_state }
+  end
+  -- The runner's rule pass: first match from the current state wins.
+  local function rules(g, v, st)
+    for _, r in ipairs(g.rules) do
+      if r.from == st.state and r.when(v) then
+        if r.action then r.action(v) end
+        st.state = r.to
+        return true
+      end
+    end
+    return false
+  end
+  local function lit(sender, tag, area)
+    return mk_pkt{ sender = sender, area = area,
+                   payload = { area and 2 or 1, area and 1 or 0, tag, 0, area and 1 or nil } }
+  end
+  local function touches()
+    local n = 0
+    for _, m in ipairs(out.radio) do
+      if m[1] == "bcast" and m[2] == la.msg.TOTEM_TOUCH and m[3] == 55 and m[4] == 0 then n = n + 1 end
+    end
+    return n
+  end
+  local MSG = la.msg
+  local S = { CLEAN = 0, VIRUS = 1, GAME_END = 2, DOWN = 3 }
+
+  -- Config: the down time, as asked.
+  do
+    local g = dofile(ROOT .. "virus.lua")
+    local c
+    for _, x in ipairs(g.config) do if x.id == "virus_respawn_secs" then c = x end end
+    check(c and c.default == 30 and c.min == 10 and c.max == 100 and c.step == 10, "config",
+          "virus_respawn_secs is not 30 s (10..100, step 10)")
+  end
+
+  -- Clean on clean: friendly fire, nothing moves.
+  local g, v, st = fresh()
+  local r = g.on_message[S.CLEAN][MSG.LIT](v, lit(3, 0))
+  check(r == 4 and not rules(g, v, st), "friend", "a clean beam on a clean player did something")
+  out.ui = {}
+  g.on_reply[MSG.LIT][r](v, mk_pkt{ sender = 3 })
+  check(has(out.ui, "Friend"), "friend", "the shooter did not hear the friendly-fire cue")
+  r = g.on_message[S.CLEAN][MSG.LIT](v, lit(3, 0, true))
+  check(r == 4 and not rules(g, v, st), "friend", "a clean area hit on a clean player did something")
+
+  -- Infected by a viral beam, then shooting as a virus credits an infection.
+  r = g.on_message[S.CLEAN][MSG.LIT](v, lit(1, 1))
+  check(r == la.hit.SHONE and rules(g, v, st) and st.state == S.VIRUS, "infect",
+        "a viral beam did not make this player the virus")
+  local before = v.infections
+  g.on_reply[MSG.LIT][la.hit.SHONE](v, mk_pkt{ sender = 3 })
+  check(v.infections == before + 1, "infect", "a virus's knock-out did not count as an infection")
+
+  -- A viral beam on a virus: nothing.  A clean one: down.
+  r = g.on_message[S.VIRUS][MSG.LIT](v, lit(1, 1))
+  check(r == 3 and not rules(g, v, st), "down", "a viral beam affected a virus")
+  out.shows, out.ui = {}, {}
+  r = g.on_message[S.VIRUS][MSG.LIT](v, lit(3, 0))
+  check(r == la.hit.SHONE, "down", "a clean beam on a virus is not a knock-out (SHONE)")
+  check(rules(g, v, st) and st.state == S.DOWN, "down", "a clean beam did not put the virus down")
+  check(v.respawn_ms == 30000 and has(out.shows, "Wait to respawn") and has(out.shows, "LIT by P3")
+        and has(out.ui, "Down"), "down", "the down wait, its bar or its tray is wrong")
+  check(g.on_message[S.DOWN][MSG.LIT](v, lit(3, 0)) == 5, "down", "a down virus took another hit")
+
+  -- Waiting: no touch, and a stray touch answer does not respawn it.
+  out.radio = {}
+  clock = 10000; g.update[S.DOWN](v)
+  check(touches() == 0, "wait", "a touch went out before the wait was over")
+  g.on_reply[MSG.TOTEM_TOUCH][0](v, mk_pkt{ sender = 254 })
+  check(not rules(g, v, st) and st.state == S.DOWN, "wait", "a touch answer respawned a virus still waiting")
+
+  -- Wait over: touch once a second, "Go to a totem"; an answer is the respawn.
+  out.shows = {}
+  clock = 30000; g.update[S.DOWN](v)
+  check(touches() == 1 and has(out.shows, "Go to a totem"), "touch",
+        "the wait is over but no touch [55, ACK] went out, or the tray was not told")
+  clock = 30500; g.update[S.DOWN](v)
+  check(touches() == 1, "touch", "a second touch went out inside the second")
+  clock = 31000; g.update[S.DOWN](v)
+  check(touches() == 2, "touch", "no touch after a second without an answer")
+  check(not rules(g, v, st), "touch", "the virus respawned without an answer")
+  out.ui = {}
+  v.energy = 0
+  g.on_reply[MSG.TOTEM_TOUCH][0](v, mk_pkt{ sender = 254 })
+  check(rules(g, v, st) and st.state == S.VIRUS and v.energy == v.energy_max and has(out.ui, "Up"),
+        "touch", "a totem's answer did not bring the virus back, refilled")
+
+  -- A clean player's view: putting a virus down is no infection.
+  do
+    local g2, v2 = fresh()
+    local before2 = v2.infections
+    out.shows = {}
+    g2.on_reply[MSG.LIT][la.hit.SHONE](v2, mk_pkt{ sender = 5 })
+    check(v2.infections == before2 and has(out.shows, "P5 is DOWN!"), "credit",
+          "a clean player's knock-out counted as an infection, or was not shown")
+  end
+
+  -- A clean SPLASH's area puts a virus down too.
+  do
+    local g3, v3, st3 = fresh()
+    g3.on_message[S.CLEAN][MSG.LIT](v3, lit(1, 1)); rules(g3, v3, st3)
+    local r3 = g3.on_message[S.VIRUS][MSG.LIT](v3, lit(3, 0, true))
+    check(r3 == la.hit.SHONE and rules(g3, v3, st3) and st3.state == S.DOWN, "area",
+          "a clean SPLASH's area hit did not put the virus down")
+  end
+
+  -- No totems in the match: back on time, no touch.
+  do
+    local real = la.totem_for_role
+    la.totem_for_role = function() return 0 end
+    local g4, v4, st4 = fresh()
+    la.totem_for_role = real
+    g4.on_message[S.CLEAN][MSG.LIT](v4, lit(1, 1)); rules(g4, v4, st4)
+    g4.on_message[S.VIRUS][MSG.LIT](v4, lit(3, 0)); rules(g4, v4, st4)
+    out.radio = {}
+    clock = clock + 29000; g4.update[S.DOWN](v4)
+    check(not rules(g4, v4, st4), "no totems", "back before the time was up")
+    clock = clock + 1000; g4.update[S.DOWN](v4)
+    check(touches() == 0 and rules(g4, v4, st4) and st4.state == S.VIRUS, "no totems",
+          "with no totems the virus did not come back on time (or touched)")
+  end
+  print("OK   virus down    friendly fire; a clean beam or area puts a virus down; back by a totem's answer, or on time without totems")
+end
+
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")
 local keys = {}
 for k in pairs(totem_sizes) do keys[#keys+1] = k end

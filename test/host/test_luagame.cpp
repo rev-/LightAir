@@ -1994,6 +1994,67 @@ int main() {
         g_millisStep = 0;
     }
 
+    // ---- 24. Virus: down by a clean beam, back by touching a totem ------
+    // Through the real binding, radio and runner: this device (player 2) is
+    // patient zero; a clean LIT puts it down; once virus_respawn_secs is up
+    // it touches (single-hop 0xF4 [55, ACK]) once a second; a totem's 0xF5
+    // answer — matched by the radio against the touch it echoes — brings it
+    // back.  The totem side is test_totemdriver's.
+    {
+        FakeDisplay          raw8;
+        LightAir_DisplayCtrl d8(raw8);
+        LightAir_InputCtrl   in8;
+        LightAir_RadioTestTransport tr8;
+        LightAir_Radio       rad8(tr8, 2, 0x42, 0, 0);
+        rad8.begin();
+        LightAir_GameRunner  run8;
+        run8.clearRoster();
+        for (uint8_t id = 1; id <= 4; id++) run8.addToRoster(id);
+        run8.clearTotems();
+        run8.addTotem(254, TotemRoleId_BONUS(), 1);
+
+        CHECK(shared.load("games/virus.lua"), "virus loads for the down test");
+        const LightAir_Game& vg = shared.descriptor();
+        CHECK(vg.drawnPlayerCount == 1, "virus draws patient zero");
+        if (vg.drawnPlayerCount == 1) *vg.drawnPlayerVars[0] = 2;
+        g_millisStep = 1;
+        run8.begin(vg, d8, in8, rad8, nullptr);
+
+        std::vector<LightAir_RadioTestTransport::SentEntry> touches;
+        auto step8 = [&](uint32_t ms) {
+            g_millis += ms; run8.update();
+            while (tr8.hasSent()) {
+                LightAir_RadioTestTransport::SentEntry e = tr8.popSent();
+                if (e.pkt.msgType == RadioMsg::MSG_TOTEM_TOUCH) touches.push_back(e);
+            }
+        };
+        step8(20);
+        CHECK(*vg.currentState == 1, "patient zero starts as the virus");
+
+        const uint8_t clean[4] = { 1, 0, 0, 0 };            // strength 1, BASE, tag 0
+        tr8.push(3, 0, 0, RadioMsg::MSG_LIT, 0x42, 70000, 0, clean, 4);
+        step8(20);
+        CHECK(*vg.currentState == 3, "a clean beam puts the virus down");
+
+        for (int i = 0; i < 29; i++) step8(1000);
+        CHECK(touches.empty(), "no touch while the down time runs");
+        for (int i = 0; i < 20 && touches.empty(); i++) step8(100);
+        CHECK(touches.size() == 1, "the wait over, the down virus touches");
+        if (!touches.empty()) {
+            const RadioPacket& t = touches[0].pkt;
+            CHECK(touches[0].dstMac[0] == 0xFF && t.resend == 0 && t.payloadLen == 2 &&
+                  t.payload[0] == 55 && t.payload[1] == TotemTouch::ACK,
+                  "the touch is a single-hop broadcast [55, ACK]");
+            CHECK(*vg.currentState == 3, "still down until a totem answers");
+            const uint8_t ack[2] = { TotemTouch::ACK, TotemRoleId_BONUS() };
+            tr8.push(254, 0, 0, RadioMsg::MSG_TOTEM_TOUCH + 1, 0x42, t.timestamp, 0, ack, 2);
+            step8(20);
+            step8(20);
+            CHECK(*vg.currentState == 1, "a totem's answer brings the virus back");
+        }
+        g_millisStep = 0;
+    }
+
     printf(failures == 0 ? "\nLUAGAME HOST TESTS PASS\n" : "\n%d FAILURES\n", failures);
     return failures == 0 ? 0 : 1;
 }

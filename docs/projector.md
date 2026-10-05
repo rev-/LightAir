@@ -228,7 +228,8 @@ from a handler, a rule or `update`, with this player as centre and
 originator.  It returns false from inside an area hit's handler.
 
 **Virus.**  An area hit carries its policy's `role_tag` (SPLASH: 0), so in
-Virus it is a clean hit and has no effect by Virus's own rule today.
+Virus it is a clean hit: nothing to a clean player, and down for a virus —
+so a clean SPLASH puts down the viruses standing near the one it hits.
 
 Guards, each with a test that fails when it is removed:
 
@@ -514,9 +515,10 @@ in the rule that takes a player out (IN→OUT). It drops every projector a
 BONUS can hand out, lifts DIM, and puts the baseline back in hand with its
 own banked pool. Projectors declared `bonus = false` (a role such as VIRUS,
 a practice TRIAL) are kept. It must run before a respawn writes the pool,
-or the respawn would fill the powered projector instead. `reset()` lifts DIM too. Virus has no OUT
-state, so it lifts DIM on infection. Lifting does not refill the pool; the
-ordinary recharge does.
+or the respawn would fill the powered projector instead. `reset()` lifts DIM too. In Virus a clean
+player leaves play by infection, so DIM lifts there; a virus calls
+`proj.strip` when it goes down, which keeps its VIRUS projector. Lifting
+does not refill the pool; the ordinary recharge does.
 
 A MALUS LIFE takes the player out with no player to credit, so the
 "LIT by …" line reads `LIT by TOTEM`: `std.pickup_effect` calls the game's

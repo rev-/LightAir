@@ -71,8 +71,8 @@ bystander.  Hand the shooter SPLASH from a BONUS totem set to SPLASH
 | 3.8 | Area hits open no immunity window | 3.1, then the shooter hits the bystander directly at once | the direct hit lands (−1) |
 | 3.9 | Other games | Repeat 3.1 in freeforall, flag and upkeep | same behaviour |
 
-In Virus a SPLASH area hit is a clean hit, so it has no effect there by
-Virus's own rule.
+In Virus a SPLASH area hit is a clean hit: it puts viruses down (§5.9) and
+does nothing to clean players.
 
 Bring back: the distances at which the 2-life and 1-life bands actually
 switch (RSSI bands −55 / −70 dBm), since body shadowing moves them.
@@ -94,6 +94,30 @@ whose option is changed with O between checks.
 | 4.4 | No recharge of its own | Claim FAST, leave the trigger alone for 30 s | energy only drains |
 | 4.5 | Going out drops it | Get shone out, wait for the respawn | back with the standard energy icon and 100 energy |
 | 4.6 | SPLASH area | Third player ~1 m from the target of a SPLASH hit | bystander −100 (2 × LitCost) |
+
+---
+
+## 5. Virus: down, and back at a totem
+
+A clean player's beam (or a clean SPLASH's area) puts a virus down for
+`virus_respawn_secs` (Respawn in the menu, default 30 s); then the virus
+walks to any totem and is back when the totem answers its touch.  Three
+players and one BONUS totem; Virus at its defaults.
+
+| # | Check | How | Pass |
+|---|---|---|---|
+| 5.1 | Friendly fire | A clean player shines another clean player | no effect; the shooter hears the friendly-fire cue |
+| 5.2 | Down | A clean player shines the virus | virus: "Down" cue, red pulse stops, DOWN bar filling over 30 s, "Wait to respawn" / "LIT by …"; shooter: "<virus> is DOWN!" |
+| 5.3 | No early respawn | The down virus stands at the totem during the 30 s | nothing happens |
+| 5.4 | Back at a totem | Wait out the 30 s, then walk to the totem | tray switches to "Go to a totem"; within ~2 m the totem plays the chaser in the virus's colour and the virus is back ("Up", red pulse, energy full) |
+| 5.5 | Too far | Wait out the 30 s at ~5 m from the totem | nothing until the virus walks closer |
+| 5.6 | Pickup untouched | Respawn at a BONUS totem that is READY | it stays READY: a clean player can still claim it right after |
+| 5.7 | Cooldown no obstacle | Respawn at a BONUS totem just claimed (in cooldown) | the chaser plays and the virus is back |
+| 5.8 | No totems | A match with no totems assigned | the virus is back when the 30 s are up, on the spot |
+| 5.9 | SPLASH | A clean player holding SPLASH (BONUS) shines a virus standing ~1 m from another virus | both go down; the shooter sees both "is DOWN!" |
+
+Bring back: how far from the totem the touch is answered (gate −55 dBm),
+since the totem's antenna and the player's body move it.
 
 ---
 
