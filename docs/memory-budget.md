@@ -90,7 +90,12 @@ build. It is reported per game in the load log.
 
 Ranked by size, with what makes each safe or not.
 
-### A. `DisplayDefaults::MAX_SETS` 32 → 9, `MAX_BINDINGS` 8 → 4 · **~16.8 KB**
+### A. `DisplayDefaults::MAX_SETS` 32 → 9, `MAX_BINDINGS` 8 → 4 · **~16.8 KB** · **not pursued**
+
+Not pursued: F, G and H already bring the heaviest ruleset under the N4's
+ceiling, so the display tables stay as they are.  Kept here for the
+measurements, and for the leak note below, which comes first if this is
+ever reopened.
 
 The largest single object in the firmware, and both dimensions are far above
 their real ceilings.
@@ -129,14 +134,16 @@ The boot scan runs before any game is realized, and `peekManifest` leaves the
 instance unloaded, so `s_loadedGame` can do both jobs. One instance, one
 trampoline slot, ~7.2 KB back.
 
-### C. `ESPNOW_RECV_QUEUE` 16 → 8 · **~2 KB**
+### C. `ESPNOW_RECV_QUEUE` 16 → 8 · **~2 KB** · **not pursued**
+
+Not pursued, like D: F–H cover the need, so the radio keeps its headroom.
 
 `Entry { uint8_t data[250]; int len; int8_t rssi; }` × 16. Halving it is two
 kilobytes, but this is the buffer that absorbs bursts between `radio.poll()`
 calls and the cost of getting it wrong is dropped packets under load. Measure
 the real high-water mark before touching it.
 
-### D. `RADIO_MAX_PENDING` 10 → 6 · **~2 KB**
+### D. `RADIO_MAX_PENDING` 10 → 6 · **~2 KB** · **not pursued**
 
 Shrinks both `_pending[]` and `RadioReport::events[]`, each of which holds a
 full 250-byte packet per slot. Same caveat: this is the depth of outstanding
@@ -218,12 +225,18 @@ declare. Not worth it while §A and §B are on the table.
 
 ## 4. Summary
 
-| | now | after A + B |
-|---|---:|---:|
-| static objects | ~51 KB | **~27 KB** |
-| peak during a game load | ~55 KB | ~55 KB |
+| | | |
+|---|---|---:|
+| **taken** | E `MAX_GAMES` 50 → 16 | ~6.4 KB static |
+| | F one Enlight LED buffer | 26.4 KB heap |
+| | G libraries without debug information | ~10 KB per load |
+| | H string table at two per bucket | ~2 KB per load |
+| **not pursued** | A display sets, C and D radio queues | (~20.8 KB) |
+| **open** | B drop the second `LightAir_LuaGame` | ~7.2 KB static |
 
-A and B together return roughly **24 KB** of internal SRAM, neither of them
-reducing any limit the firmware can actually reach: 9 binding sets is the Lua
-state ceiling, 4 cells is the screen, and the scanner instance is 7 KB of
-arrays that a manifest peek never reads.
+F returns the most and costs no limit at all; G and H come off every load
+of a ruleset that takes both libraries.  On the host model the heaviest
+ruleset (upkeep) now keeps 81.5 KB of Lua, and freeforall, the lightest of
+the std games, 69.0 KB.  What the device actually has left is
+`docs/bench-checklist.md` §1–§2, still owed on hardware: those numbers
+decide whether B is ever needed.
