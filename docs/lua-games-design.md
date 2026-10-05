@@ -578,6 +578,13 @@ Full model, semantics, wire encoding, versioning and failure modes:
   exhausted heap.  A successful load then logs the ruleset's cost —
   `loaded 'X' (typeId 0x8, 57 KB of Lua)` — after a full collection, so
   serial answers "how much of the device does this game take" directly.
+  The shipped libraries are compiled **without debug information**: `la.lib`
+  strips `std.lua` and `projector.lua` of line tables and local names right
+  after compiling them, which is ~10 KB of every load on the N4 projectors.
+  An error raised inside a library therefore names the file but no line
+  (`projector.lua:-1: attempt to compare string with number`); the line
+  that matters is the game-file call that handed the library the bad value,
+  and game files are never stripped.
 - **HTTP exchange** (`GameFileServer`): the Settings → "Share games" menu
   entry (next to Calibration and ID/DM) starts a SoftAP
   (`LightAir-<PLAYERSHORT>`, password `lightair`) + `WebServer.h` on

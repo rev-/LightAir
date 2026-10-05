@@ -41,6 +41,7 @@ runs the pure-Lua game files under the system lua5.4 interpreter; only
 | File | Failure mode it exercises |
 |---|---|
 | `faulty.lua` | runtime faults mid-match: `update` errors every tick, and the lit handler errors *after* a partial mutation — faults must be counted per call-site, pre-error effects must stand, and the match must continue |
+| `libdebug_lib.lua` / `libdebug_game.lua` | an error inside a stripped library names the library but no line; an error in the game file keeps its line and local name |
 | `faulty_begin.lua` | a failing `on_begin` — the one fatal fault: the game must refuse to play (forced straight into `scoring_state`) |
 
 `totemvm.lua` is the reference encoder (the executable spec of the

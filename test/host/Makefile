@@ -39,6 +39,7 @@ LUA_OBJ  := $(patsubst $(ROOT)/src/libs/lua-5.5.0/src/%.c,$(BUILD)/lua/%.o,$(LUA
 
 FW_SRC := $(ROOT)/src/lua/LightAir_LuaGame.cpp \
           $(ROOT)/src/lua/LightAir_LuaKernel.cpp \
+          $(ROOT)/src/lua/LightAir_LuaStrip.cpp \
           $(ROOT)/src/lua/LightAir_TotemEncoder.cpp \
           $(ROOT)/src/lua/LightAir_LuaEngine.cpp \
           $(ROOT)/src/game/LightAir_GameRunner.cpp \

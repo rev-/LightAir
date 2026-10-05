@@ -174,6 +174,22 @@ The DMA buffer must stay DMA-capable and word-aligned, as `heap_caps_malloc`
 returns it.  Otherwise the SPI driver copies it into a same-sized bounce
 buffer on every transfer — the RAM saved here, asked for again at every cycle.
 
+### G. Libraries without debug information · **~10 KB per load** · **taken**
+
+`la.lib` strips `std.lua` and `projector.lua` of line tables, local names
+and upvalue names straight after compiling them (`stripLuaDebug`,
+`LightAir_LuaGame.cpp`).  Measured on a 32-bit build with the ESP32 heap's
+per-block overhead: −9.6 to −10 KB on every ruleset that loads both.  Errors
+inside a library lose their line (`projector.lua:-1: …`); game files keep
+everything, since their messages are what a player debugs with.
+
+### H. String table at two strings per bucket · **~2 KB per load** · **taken**
+
+A loaded ruleset interns ~600 strings, which at Lua's stock load factor of
+one doubles the bucket array to 1,024 pointers.  `lstring.c` now grows it at
+two per bucket (the shrink threshold in `lgc.c` is unchanged), holding it at
+512: −1.9 KB, chains of two on lookup.
+
 ### Rejected: shrinking `RADIO_MAX_PAYLOAD`
 
 237 bytes per packet is what makes the radio structures large, and it looks

@@ -570,6 +570,7 @@ int LightAir_LuaGame::l_lib(lua_State* L) {
 #endif
     if (loadLuaFile(L, path) != LUA_OK)
         return lua_error(L);                               // message already on top
+    stripLuaDebug(L);                                      // see LuaGameInternal.h
     lua_call(L, 0, 1);                                     // run chunk -> module
 
     // The chunk closure and everything the parse allocated behind it are

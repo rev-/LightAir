@@ -19,9 +19,11 @@ struct lua_State;
 //   LightAir_TotemEncoder.cpp `totems` table → TotemVM program
 //                             serializer (wire format:
 //                             docs/totem-behavior-handshake.md)
+//   LightAir_LuaStrip.cpp     stripLuaDebug, the one piece that needs
+//                             the Lua core's internal headers
 //
 // Nothing in this header is public API — include it only from those
-// three files.
+// files.
 // ----------------------------------------------------------------
 
 class LightAir_LuaGame;
@@ -98,3 +100,19 @@ int lookupTotemRole(const char* name);
 // Returns a lua_load status with the message on the stack, exactly
 // like luaL_loadfile.  Host builds read the working directory.
 int loadLuaFile(lua_State* L, const char* path);
+
+// ---- Dropping a library's debug information ---------------------
+//
+// Strips the function on top of the stack — and every function nested
+// in it — of its line table and its local and upvalue names, freeing
+// them.  la.lib calls it on std.lua and projector.lua straight after
+// compiling them: on the N4 projectors that debug information is ~10 KB
+// of the two libraries' cost, held for the whole match, in a heap that
+// decides whether the heavier rulesets load at all.
+//
+// The price is in error messages raised inside a library: they still
+// name the file but lose the line ("projector.lua:-1: attempt to
+// compare number with string"), and lose local-variable names.  Game
+// files are never stripped — they are the code players edit, and the
+// failure screen's "game.lua:52: ..." is the only debugger they have.
+void stripLuaDebug(lua_State* L);

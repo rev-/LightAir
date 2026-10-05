@@ -36,6 +36,20 @@ in 1.4–1.6.
 
 ---
 
+## 2. Lua libraries without debug info, string table at two per bucket
+
+`std.lua` and `projector.lua` are stripped of debug information after they
+compile, and Lua's string table grows later.  Host-measured: about 12 KB off
+every ruleset that loads both libraries (upkeep 109.9 → 97.9 KB).
+
+| # | Check | How | Pass |
+|---|---|---|---|
+| 2.1 | Every game loads and plays | Each game in the list: start it, play a minute | no load failure, no Lua fault on serial |
+| 2.2 | Lua cost dropped | Compare `LuaGame: loaded '…' (N KB of Lua)` with the same line on an older build | about 10–12 KB lower per game (freeforall and tirobersaglio, which load one library, less) |
+| 2.3 | Library errors still name the library | Upload a custom game that calls `proj.define{ max_owned = "3" }` | failure screen reads `projector.lua:-1: attempt to compare …` |
+
+---
+
 ## Data to collect while there
 
 Not pass/fail — these calibrate the host memory model used to size the next

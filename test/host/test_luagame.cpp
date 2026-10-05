@@ -222,6 +222,30 @@ int main() {
         CHECK(shared.loadError()[0] == 0, "a successful load clears the reason");
     }
 
+    // ---- 1c'. Libraries lose their debug information; games keep it ----
+    // la.lib strips std.lua and projector.lua of line tables and local
+    // names after compiling them (~10 KB the N4 projectors cannot spare).
+    // The cost is confined to errors raised inside a library: they name
+    // the file but no line.  An error in the game file must keep both its
+    // line and the local's name — that message is a player's debugger.
+    {
+        CHECK(!shared.load("test/host/fixtures/libdebug_lib.lua"),
+              "a library error fails the load");
+        const std::string libWhy = shared.loadError();
+        CHECK(strncmp(libWhy.c_str(), "projector.lua:", 14) == 0,
+              "an error inside a library still names the library");
+        CHECK(libWhy.size() > 14 && !(libWhy[14] >= '1' && libWhy[14] <= '9'),
+              "...but no line: the library's line table is gone");
+
+        CHECK(!shared.load("test/host/fixtures/libdebug_game.lua"),
+              "a game-file error fails the load");
+        const char* why = shared.loadError();
+        CHECK(strncmp(why, "libdebug_game.lua:9:", 20) == 0,
+              "an error in the game file keeps its line");
+        CHECK(strstr(why, "local 't'") != nullptr, "...and the local's name");
+        printf("  library error: %s\n  game error:    %s\n", libWhy.c_str(), why);
+    }
+
     // ---- 1d. A ruleset is source, never bytecode --------------------
     // Nothing in this project ships precompiled Lua, and undumping is a
     // way straight out of a sandbox that has already had load, loadfile
