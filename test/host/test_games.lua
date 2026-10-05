@@ -698,6 +698,24 @@ do
           "going out kept the projector or moved the pool")
   end
 
+  -- ---- recharge modes: refill, ramp, none — anything else refuses ---
+  -- A mode the projector does not know would otherwise recharge as a ramp.
+  do
+    for _, prof in ipairs({ { id = 1, name = "X", recharge = "consumed" },
+                            { id = 0, recharge = "consumed" },
+                            { id = 2, name = "Y", recharge = "refil" },
+                            { id = 3, name = "Z", recharge = function() end } }) do
+      local ok, err = pcall(fresh, { vars = BASE_VARS, profiles = { prof } })
+      check(not ok and tostring(err):find("recharge must be", 1, true), "recharge",
+            "recharge = " .. tostring(prof.recharge) .. " was accepted")
+    end
+    local ok = pcall(fresh, { vars = BASE_VARS,
+                              profiles = { { id = 1, name = "A", recharge = "ramp" },
+                                           { id = 2, name = "B", recharge = "none" },
+                                           { id = 0, recharge = "refill" } } })
+    check(ok, "recharge", "a known recharge mode was refused")
+  end
+
   -- ---- range is a label: nothing gates on distance ----------------
   do
     clock, shine_busy_until = 0, 0
@@ -803,7 +821,7 @@ do
     for _, field in ipairs({ "id", "name", "icon", "cycles", "cooldown_ms",
                              "range_m", "cost", "max_energy", "recharge",
                              "recharge_delay_ms", "ready_ms", "strength",
-                             "target_immunity_ms", "area", "shine_action" }) do
+                             "area", "shine_action" }) do
       check(S[field] ~= nil, "SPLASH", "the standard profile declares no " .. field)
     end
     check(S.area.bands and #S.area.bands >= 2, "SPLASH",

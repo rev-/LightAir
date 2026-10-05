@@ -38,10 +38,9 @@ local last_drain       = 0
 local drain_interval   = 1000
 
 -- Outflow's projector: energy is ammo AND life total, so it never
--- refills on its own — it comes back only by eliminating someone or by
--- respawning.  That is "none" rather than "consumed": the projector must
--- survive zero so the player can respawn holding it.  The optics are the
--- ones this game always set by hand.
+-- refills on its own (recharge = "none") — it comes back only by
+-- eliminating someone or by respawning.  The optics are the ones this
+-- game always set by hand.
 --
 -- shared_pool: a powered projector from a BONUS totem draws from this same
 -- pool — the player's life — instead of bringing its own.  Picking one up

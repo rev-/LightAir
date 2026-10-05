@@ -34,7 +34,7 @@ The projector's C++ half is the eight calls above.
 Under a Lua game it would have to re-export its whole surface —
 give/select/drop/next/energy/owns/… — as roughly nineteen verbs, plus
 struct marshalling for profiles declared in a game file, and it could not
-accept `is_available` as a Lua function at all.
+accept a profile field written as a Lua function of the game's vars at all.
 
 ---
 

@@ -79,8 +79,6 @@ proj.define{
       role_tag = 1 },
   },
 }
-local was_active       = false   -- trigger release edge for recharge
-local release_at       = 0
 
 local function is_virus() return virus_set[la.my_id()] == true end
 
@@ -217,9 +215,6 @@ return {
     virus_count      = 0
     pending_infected = false
     proj.reset(vars)                -- CLEAN in hand, pool full, optics pushed
-    last_shine       = 0
-    was_active       = false
-    release_at       = 0
 
     -- Everybody knows patient zero: the DM drew it and sent it at Start.
     virus_set[vars.virus_id] = true

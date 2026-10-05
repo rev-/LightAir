@@ -43,7 +43,7 @@ local var          = {}    -- role -> var id, see define()
 -- ---- Inventory ---------------------------------------------------
 -- Slot 1 is the baseline: always held, never counted against
 -- max_owned, never evicted.  Slots 2..n are powered.
-local slots        = {}    -- { id, energy, acquired_at, last_shine_at, ramp_at }
+local slots        = {}    -- { id, energy, acquired_at, ramp_at }
 local active_idx   = 1
 
 -- ---- Shared pool -------------------------------------------------
@@ -65,7 +65,6 @@ local release_at   = 0
 -- on the very tick they emptied it.
 local awaiting_release = false
 local ready_at     = 0     -- millis before which trigger() refuses
-local lit_at       = {}    -- target id -> millis of the last accepted hit
 local evicted_name = nil
 
 -- ---- DIM (a MALUS) -----------------------------------------------
@@ -96,7 +95,6 @@ local LIM = {
   strength          = { 0,  10 },
   role_tag          = { 0,  255 },
   rssi_min          = { -120, 0 },     -- dBm; 0 = no gate
-  target_immunity_ms = { 0, 30000 },
   ready_ms          = { 0,  5000 },
   -- Milliseconds, not seconds: a recharge quantised to whole seconds is far
   -- too coarse to separate a projector that snaps back from one that
@@ -114,6 +112,8 @@ local RETIRED = {
   recharge_delay_secs = "recharge_delay_ms",
   recharge_secs       = "recharge_ms",
 }
+
+local RECHARGE = { refill = true, ramp = true, none = true }
 
 local function clamp(v, lo, hi)
   if v < lo then return lo end
@@ -172,7 +172,6 @@ local BASELINE = {
   strength            = 1,
   role_tag            = 0,
   rssi_min            = 0,
-  target_immunity_ms  = 0,
   ready_ms            = 0,
 }
 
@@ -270,10 +269,10 @@ P.standard = {
     -- Handling: heavy to bring up after a switch.
     ready_ms = 600,
 
-    -- Effect.  target_immunity_ms stops the same target absorbing the
-    -- direct hit twice inside one burst's echo.
-    strength           = rel("strength"),
-    target_immunity_ms = 1500,
+    -- Effect: a direct hit weighs what the baseline's does.  Repeat hits
+    -- on one target are the ruleset's immunity window, as for every
+    -- projector.
+    strength = rel("strength"),
 
     -- The area its hits throw around whoever they land on: an area policy
     -- for the firmware's area service (la.area_policy, registered by
@@ -397,14 +396,14 @@ P.standard = {
 --                reload = "reload", reload_ms = "reload_ms" },
 --       max_owned = 3,
 --       shared_pool = false,          -- true: one pool for all (see above)
---       is_available = function(id) return ... end,   -- optional
 --       profiles = { { id = 1, name = "STRONG", ... }, ... },
 --     }
 --
 --   Profile id 0 is the baseline.  Declaring one replaces the standard
---   baseline's values in place; it is still structural and still
---   undroppable, so a baseline may not be recharge = "consumed" — that
---   would ask for it to be deleted at zero.
+--   baseline's values in place; it is still structural and undroppable.
+--
+--   recharge is "refill" (the default), "ramp" or "none"; anything else
+--   refuses the load rather than recharging some other way.
 -- ================================================================
 function P.define(decl)
   cfg  = decl or {}
@@ -428,11 +427,14 @@ function P.define(decl)
               "' uses retired field '" .. old .. "'; use '" .. new .. "'", 0)
       end
     end
+    if p.recharge ~= nil and not RECHARGE[p.recharge] then
+      error("projector profile '" .. tostring(p.name or p.id) ..
+            "': recharge must be \"refill\", \"ramp\" or \"none\"", 0)
+    end
     local id = p.id or 0
     if id == 0 then
       -- Retune the baseline in place rather than naming a different id:
       -- everything else treats slot 1 as structural.
-      if p.recharge == "consumed" then p.recharge = "none" end
       for k, v in pairs(p) do defs[0][k] = v end
     else
       for k in pairs(LIM) do clamp_field(p, k) end
@@ -484,14 +486,6 @@ local function find_slot(id)
     if slots[i].id == id then return i end
   end
   return nil
-end
-
--- The baseline is never consulted: it is the fallback, so a baseline that
--- could report itself unavailable would leave the player unable to shine.
-local function available(id)
-  if id == 0 then return true end
-  if not cfg.is_available then return true end
-  return cfg.is_available(id) and true or false
 end
 
 -- ---- Energy ------------------------------------------------------
@@ -612,7 +606,7 @@ function P.owned_count() return #slots end
 -- own (a BONUS pickup has a sound of its own).
 function P.select(vars, id, quiet)
   local idx = find_slot(id)
-  if not idx or not available(id) then return false end
+  if not idx then return false end
   if idx ~= active_idx then
     activate(vars, idx)
     if not quiet then la.ui("ProjectorChange") end
@@ -639,7 +633,7 @@ function P.give(vars, id)
   if #slots - 1 >= cfg.max_owned then evict_oldest(vars) end
   local now = la.now()
   slots[#slots + 1] = { id = id, energy = max_energy(vars, defs[id]),
-                        acquired_at = now, last_shine_at = now, ramp_at = now }
+                        acquired_at = now, ramp_at = now }
   return true
 end
 
@@ -773,14 +767,8 @@ end
 
 local function cycle(vars, dir)
   if #slots <= 1 then return end
-  for step = 1, #slots - 1 do
-    local idx = ((active_idx - 1 + dir * step) % #slots) + 1
-    if available(slots[idx].id) then
-      activate(vars, idx)
-      la.ui("ProjectorChange")
-      return
-    end
-  end
+  activate(vars, ((active_idx - 1 + dir) % #slots) + 1)
+  la.ui("ProjectorChange")
 end
 
 function P.next(vars) cycle(vars,  1) end
@@ -799,13 +787,11 @@ end
 function P.reset(vars)
   if not cfg then P.define{} end
   local now = la.now()
-  slots = { { id = 0, energy = 0, acquired_at = now,
-              last_shine_at = now, ramp_at = now } }
+  slots = { { id = 0, energy = 0, acquired_at = now, ramp_at = now } }
   active_idx  = 1
   was_active  = false
   release_at  = 0
   awaiting_release = false
-  lit_at      = {}
   evicted_name   = nil
   dimmed         = false
 
@@ -836,21 +822,6 @@ function P.result(vars)
 end
 
 -- ================================================================
---   Attacker-side anti-spam.
---
---   The window is per TARGET and deliberately survives a switch:
---   resetting it would turn switching into a way to bypass it.
--- ================================================================
-function P.may_light(vars, target)
-  local window = val(vars, active().target_immunity_ms, 0)
-  if window <= 0 then return true end
-  local t = lit_at[target]
-  return t == nil or (la.now() - t) >= window
-end
-
-function P.note_lit(target) lit_at[target] = la.now() end
-
--- ================================================================
 --   payload() — what a hit carries on the wire
 --
 --     la.send(target, MSG.LIT, proj.payload(vars))
@@ -875,7 +846,7 @@ end
 -- ================================================================
 local function tick_recharge(vars, p, now)
   local mode = p.recharge or "refill"
-  if mode == "none" or mode == "consumed" then return end
+  if mode == "none" then return end
 
   local max = max_energy(vars, p)
   local e   = get_energy(vars)
@@ -889,11 +860,6 @@ local function tick_recharge(vars, p, now)
     -- Waiting out the idle: the clock started at the release, which is
     -- exactly what the bar must show.
     publish_reload(vars, release_at, p)
-    return
-  end
-
-  if type(mode) == "function" then
-    mode(vars, now - release_at)
     return
   end
 
@@ -953,20 +919,12 @@ function P.tick(vars)
   if active_trigger
      and now >= ready_at
      and get_energy(vars) >= cost
-     and (cfg.can == nil or cfg.can(vars))
      and la.shine() then
     set_energy(vars, get_energy(vars) - cost)
     if var.spent then vars[var.spent] = (vars[var.spent] or 0) + cost end
     la.ui_enlight(la.shine_ms())
-    slots[active_idx].last_shine_at = now
-    pool_slot().ramp_at             = now
-    awaiting_release                = true
-
-    -- A spent "consumed" projector leaves, but never the baseline.
-    if p.recharge == "consumed" and get_energy(vars) <= 0 and active_idx ~= 1 then
-      P.drop(vars, P.active_id())
-      p = active()
-    end
+    pool_slot().ramp_at = now
+    awaiting_release    = true
   end
 
   -- The wait is anchored by the release that FOLLOWS a beam.  A press that
@@ -983,11 +941,6 @@ function P.tick(vars)
   -- Runs whatever the trigger is doing.  The one thing that stops it is a
   -- beam waiting for its release, because until then the wait has not begun.
   if not awaiting_release then tick_recharge(vars, pool_profile(), now) end
-
-  -- A projector that just became unavailable hands back to the baseline.
-  if active_idx ~= 1 and not available(P.active_id()) then
-    P.select(vars, 0)
-  end
 
   return active_trigger
 end
