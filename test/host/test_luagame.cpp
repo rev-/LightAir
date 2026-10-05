@@ -279,8 +279,9 @@ int main() {
     CHECK(game.monitorCount == 9, "ffa monitor count (incl. the respawn bar)");
     CHECK(game.ruleCount == 4, "ffa rule count");
     CHECK(game.behaviorCount == 3, "ffa behaviour rows (states 0..2)");
-    CHECK(game.directRadioRuleCount == 4,
-          "ffa direct rules (LIT in 2 states + the 2 pickup beacons)");
+    CHECK(game.directRadioRuleCount == 6,
+          "ffa direct rules (LIT in 2 states + the 2 pickup beacons + SPLASH "
+          "beside each LIT, added by the projector's load hook)");
     CHECK(game.replyRadioRuleCount == 2, "ffa reply rules (any + timeout)");
     CHECK(game.winnerVarCount == 2, "ffa winner vars");
     CHECK(game.totemRequirementCount == 2, "ffa totem slots");
@@ -1685,6 +1686,73 @@ int main() {
         CHECK(icon && *icon == ICON_ENERGY, "going out puts the standard glyph back");
 
         g_millisStep = 0;
+    }
+
+    // ---- Splash is the projector's, through the real loader ----
+    // projector.lua registers an la.on_load hook, and the loader runs it
+    // before reading the table: teams never mentions splash, yet its
+    // IN_GAME state must end up with a SPLASH handler the firmware routes
+    // to, and a LIT handler that bursts when a splashing projector's hit
+    // lands.  The Lua suite covers the rules; this covers the plumbing.
+    {
+        CHECK(shared.load("games/teams.lua"), "teams loads for the splash test");
+        const LightAir_Game& sg = shared.descriptor();
+        runner.setTeam(2, 0);                  // this device
+        runner.setTeam(3, 1);                  // the shooter of the direct hit
+        runner.setTeam(5, 1);                  // the shooter of the splash
+        *sg.currentState = sg.initialState;
+        sg.onBegin(disp, radio, &ui, runner);
+        int* slives = slotOf(sg, "lives");
+
+        auto inGame = [&](uint8_t msgType) -> const DirectRadioRule* {
+            for (uint8_t i = 0; i < sg.directRadioRuleCount; i++)
+                if (sg.directRadioRules[i].fromState == sg.initialState &&
+                    sg.directRadioRules[i].msgType == msgType)
+                    return &sg.directRadioRules[i];
+            return nullptr;
+        };
+        const DirectRadioRule* litRule = inGame(RadioMsg::MSG_LIT);
+        const DirectRadioRule* splRule = inGame(RadioMsg::MSG_SPLASH);
+        CHECK(litRule && litRule->onReceive, "teams handles LIT in play");
+        CHECK(splRule && splRule->onReceive,
+              "the loader routes SPLASH to the handler the projector added");
+
+        // Victim: a SPLASH-projector hit from player 3 lands and bursts.
+        RadioPacket lit = {};
+        lit.senderId = 3; lit.team = 1; lit.msgType = RadioMsg::MSG_LIT;
+        lit.payloadLen = 4; lit.payload[0] = 1; lit.payload[1] = 1;   // strength 1, SPLASH
+        if (litRule && litRule->onReceive && slives) {
+            const int before = *slives;
+            out = GameOutput();
+            litRule->onReceive(lit, /*rssi*/ -40, disp, out);
+            CHECK(*slives == before - 1, "the direct hit is the game's: one life");
+            bool burst = false;
+            for (uint8_t i = 0; i < out.radio.count; i++) {
+                const RadioOutMsg& m = out.radio.msgs[i];
+                if (m.isBroadcast && m.msgType == RadioMsg::MSG_SPLASH && m.resend == 0 &&
+                    m.payloadLen == 5 && m.payload[0] == 1 && m.payload[3] == 1 &&
+                    m.payload[4] == 3)
+                    burst = true;
+            }
+            CHECK(burst, "a landed SPLASH hit broadcasts a single-hop beacon naming its shooter");
+        }
+
+        // Bystander: player 9's beacon for player 5's shot, heard close by.
+        RadioPacket bcn = {};
+        bcn.senderId = 9; bcn.msgType = RadioMsg::MSG_SPLASH; bcn.payloadLen = 5;
+        bcn.payload[0] = 1;  bcn.payload[1] = 1;  bcn.payload[2] = 70;  // SPLASH, 1, -70 gate
+        bcn.payload[3] = 1;  bcn.payload[4] = 5;                       // direct, shooter 5
+        if (splRule && splRule->onReceive && slives) {
+            *slives = 3;
+            out = GameOutput();
+            splRule->onReceive(bcn, /*rssi*/ -50, disp, out);
+            CHECK(*slives == 1, "a close bystander takes the 2-hit band by the game's own rule");
+            bool again = false;
+            for (uint8_t i = 0; i < out.radio.count; i++)
+                if (out.radio.msgs[i].msgType == RadioMsg::MSG_SPLASH) again = true;
+            CHECK(!again, "the bystander's hit does not burst again");
+            CHECK(out.radio.replyCount == 0, "a splash beacon is never answered");
+        }
     }
 
     printf(failures == 0 ? "\nLUAGAME HOST TESTS PASS\n" : "\n%d FAILURES\n", failures);

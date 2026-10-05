@@ -409,6 +409,14 @@ animations are referenced by name inside those programs.
 **Loader** — `la.lib(name)` runs `/games/lib/<name>.lua` once per state and
 caches the result (there is no `require`/`package`).
 
+**Load hooks** — `la.on_load(fn)` registers `fn(game)` to run once, after the
+ruleset file has returned its table and before the firmware reads it; hooks
+run in registration order, protected, and an error refuses the load.  It is
+for behaviour that belongs to a library rather than to any one ruleset:
+`projector.lua` uses it to wire splash into every state that handles a LIT
+(see `docs/projector.md` §5), so no game file has to.  A hook may add to the
+table, and what it adds is read like the rest.
+
 During a **manifest peek** it returns an inert stand-in instead: a table
 answering any index or call with itself.  A peek reads three literal fields
 (`api`, `type_id`, `name`), but the chunk stating them is a whole game file,

@@ -886,14 +886,16 @@ local function splash_gate(s)
 end
 
 -- Victim side.  `pkt` is the incoming LIT packet and `event` is what just
--- happened to this player — "lit" for any accepted hit, "shone" for the
--- one that put them down.  A profile declares which it answers.
+-- happened to this player — "lit" for a hit taken, "shone" for the one
+-- that put them down.  A profile's `on` says which it answers: "lit" (the
+-- default) bursts on every hit that landed, the knock-out included;
+-- "shone" on the knock-out alone.
 function P.emit_splash(vars, pkt, event)
   if pkt.len < 2 then return false end
   local attacker_proj = pkt:byte(2)
   local s = splash_of(attacker_proj)
   if not s then return false end
-  if (s.on or "lit") ~= (event or "lit") then return false end
+  if s.on == "shone" and event ~= "shone" then return false end
 
   local now = la.now()
   if splash_sent_at and (now - splash_sent_at) < SPLASH_MIN_GAP_MS then return false end
@@ -940,6 +942,70 @@ function P.on_splash(vars, pkt)
   if gate > 0 and pkt.rssi < -gate then return nil, "far" end
   return pkt:byte(2)
 end
+
+-- ================================================================
+--   Splash belongs to the projector, not to the ruleset
+--
+--   No game file calls emit_splash or on_splash.  When a ruleset loads,
+--   before the firmware reads its table (la.on_load), every state that
+--   handles a LIT has that handler wrapped and gains a SPLASH handler:
+--
+--     victim     the game's own LIT handler decides whether the beam
+--                landed, and its reply says so; a hit that landed from a
+--                splashing projector then bursts.
+--     bystander  a beacon in reach becomes a hit from the SHOOTER, worth
+--                the band's share, handed to that same LIT handler — so
+--                lives, immunity, friendly fire and being out already mean
+--                what the ruleset says they mean.
+--
+--   The bystander's hit goes to the unwrapped handler, so it can never
+--   burst again, and its reply goes nowhere.  A state that handles SPLASH
+--   itself keeps its own handler.
+-- ================================================================
+-- The two LIT replies splash reads, the same in every ruleset that takes
+-- hits: the beam landed, or it landed and put this player down.  Any other
+-- reply (immune, friendly, already out, no effect) means it did not.
+local HIT_TAKEN, HIT_SHONE = 1, 2
+
+-- A bystander's share of the shot, shaped like the LIT the shooter would
+-- have sent them: [strength, projector id, role tag, no rssi gate], from
+-- the shooter.  The reach was already judged on the beacon.
+local function splash_hit(pkt, share)
+  local id      = pkt:byte(1)
+  local p       = defs[id]
+  local tag     = (p and type(p.role_tag) == "number") and p.role_tag or 0
+  local payload = { share, id, tag, 0 }
+  local shooter = pkt:byte(5)
+  return { sender = shooter, team = la.team_of(shooter), msg = la.msg.LIT,
+           len = #payload, rssi = pkt.rssi,
+           byte = function(_, i) return payload[i] end }
+end
+
+la.on_load(function(game)
+  -- A malformed on_message is the loader's to report, in its own words.
+  if type(game.on_message) ~= "table" then return end
+  local LIT, SPLASH = la.msg.LIT, la.msg.SPLASH
+  for _, handlers in pairs(game.on_message) do
+    local lit = type(handlers) == "table" and handlers[LIT]
+    if type(lit) == "function" then
+      handlers[LIT] = function(vars, pkt)
+        local r = lit(vars, pkt)
+        if r == HIT_TAKEN or r == HIT_SHONE then
+          P.emit_splash(vars, pkt, (r == HIT_SHONE) and "shone" or "lit")
+        end
+        return r
+      end
+      if handlers[SPLASH] == nil then
+        handlers[SPLASH] = function(vars, pkt)
+          -- The shooter's own beam never splashes them.
+          if pkt.len < 5 or pkt:byte(5) == la.my_id() then return end
+          local share = P.on_splash(vars, pkt)
+          if share and share > 0 then lit(vars, splash_hit(pkt, share)) end
+        end
+      end
+    end
+  end
+end)
 
 -- ================================================================
 --   Recharge

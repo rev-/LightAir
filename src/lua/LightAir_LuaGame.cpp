@@ -527,6 +527,18 @@ int LightAir_LuaGame::addSlot(lua_State* L, const char* id, bool text) {
 int LightAir_LuaGame::loaderBody(lua_State* L) {
     LightAir_LuaGame* g = (LightAir_LuaGame*)lua_touserdata(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
+
+    // la.on_load hooks first: they may add to the table (projector.lua
+    // wires splash into on_message), and what they add must be read.
+    lua_rawgeti(L, LUA_REGISTRYINDEX, g->_loadHooksRef);
+    const int hooks = lua_absindex(L, -1);
+    for (lua_Integer i = 1, n = (lua_Integer)lua_rawlen(L, hooks); i <= n; i++) {
+        lua_rawgeti(L, hooks, i);
+        lua_pushvalue(L, 2);
+        lua_call(L, 1, 0);
+    }
+    lua_pop(L, 1);
+
     g->loadFromTable(L, 2);
     return 0;
 }

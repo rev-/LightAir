@@ -50,6 +50,29 @@ every ruleset that loads both libraries (upkeep 109.9 → 97.9 KB).
 
 ---
 
+## 3. Splash is the projector's
+
+A SPLASH projector now bursts in every game, with no game-file wiring: the
+player it hits broadcasts a beacon, and players near them lose lives by
+distance (close: 2, further: 1) under the game's own rules.  Needs three
+players: shooter, victim, bystander.  Hand the shooter SPLASH from a BONUS
+totem set to SPLASH (Totems submenu, O key).
+
+| # | Check | How | Pass |
+|---|---|---|---|
+| 3.1 | Bystander close | Teams, friendly fire off; victim and bystander on the other team, ~1 m apart; shooter hits the victim with SPLASH | victim −1 life; bystander −2 |
+| 3.2 | Bystander further | Same, bystander ~5–10 m from the victim | bystander −1 |
+| 3.3 | Out of reach | Bystander well away (> 20 m) | bystander unchanged |
+| 3.4 | Friendly fire | Bystander on the shooter's team, friendly fire off | bystander unchanged |
+| 3.5 | No self-splash | Shooter standing next to the victim, friendly fire on | shooter unchanged |
+| 3.6 | Missed or refused hit | Shooter hits a victim who is immune (second hit within 3 s) | no bystander loses anything |
+| 3.7 | Other games | Repeat 3.1 in freeforall and flag | same behaviour |
+
+Bring back: the distances at which the 2-life and 1-life bands actually
+switch (RSSI bands −55 / −70 dBm), since body shadowing moves them.
+
+---
+
 ## Data to collect while there
 
 Not pass/fail — these calibrate the host memory model used to size the next

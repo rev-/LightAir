@@ -585,6 +585,24 @@ int LightAir_LuaGame::l_lib(lua_State* L) {
     return 1;
 }
 
+// la.on_load(fn) — fn(game) runs once, after the ruleset file has returned
+// its table and before the firmware reads it (loaderBody).  It is how a
+// library attaches behaviour that belongs to it rather than to any one
+// ruleset: projector.lua uses it to wire splash into every game that
+// handles a LIT, so no game file has to.  Hooks run in registration order,
+// protected — an error refuses the load like any other.  A manifest peek
+// never reaches them: it does not run loaderBody, and libraries are inert
+// stand-ins there anyway.
+int LightAir_LuaGame::l_on_load(lua_State* L) {
+    LightAir_LuaGame* g = self(L);
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, g->_loadHooksRef);
+    lua_pushvalue(L, 1);
+    lua_rawseti(L, -2, (lua_Integer)lua_rawlen(L, -2) + 1);
+    lua_pop(L, 1);
+    return 0;
+}
+
 /* =========================================================
  *   KERNEL REGISTRATION
  * ========================================================= */
@@ -615,6 +633,7 @@ void LightAir_LuaGame::registerKernel() {
         { "show", l_show }, { "clear_tray", l_clear_tray },
         { "background", l_background },
         { "lib", LightAir_LuaGame::l_lib },
+        { "on_load", LightAir_LuaGame::l_on_load },
     };
     for (const Verb& v : kVerbs) {
         lua_pushlightuserdata(L, this);
@@ -726,4 +745,8 @@ void LightAir_LuaGame::registerKernel() {
     // ---- la.lib cache ----
     lua_newtable(L);
     _libCacheRef = luaL_ref(L, LUA_REGISTRYINDEX);
+
+    // ---- la.on_load hooks ----
+    lua_newtable(L);
+    _loadHooksRef = luaL_ref(L, LUA_REGISTRYINDEX);
 }

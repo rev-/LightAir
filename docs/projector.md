@@ -173,6 +173,38 @@ the point is the two-band beacon it triggers around whoever it lands on. It
 carries its own icon, its own shine feedback, a long cooldown and a slow
 refill, so it reads and feels different in the hand.
 
+### Splash is the projector's, not the ruleset's
+
+No game file calls `emit_splash` or `on_splash`.  `projector.lua` registers
+an `la.on_load` hook, which the firmware runs on the game table before it
+reads it, and that hook wires splash into every state that handles a LIT:
+
+- **Victim.** The state's LIT handler is wrapped.  The game's own handler
+  still decides what the beam did; when its reply says the hit landed, a
+  hit from a splashing projector bursts.  The profile's `on` picks which
+  hits: `"lit"` (the default, SPLASH's) bursts on every hit that landed,
+  the knock-out included; `"shone"` on the knock-out alone.
+- **Bystander.** The state gains a SPLASH handler.  A beacon in reach
+  becomes a hit from the **shooter**, worth the band's share, handed to
+  the same, unwrapped LIT handler — so lives, immunity, friendly fire and
+  being out mean exactly what that ruleset says they mean.  Because it
+  goes to the unwrapped handler it can never burst again, and its reply
+  goes nowhere.  A shooter is never splashed by their own beam.
+
+A state that declares its own SPLASH handler keeps it.
+
+**The reply convention.**  Splash learns whether a beam landed from the LIT
+reply, and reads two codes: **1 = the hit was taken, 2 = it put the player
+down**.  Every other reply (immune, friendly, already out, no effect) means
+it did not land.  All the lives games already answered that way; Virus moved
+its "no effect" reply off 1 so a clean player's harmless hit does not burst.
+A new ruleset that takes hits should keep 1 and 2 for those two meanings.
+
+**Not decided yet.**  A splash knock-out does not credit the shooter: the
+bystander's reply goes nowhere, because the shooter never sent that player
+anything to reply to.  In Virus a SPLASH hit carries no virus tag, so splash
+is a no-op there by Virus's own rule.
+
 ---
 
 ## 6. The standard catalogue
@@ -256,7 +288,7 @@ so an N-step action ran N times too long. The catalogue's signatures are now
 two rising ticks (FAST), a chirp into a held tone (LONG), three descending
 notes (STRONG), and a punch that flares (SPLASH).
 
-Five guards, each with a test that fails when it is removed:
+Six guards, each with a test that fails when it is removed:
 
 | Guard | Why |
 |---|---|
@@ -265,6 +297,7 @@ Five guards, each with a test that fails when it is removed:
 | a player never splashes themselves | the emitter already took the direct hit |
 | one beacon per shot, rate-limited | repeated hits would flood the channel |
 | the shooter's id travels | friendly fire is judged against whoever fired, not the victim who relayed |
+| a shooter's own beacon never hits them | with friendly fire on, nothing else would spare them |
 
 **Bands are the reach.** When a profile declares them, the outermost band
 is the cutoff and the flat `rssi` is just the one-band shorthand; the gate
