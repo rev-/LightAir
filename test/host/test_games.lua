@@ -2029,6 +2029,15 @@ do
   out.ui = {}
   g.on_reply[MSG.LIT][6](v, mk_pkt{ sender = 3 })
   check(has(out.ui, "Immune"), "grace", "shooting a virus in its grace is not heard as Immune")
+  -- Nor can it shine in its grace; it can right after.
+  la.trigger_down = function() return true end
+  shine_busy_until = 0
+  local e0 = v.energy
+  clock = back + 4900; g.update[S.VIRUS](v)
+  check(v.energy == e0, "grace", "a virus shone inside its grace")
+  clock = back + 5000; g.update[S.VIRUS](v)
+  la.trigger_down = function() return false end
+  check(v.energy == e0 - 1, "grace", "a virus could not shine once its grace was over")
   -- After it: a viral beam puts a virus down (VDOWN), like a clean one.
   clock = back + 5000
   r = g.on_message[S.VIRUS][MSG.LIT](v, lit(1, 1))
@@ -2045,18 +2054,25 @@ do
           "points", "a clean player's knock-out is not +2 (or counted as an infection)")
   end
 
-  -- The last clean player: +10 when the game ends on them, not on time.
+  -- Still clean at the end: +10, whatever ended it — on time with others
+  -- clean too, or on the last clean player.  A virus at the end: nothing.
   do
     local g5, v5, st5 = fresh()
     v5.clean_left = 2; v5.time_left = 0
-    local p5 = v5.points
-    check(rules(g5, v5, st5) and st5.state == S.GAME_END and v5.points == p5, "last clean",
-          "time running out with two clean players gave a bonus")
+    out.shows = {}
+    check(rules(g5, v5, st5) and st5.state == S.GAME_END and v5.points == 10
+          and has(out.shows, "Still clean! +10"), "still clean",
+          "a player clean when time ran out got no +10")
     local g6, v6, st6 = fresh()
     v6.clean_left = 1
-    out.shows = {}
-    check(rules(g6, v6, st6) and st6.state == S.GAME_END and v6.points == 10
-          and has(out.shows, "Last clean! +10"), "last clean", "the last clean player got no +10")
+    check(rules(g6, v6, st6) and st6.state == S.GAME_END and v6.points == 10, "still clean",
+          "the last clean player got no +10")
+    local g7, v7, st7 = fresh()
+    g7.on_message[S.CLEAN][MSG.LIT](v7, lit(1, 1)); rules(g7, v7, st7)
+    v7.time_left = 0
+    local p7 = v7.points
+    check(rules(g7, v7, st7) and st7.state == S.GAME_END and v7.points == p7, "still clean",
+          "a virus got the clean bonus")
   end
 
   -- Winners: points, then time stayed clean.
@@ -2088,7 +2104,7 @@ do
     check(touches() == 0 and rules(g4, v4, st4) and st4.state == S.VIRUS, "no totems",
           "with no totems the virus did not come back on time (or touched)")
   end
-  print("OK   virus down    friendly fire; any beam or a clean area puts a virus down; back by a totem's answer (or on time without totems) with 5 s of grace; points 5/1/2, last clean +10")
+  print("OK   virus down    friendly fire; any beam or a clean area puts a virus down; back by a totem's answer (or on time without totems) with 5 s of grace; points 5/1/2, clean at the end +10; no shining in grace")
 end
 
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")

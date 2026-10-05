@@ -23,12 +23,13 @@
 -- totems in the match, the virus is back when the time is up.  A clean
 -- SPLASH puts down the viruses standing near the one it hits.
 --
--- A virus is back with 5 s of grace: no beam or area puts it down again.
--- A virus may also put another virus down.
+-- A virus is back with 5 s of grace: no beam or area puts it down again,
+-- and it cannot shine either.  A virus may also put another virus down.
 --
 -- Points: a virus infecting a clean player +5, a virus putting a virus down
 -- +1, a clean player putting a virus down +2 (a SPLASH's area downs too),
--- and +10 to the last clean player when the game ends on them.
+-- and +10 to every player still clean when the game ends — on time, on
+-- the last clean player, or ended by the DM.
 --
 -- The game ends when at most one clean player is left, or when the
 -- time runs out.  Winner: most points; tie-break: whoever stayed clean
@@ -62,9 +63,9 @@ local MSG_INFECTED = 0x16
 local R = { SHONE = la.hit.SHONE, VDOWN = 3, FRIEND = 4, DOWN = 5, SAFE = 6 }
 
 -- Points, by what the shooter did (see the header).
-local PTS = { INFECT = 5, CLEAN_DOWNS_VIRUS = 2, VIRUS_DOWNS_VIRUS = 1, LAST_CLEAN = 10 }
+local PTS = { INFECT = 5, CLEAN_DOWNS_VIRUS = 2, VIRUS_DOWNS_VIRUS = 1, STILL_CLEAN = 10 }
 
--- A virus back from DOWN cannot be put down again for this long.
+-- A virus back from DOWN can neither be put down nor shine for this long.
 local GRACE_MS = 5000
 
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
@@ -374,15 +375,13 @@ return {
   rules = {
     { from = S.CLEAN, to = S.GAME_END,
       when   = function(vars) return vars.time_left <= 0 or last_clean(vars) end,
+      -- Also the action the runner runs when the DM ends the match from
+      -- here: whatever ends the game, a player still clean gets the bonus.
       action = function(vars)
-        -- Still clean at the end: full survival time.
         vars.clean_secs = vars.game_time - vars.time_left
+        vars.points     = vars.points + PTS.STILL_CLEAN
         game_over(vars)
-        -- The game ended on the last clean player: this one.
-        if vars.clean_left == 1 then
-          vars.points = vars.points + PTS.LAST_CLEAN
-          la.show("Last clean! +" .. PTS.LAST_CLEAN, 3000)
-        end
+        la.show("Still clean! +" .. PTS.STILL_CLEAN, 3000)
       end },
     { from = S.CLEAN, to = S.VIRUS,
       when   = function() return pending_infected end,
@@ -438,6 +437,7 @@ return {
       proj.tick(vars)
     end,
     [S.VIRUS] = function(vars)
+      if la.now() < safe_until then return end     -- grace: no shining
       local target = proj.result(vars)
       if target then la.send(target, MSG.LIT, proj.payload(vars)) end
       proj.tick(vars)
