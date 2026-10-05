@@ -1,4 +1,6 @@
 profiles:
+  # A development board with 8 MB of flash and 8 MB of PSRAM.  Not what the
+  # field runs: it hides every RAM problem the N4 below has.
   ESP32-S3-WROOM-1-N8R8:
     fqbn: esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=8M,PartitionScheme=default_8MB,DebugLevel=none,PSRAM=opi,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default
     platforms:
@@ -9,17 +11,27 @@ profiles:
       - ArduinoLog (1.1.1)
       - AUnit (1.7.1)
     programmer: esptool
-  # The projectors in the field: 8 MB flash like N8R8, but NO PSRAM.
-  # Same flash layout, one changed option — and that option reaches the
-  # firmware, not just the build.  The Lua allocator asks PSRAM first and
-  # falls back to internal RAM without a word, so here a ruleset and its
-  # libraries (~50 KB of prototypes and tables, reported by the load log)
-  # come out of the same pool as the radio, the display and the stacks.
-  # Game sources are streamed into the parser rather than buffered whole
-  # for exactly this reason, and GameDefaults::MAX_GAMES is sized for
-  # this board rather than for the roomy one; keep both that way.
-  ESP32-S3-WROOM-1-N8:
-    fqbn: esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=8M,PartitionScheme=default_8MB,DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default
+  # The devices in the field, projectors and totems alike (one image):
+  # ESP32-S3 N4 — 4 MB flash and NO PSRAM.
+  #
+  # PartitionScheme=no_ota ("No OTA (2MB APP/2MB SPIFFS)"): one 2 MB app
+  # slot and a 1.9 MB data partition labelled "spiffs", which is what
+  # GameStore mounts as LittleFS for /games.  The firmware has no OTA path,
+  # so the second app slot of the default 4 MB layout would be dead space,
+  # and that layout's 1.25 MB app slot is nearly full already.  Moving a
+  # device between layouts moves the filesystem: games uploaded to it are
+  # lost and the stock ones are rewritten at the next boot.
+  #
+  # No PSRAM reaches the firmware, not just the build: the Lua allocator
+  # asks PSRAM first and falls back to internal RAM without a word, so a
+  # ruleset and its libraries (~70-100 KB, reported by the load log) come
+  # out of the same pool as the radio, the display and the stacks.  Game
+  # sources are streamed into the parser rather than buffered whole for
+  # exactly this reason, and GameDefaults::MAX_GAMES is sized for this
+  # board rather than for the roomy one; keep both that way
+  # (docs/memory-budget.md).
+  ESP32-S3-WROOM-1-N4:
+    fqbn: esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=cdc,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=4M,PartitionScheme=no_ota,DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default
     platforms:
       - platform: esp32:esp32 (2.0.17)
     libraries:
@@ -40,4 +52,4 @@ profiles:
       - ArduinoLog (1.1.1)
       - AUnit (1.7.1)
     programmer: esptool
-default_profile: ESP32-S3-WROOM-1-N8R8
+default_profile: ESP32-S3-WROOM-1-N4

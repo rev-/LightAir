@@ -538,8 +538,8 @@ Full model, semantics, wire encoding, versioning and failure modes:
 
 ## 6. Storage and exchange
 
-- **Filesystem**: LittleFS on the existing `default_8MB` partition scheme's
-  SPIFFS partition. Games live under `/games/stock/*.lua` (firmware-owned)
+- **Filesystem**: LittleFS on the data partition (label `spiffs`, 1.9 MB) of
+  the No OTA partition scheme the N4 boards use (`sketch.yaml`). Games live under `/games/stock/*.lua` (firmware-owned)
   and `/games/custom/*.lua` (player-owned); libraries live in `/games/lib/`.
   A few KB each; hundreds fit. Paths are LittleFS-relative, so every read
   goes through the `LittleFS` object — never `luaL_loadfile`/`fopen`, which
@@ -678,9 +678,10 @@ totem beacon replies, display bindings), `LightAir_Radio`, `DisplayCtrl`,
 `UICtrl`, input stack, Enlight, the wire protocol. A Lua FreeForAll device
 interoperates with a native FreeForAll device in the same match.
 
-Footprint: Lua core ≈ 150–200 KB flash (8 MB available); a loaded game state
-≈ 30–80 KB RAM, PSRAM-backed (8 MB available), hot objects cached in internal
-RAM by the allocator fallback ordering if latency ever shows up in profiling.
+Footprint: Lua core ≈ 150–200 KB flash, inside a 2 MB app partition; a
+loaded game state ≈ 70–100 KB of RAM, allocator overhead included.  The
+field boards (N4) have no PSRAM, so that is internal SRAM shared with the
+radio, the display and the stacks — see `docs/memory-budget.md`.
 
 ---
 

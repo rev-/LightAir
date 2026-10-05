@@ -422,6 +422,11 @@ the tick path touches a few hundred bytes of hot objects that live in cache;
 if profiling ever disagrees, the allocator can route small blocks to
 internal RAM first instead.
 
+The boards in the field (ESP32-S3 N4) have **no PSRAM**: there the first
+request always fails and every Lua block comes from internal SRAM, measured
+at 70–100 KB per loaded ruleset, allocator overhead included.
+`docs/memory-budget.md` tracks that budget.
+
 ---
 
 ## 8. Adding a `la.*` verb, end to end

@@ -1,6 +1,7 @@
 # RAM budget — where the internal SRAM goes
 
-The projectors are `ESP32-S3-WROOM-1-N8`: 8 MB flash, **no PSRAM**. Every
+The projectors and totems are ESP32-S3 N4 modules (`sketch.yaml` profile
+`ESP32-S3-WROOM-1-N4`): 4 MB flash in the No OTA layout, **no PSRAM**. Every
 allocation the firmware makes — the display bindings, the radio buffers, the
 Lua interpreter, the task stacks — comes out of the same ~512 KB of internal
 SRAM, most of which is already spoken for by the IDF, the WiFi/ESP-NOW stack

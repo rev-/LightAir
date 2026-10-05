@@ -20,11 +20,19 @@ NVS (see `sketches/LightAir_TotemProvisioning` to provision a totem).
 make build/debug/LightAir.ino.bin
 ```
 
-You can then upload the `LightAir.ino.bin` to the board using the Arduino IDE or Arduino CLI. For example:
+The default profile in `sketch.yaml` is the board in the field,
+`ESP32-S3-WROOM-1-N4`: 4 MB flash, no PSRAM, and the **No OTA** layout
+(2 MB app, 1.9 MB LittleFS for the games).  Upload with the same profile, so
+the flash options match the build:
 
 ```sh
-arduino-cli upload --input-file ./build/debug/LightAir.ino.bin -p /dev/ttyACM0 -b esp32:esp32:esp32s3
+arduino-cli upload --profile ESP32-S3-WROOM-1-N4 --input-dir ./build/debug -p /dev/ttyACM0 .
 ```
+
+In the Arduino IDE: board "ESP32S3 Dev Module", Flash Size 4MB, Partition
+Scheme "No OTA (2MB APP/2MB SPIFFS)", PSRAM disabled.  Changing the partition
+scheme on a device moves its filesystem: games uploaded to it are lost (the
+stock ones come back at the next boot).
 
 ### Host test suite (no hardware needed)
 The Lua game engine, the game files, the radio layer and the TotemVM are
