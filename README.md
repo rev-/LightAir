@@ -75,6 +75,7 @@ stored on the device's flash and exchangeable between devices over WiFi
 | understand or extend the C++/Lua boundary | `docs/lua-embedding-guide.md` (stack discipline, GC, sandbox; §8 is the add-a-verb recipe) |
 | understand or debug totem behaviour | `docs/totem-behavior-handshake.md` (TotemVM model + wire format; `test/host/totemvm.lua` is the executable reference encoder) |
 | see what the tests prove | `test/host/README.md` |
+| decide on a feature that exists but no game uses (build it or remove it) | `docs/parked-features.md` |
 
 ## Design guidelines
 ### Nonviolent semantics
