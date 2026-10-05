@@ -13,7 +13,7 @@ as Lua (Virus, and the two festival-stand rulesets under `games/custom/`):
 | `games/teams.lua` | teams, friendly fire, point reports, BASE respawn |
 | `games/flag.lua` | flag events, carry background alert, team announce |
 | `games/kingofhill.lua` | per-player CP slots, teamless BASE |
-| `games/outflow.lua` | energy-only, passive drain, a projector that never recharges |
+| `games/outflow.lua` | energy-only, passive drain, a projector that never recharges; powered projectors share the life pool (`shared_pool`) |
 | `games/upkeep.lua` | CP ownership, text monitor var ("myPts/enemyPts") |
 | `games/virus.lua` | new game: infection tag; uses a custom message id |
 | `games/custom/festasportsasso.lua` | stand ruleset, **not flashed**: a King of Hill that never ends — 500 s turns inside one endless match, restarted by an admin `<`+`>` chord |

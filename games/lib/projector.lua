@@ -46,6 +46,16 @@ local var          = {}    -- role -> var id, see define()
 local slots        = {}    -- { id, energy, acquired_at, last_shine_at, ramp_at }
 local active_idx   = 1
 
+-- ---- Shared pool -------------------------------------------------
+-- define{ shared_pool = true }: every projector the player holds draws
+-- from ONE pool, the baseline's — for a ruleset where the pool is the
+-- player's life (Outflow).  The pool's size, its recharge and DIM are the
+-- baseline's; each projector still brings its own optics, cost per beam,
+-- strength, feedback and area.  A pickup puts a projector in hand without
+-- touching the pool (a full pool would be a free heal), and switching
+-- moves no energy.  The pool's state (its ramp clock) lives in slot 1.
+local shared       = false
+
 -- ---- Live state --------------------------------------------------
 local was_active   = false
 local release_at   = 0
@@ -386,6 +396,7 @@ P.standard = {
 --       vars = { energy = "energy", spent = "energy_spent",
 --                reload = "reload", reload_ms = "reload_ms" },
 --       max_owned = 3,
+--       shared_pool = false,          -- true: one pool for all (see above)
 --       is_available = function(id) return ... end,   -- optional
 --       profiles = { { id = 1, name = "STRONG", ... }, ... },
 --     }
@@ -399,6 +410,7 @@ function P.define(decl)
   cfg  = decl or {}
   var  = cfg.vars or {}
   defs = {}
+  shared = cfg.shared_pool and true or false
 
   local base = {}
   for k, v in pairs(BASELINE) do base[k] = v end
@@ -462,6 +474,10 @@ end
 -- ---- Inventory helpers -------------------------------------------
 local function profile_of(idx) return defs[slots[idx].id] end
 local function active()        return profile_of(active_idx) end
+-- Whose economy the pool follows, and where its clock is kept: the
+-- projector in hand's, or with a shared pool always the baseline's.
+local function pool_profile()  return shared and defs[0] or active() end
+local function pool_slot()     return shared and slots[1] or slots[active_idx] end
 
 local function find_slot(id)
   for i = 1, #slots do
@@ -551,7 +567,8 @@ local function activate(vars, idx)
   active_idx = idx
 
   local p = active()
-  set_energy(vars, slots[idx].energy)
+  -- A shared pool stays put: it is never loaded from a slot.
+  if not shared then set_energy(vars, slots[idx].energy) end
 
   -- Optics.  Queued by the verb and applied in the OUTPUT phase, so this
   -- can never reconfigure Enlight mid-measurement.
@@ -569,7 +586,8 @@ local function activate(vars, idx)
   end
 
   ready_at = la.now() + val(vars, p.ready_ms, 0)
-  publish_reload(vars, 0, p)
+  -- A shared pool's reload clock is the pool's, and a switch leaves it be.
+  if not shared then publish_reload(vars, 0, p) end
 end
 
 local function evict_oldest(vars)
@@ -603,12 +621,15 @@ function P.select(vars, id, quiet)
 end
 
 -- Add at full energy, or refill if already held.  Keeps acquired_at on a
--- re-grant so restocking cannot be used to dodge eviction.
+-- re-grant so restocking cannot be used to dodge eviction.  With a shared
+-- pool there is nothing of its own to fill: the projector is added and
+-- the pool is left as it is.
 function P.give(vars, id)
   if not defs[id] then return false end
   if id == 0 then return true end                 -- always held already
 
   local held = find_slot(id)
+  if held and shared then return true end
   if held then
     slots[held].energy = max_energy(vars, defs[id])
     if held == active_idx then set_energy(vars, slots[held].energy) end
@@ -643,7 +664,10 @@ function P.set_dim(vars, on)
   local p = active()
   -- Re-push the optics for the projector in hand.
   la.shine_config{ cooldown_ms = cooldown_of(vars, p) }
-  if on then
+  if on and shared then
+    local m = max_energy(vars, defs[0])
+    if get_energy(vars) > m then set_energy(vars, m) end
+  elseif on then
     slots[active_idx].energy = get_energy(vars)
     for i = 1, #slots do
       local m = max_energy(vars, profile_of(i))
@@ -651,13 +675,14 @@ function P.set_dim(vars, on)
     end
     set_energy(vars, slots[active_idx].energy)
   end
-  publish_reload(vars, 0, p)
+  publish_reload(vars, 0, pool_profile())
 end
 
 function P.dimmed() return dimmed end
 
--- The pool of the projector in hand, as it stands (dimmed or not).
-function P.max_energy(vars) return max_energy(vars, active()) end
+-- The pool of the projector in hand — or the shared pool — as it stands
+-- (dimmed or not).
+function P.max_energy(vars) return max_energy(vars, pool_profile()) end
 
 -- ================================================================
 --   BONUS totem options.
@@ -669,19 +694,17 @@ function P.max_energy(vars) return max_energy(vars, active()) end
 --
 --   "LIFE", then the standard catalogue in id order, then the game's own
 --   profiles (id > 0) unless a profile says `bonus = false` — a practice
---   or role projector is not something a totem should hand out.  Pass
---   { projectors = false } for a ruleset where swapping the projector in
---   hand would break the game (its pool is the player's life).
+--   or role projector is not something a totem should hand out.  (A
+--   ruleset whose pool is the player's life offers them too, with
+--   define{ shared_pool = true }: picking one up then swaps no lives.)
 --
 --   Labels are cut to the menu's 8 characters; bonus_id() maps a label
 --   back to its projector, so a long custom name still resolves.
 --   Call after define().
 -- ================================================================
-function P.bonus_options(opts)
-  opts = opts or {}
+function P.bonus_options()
   local list = { "LIFE" }
   bonus_ids = {}
-  if opts.projectors == false then return list end
   local ids = {}
   for id, p in pairs(defs) do
     if id ~= 0 and p.bonus ~= false then ids[#ids + 1] = id end
@@ -789,6 +812,7 @@ function P.reset(vars)
   slots[1].energy = max_energy(vars, defs[0])
   activate(vars, 1)
   set_energy(vars, slots[1].energy)
+  publish_reload(vars, 0, defs[0])   -- activate() leaves a shared pool's alone
   if var.spent then vars[var.spent] = 0 end
   ready_at = 0                       -- no deploy delay on the opening beam
 end
@@ -895,7 +919,7 @@ local function tick_recharge(vars, p, now)
     step_ms = (max > 0) and (total_ms // max) or 0
   end
   if step_ms < 1 then step_ms = 1 end
-  local s = slots[active_idx]
+  local s = pool_slot()
   local ramp_from = release_at + delay_ms
   if s.ramp_at < ramp_from then s.ramp_at = ramp_from end
   while now >= s.ramp_at and get_energy(vars) < max do
@@ -935,7 +959,7 @@ function P.tick(vars)
     if var.spent then vars[var.spent] = (vars[var.spent] or 0) + cost end
     la.ui_enlight(la.shine_ms())
     slots[active_idx].last_shine_at = now
-    slots[active_idx].ramp_at       = now
+    pool_slot().ramp_at             = now
     awaiting_release                = true
 
     -- A spent "consumed" projector leaves, but never the baseline.
@@ -958,7 +982,7 @@ function P.tick(vars)
 
   -- Runs whatever the trigger is doing.  The one thing that stops it is a
   -- beam waiting for its release, because until then the wait has not begun.
-  if not awaiting_release then tick_recharge(vars, p, now) end
+  if not awaiting_release then tick_recharge(vars, pool_profile(), now) end
 
   -- A projector that just became unavailable hands back to the baseline.
   if active_idx ~= 1 and not available(P.active_id()) then

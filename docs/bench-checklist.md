@@ -72,12 +72,28 @@ bystander.  Hand the shooter SPLASH from a BONUS totem set to SPLASH
 | 3.9 | Other games | Repeat 3.1 in freeforall, flag and upkeep | same behaviour |
 
 In Virus a SPLASH area hit is a clean hit, so it has no effect there by
-Virus's own rule.  Outflow offers no projector bonus (its pool is the
-player's life), so no Outflow player can hold STRONG or SPLASH: its hit
-cost scales with strength, but nothing on the field can show it yet.
+Virus's own rule.
 
 Bring back: the distances at which the 2-life and 1-life bands actually
 switch (RSSI bands −55 / −70 dBm), since body shadowing moves them.
+
+---
+
+## 4. Outflow: powered projectors on the life pool
+
+Outflow's BONUS totems now hand out SPLASH, FAST, LONG and STRONG, and every
+projector draws from the one energy pool that is the player's life.  Two
+players; Outflow at its defaults (Energy 100, LitCost 50); a BONUS totem
+whose option is changed with O between checks.
+
+| # | Check | How | Pass |
+|---|---|---|---|
+| 4.1 | A pickup heals nothing | Drain to ~60, claim BONUS STRONG | "BONUS STRONG", STRONG icon in the energy cell, energy still ~60 |
+| 4.2 | Beams cost the life pool | Fire STRONG a few times | energy −1 per beam, as with the baseline |
+| 4.3 | Strength counts | The target claims BONUS LIFE first (→ 200), then takes a STRONG hit | target −150 |
+| 4.4 | No recharge of its own | Claim FAST, leave the trigger alone for 30 s | energy only drains |
+| 4.5 | Going out drops it | Get shone out, wait for the respawn | back with the standard energy icon and 100 energy |
+| 4.6 | SPLASH area | Third player ~1 m from the target of a SPLASH hit | bystander −100 (2 × LitCost) |
 
 ---
 

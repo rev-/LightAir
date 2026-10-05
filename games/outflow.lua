@@ -42,8 +42,14 @@ local drain_interval   = 1000
 -- respawning.  That is "none" rather than "consumed": the projector must
 -- survive zero so the player can respawn holding it.  The optics are the
 -- ones this game always set by hand.
+--
+-- shared_pool: a powered projector from a BONUS totem draws from this same
+-- pool — the player's life — instead of bringing its own.  Picking one up
+-- heals nothing, holding FAST recharges nothing, and each brings only its
+-- optics, its strength and its feedback.  Going out drops it (proj.strip).
 proj.define{
-  vars     = { energy = "energy", spent = "energy_spent" },
+  shared_pool = true,
+  vars     = { energy = "energy", spent = "energy_spent", icon = "energy_icon" },
   profiles = { { id = 0, name = "OUTFLOW",
                  cycles = 20, cooldown_ms = 20,
                  cost = 1, max_energy = "start_energy",
@@ -56,7 +62,7 @@ proj.define{
 local function my_start_energy(vars) return vars.start_energy end
 
 -- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
--- No lives: LIFE works on energy.  No projector bonuses (see totem_slots).
+-- No lives: LIFE works on energy.  A projector bonus puts it in hand.
 -- Who put us down, for the tray: a player's short name, or "TOTEM" for
 -- a MALUS LIFE.  Declared before the pickup helper, whose hook sets it.
 local shone_by = nil
@@ -97,10 +103,15 @@ return {
     { id = "shone_times",  default = 0   },
     { id = "depletions",   default = 0   },
     { id = "energy_spent", default = 0   },
+    -- The icon of the projector in hand (an la.icons value), written by
+    -- projector.lua and read by the energy cell: FAST, LONG, … replace
+    -- the standard energy glyph while they are the one in use.
+    { id = "energy_icon",  default = la.icons.ENERGY },
   },
 
   monitor = {
-    { var = "energy",       icon = "ENERGY", col = 0, row = 0, states = { S.IN_GAME } },
+    { var = "energy",       icon = "ENERGY", col = 0, row = 0, states = { S.IN_GAME },
+      icon_var = "energy_icon" },
     { var = "points",       icon = "SCORE",  col = 1, row = 0, states = { S.IN_GAME } },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
     -- Out: a bar filling over the respawn time, from the instant the
@@ -120,9 +131,9 @@ return {
   },
 
   totem_slots = {
-    -- The pool in hand IS the player's life here, so swapping projectors
-    -- would swap lives: BONUS offers LIFE only.
-    { role = "BONUS", min = 0, max = 16, options = proj.bonus_options{ projectors = false } },
+    -- LIFE (+start_energy, capped at twice it) and the powered
+    -- projectors, which share the life pool (see proj.define above).
+    { role = "BONUS", min = 0, max = 16, options = proj.bonus_options() },
     { role = "MALUS", min = 0, max = 16, options = std.malus_options() },
   },
   teams = 0,

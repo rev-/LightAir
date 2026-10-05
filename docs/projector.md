@@ -469,14 +469,30 @@ same reason, so a SPLASH bonus splashes wherever it is picked up.
 
 **`proj.bonus_options()`** builds the BONUS list: `LIFE`, the catalogue in
 id order, then the game's own profiles. A profile marked `bonus = false`
-(a practice or role projector: TRIAL, VIRUS) is left out.
-`{ projectors = false }` offers LIFE only, for a ruleset where the pool in
-hand *is* the player's life (Outflow): swapping the projector would swap
-lives. Labels are cut to the menu's 8 characters, and `proj.bonus_id(label)`
-maps them back.
+(a practice or role projector: TRIAL, VIRUS) is left out. Every game with
+pickups offers the catalogue, Outflow included (below). Labels are cut to
+the menu's 8 characters, and `proj.bonus_id(label)` maps them back.
 
 A projector bonus is `grant`ed: given at full energy and put in hand.
 `max_owned` still applies, so it may evict the oldest powered projector.
+
+**A shared pool: when the pool is the player's life.** In Outflow energy is
+ammo and life at once, so a projector bringing its own pool would swap the
+player's life on every pickup. `proj.define{ shared_pool = true }` gives
+every projector the player holds ONE pool, the baseline's:
+
+- its size, its recharge (Outflow's: none) and DIM are the baseline's; a
+  powered projector's own pool and recharge are never used, so holding
+  FAST heals nothing;
+- a pickup puts the projector in hand and leaves the pool as it is, and a
+  re-grant refills nothing: "full energy" would be a free heal;
+- switching moves no energy;
+- each projector keeps everything else: optics, cost per beam, strength,
+  ready delay, icon, feedback and area. A STRONG beam costs Outflow's 1
+  energy and lands as 3 × `lit_cost`.
+
+Going out still drops the powered projectors (`proj.strip`), and the pool
+stays where it was.
 
 **Feedback at the player.** The LCD names the effect for 2 s:
 `BONUS LIFE`, `BONUS <projector name>` (SPLASH, FAST, LONG, STRONG or the
@@ -487,7 +503,7 @@ out), and `MalusDim` for DIM. The grant is quiet
 (`proj.grant(vars, id, true)`), so `ProjectorChange` doesn't play on top.
 
 **DIM** (`proj.set_dim(vars, on)`) halves the pool of every held projector
-(current energy is clamped down to it). It doubles the recharge wait and
+(current energy is clamped down to it; a shared pool is halved once). It doubles the recharge wait and
 the ramp, and doubles the cooldown. A profile whose cooldown is 0
 gets `DIM.min_cooldown_ms` instead, because doubling
 nothing would not be "longer". The factors are constants at the top of

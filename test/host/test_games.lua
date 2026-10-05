@@ -656,6 +656,48 @@ do
     check(P.active_id() == 0, "inventory", "dropping the active one did not fall back")
   end
 
+  -- ---- shared pool: one pool for every projector held ---------------
+  -- define{ shared_pool = true } (Outflow): the pool is the baseline's and
+  -- the player's life.  A pickup must not fill it, a switch must not move
+  -- it, a powered projector's own recharge must not run on it, DIM halves
+  -- it, and each beam still costs what the projector in hand costs.
+  do
+    clock, shine_busy_until = 0, 0
+    la.trigger_down = function() return false end
+    local P = fresh{ vars = BASE_VARS, shared_pool = true,
+                     profiles = { { id = 0, recharge = "none" },
+                                  { id = 5, name = "HEAVY", max_energy = 100, cost = 2,
+                                    strength = 3, recharge = "ramp",
+                                    recharge_delay_ms = 0, recharge_step_ms = 10 } } }
+    local v = mk_vars(50)
+    P.reset(v)
+    v.energy = 20                                   -- hurt
+    P.grant(v, 5)
+    check(P.active_id() == 5 and v.energy == 20, "shared",
+          "a pickup moved the pool to " .. v.energy)
+    check(P.max_energy(v) == 50, "shared", "the pool is not the baseline's: " .. P.max_energy(v))
+    la.trigger_down = function() return true end
+    P.tick(v)
+    la.trigger_down = function() return false end
+    clock = clock + 200; P.tick(v)                  -- released
+    check(v.energy == 18 and v.energy_spent == 2, "shared",
+          "a beam cost " .. (20 - v.energy) .. " of the pool, expected the projector's 2")
+    check(P.payload(v) == 3, "shared", "the projector in hand lost its strength")
+    clock = clock + 5000; P.tick(v)
+    check(v.energy == 18, "shared",
+          "the projector in hand's own ramp ran on the pool: " .. v.energy)
+    P.give(v, 5)
+    check(v.energy == 18, "shared", "a re-grant refilled the pool")
+    P.select(v, 0); P.select(v, 5)
+    check(v.energy == 18, "shared", "switching moved energy: " .. v.energy)
+    v.energy = 40
+    P.set_dim(v, true)
+    check(v.energy == 25, "shared", "DIM clamped the pool to " .. v.energy .. ", expected 25")
+    P.strip(v)
+    check(P.active_id() == 0 and P.owned_count() == 1 and v.energy == 25, "shared",
+          "going out kept the projector or moved the pool")
+  end
+
   -- ---- range is a label: nothing gates on distance ----------------
   do
     clock, shine_busy_until = 0, 0
@@ -1388,13 +1430,12 @@ do
   local B, M = la.msg.BONUS_BEACON, la.msg.MALUS_BEACON
 
   -- Option lists: every label fits the 8-char menu, the standard catalogue
-  -- is offered everywhere a projector may change hands, role/practice
-  -- projectors never are.
-  local lists = {
-    freeforall = true, teams = true, flag = true, kingofhill = true,
-    upkeep = true, virus = true, ["custom/festasportsasso"] = true, outflow = false,
-  }
-  for f, projectors in pairs(lists) do
+  -- is offered in every game with pickups (Outflow's included: its powered
+  -- projectors share the life pool), role/practice projectors never are.
+  local lists = { "freeforall", "teams", "flag", "kingofhill", "upkeep", "virus",
+                  "custom/festasportsasso", "outflow" }
+  for _, f in ipairs(lists) do
+    local projectors = true
     local g = fresh_game(f)
     local bo, mo = options_of(g, "BONUS"), options_of(g, "MALUS")
     check(bo and bo[1] == "LIFE", f, "BONUS options do not start with LIFE")
@@ -1526,6 +1567,40 @@ do
     check(v.energy == 2 * S, "outflow", "LIFE bonus on energy gave " .. v.energy)
     claim(g, v, M, "LIFE")
     check(v.energy == 0, "outflow", "MALUS LIFE left " .. v.energy .. " energy")
+  end
+
+  -- Outflow: a powered projector shares the life pool (shared_pool).
+  -- Picking one up heals nothing, its beams cost the life pool, its own
+  -- recharge never runs on it, and going out drops it.
+  do
+    local g, v, P = fresh_game("outflow")
+    local play = g.update[g.initial_state]
+    shine_busy_until = 0
+    v.energy = 60
+    claim(g, v, B, "STRONG")
+    check(P.active_id() == 4 and v.energy == 60, "outflow",
+          "BONUS STRONG: in hand " .. P.active_id() .. ", energy " .. v.energy ..
+          " (expected 4, 60: a pickup must not heal)")
+    check(P.payload(v) == 3, "outflow", "STRONG does not weigh 3 here")
+    clock = 500                                     -- past STRONG's ready, before any drain
+    la.trigger_down = function() return true end
+    play(v)
+    la.trigger_down = function() return false end
+    clock = 510; play(v)                            -- the release starts any recharge wait
+    check(v.energy == 59, "outflow",
+          "a STRONG beam cost " .. (60 - v.energy) .. " of the life pool, expected 1")
+    claim(g, v, B, "FAST")
+    check(P.active_id() == 2 and v.energy == 59, "outflow", "BONUS FAST healed or missed")
+    clock = 30510; play(v)                          -- FAST alone would have ramped by now
+    check(v.energy == 58, "outflow",
+          "energy " .. v.energy .. " after 30 s, expected 58 (one drain step, no recharge)")
+    for _, r in ipairs(g.rules) do
+      if r.from == g.initial_state and r.to ~= g.scoring_state and r.action then
+        r.action(v); break                          -- an out transition
+      end
+    end
+    check(P.active_id() == 0 and P.owned_count() == 1 and v.energy == 58, "outflow",
+          "going out kept a projector or moved the pool")
   end
 
   -- Virus: a virus keeps the VIRUS projector — a projector bonus becomes LIFE.
