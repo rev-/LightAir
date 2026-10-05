@@ -23,9 +23,16 @@
 -- totems in the match, the virus is back when the time is up.  A clean
 -- SPLASH puts down the viruses standing near the one it hits.
 --
+-- A virus is back with 5 s of grace: no beam or area puts it down again.
+-- A virus may also put another virus down.
+--
+-- Points: a virus infecting a clean player +5, a virus putting a virus down
+-- +1, a clean player putting a virus down +2 (a SPLASH's area downs too),
+-- and +10 to the last clean player when the game ends on them.
+--
 -- The game ends when at most one clean player is left, or when the
--- time runs out.  Winner: whoever stayed clean longest
--- (clean_secs, max); tie-break: most infections caused.
+-- time runs out.  Winner: most points; tie-break: whoever stayed clean
+-- longest (clean_secs).
 -- ================================================================
 
 local std  = la.lib("std")
@@ -48,7 +55,17 @@ local MSG_INFECTED = 0x16
 -- beam putting a virus down (so a clean SPLASH bursts on a virus and its
 -- area knock-outs are credited back).  "Already a virus", "friend" and
 -- "already down" stay off both.
-local R = { SHONE = la.hit.SHONE, VIRUS = 3, FRIEND = 4, DOWN = 5 }
+--
+-- A virus put down by a viral beam answers VDOWN instead: its shooter
+-- scores it differently (+1), and no viral projector carries an area, so
+-- the area service has nothing to do with it.
+local R = { SHONE = la.hit.SHONE, VDOWN = 3, FRIEND = 4, DOWN = 5, SAFE = 6 }
+
+-- Points, by what the shooter did (see the header).
+local PTS = { INFECT = 5, CLEAN_DOWNS_VIRUS = 2, VIRUS_DOWNS_VIRUS = 1, LAST_CLEAN = 10 }
+
+-- A virus back from DOWN cannot be put down again for this long.
+local GRACE_MS = 5000
 
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
 -- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
@@ -71,6 +88,7 @@ local pending_infected = false   -- a viral lit reached us this cycle
 local pending_down     = false   -- a clean lit reached us, a virus
 local downed_by        = nil     -- who put us down, for the tray
 local respawn_at       = 0       -- la.now() before which a down virus waits
+local safe_until       = 0       -- la.now() before which a respawned virus is safe
 local has_totems       = false   -- any totem in this match to respawn at
 local can_respawn      = false
 -- Touching is only asked for once the wait is over; a late answer to a
@@ -196,6 +214,7 @@ return {
     { id = "respawn_from", default = 0 },
     { id = "respawn_ms",   default = 0 },
     { id = "clean_left", default = 0  },   -- clean players remaining
+    { id = "points",     default = 0  },   -- see the header
     { id = "infections", default = 0  },   -- players this device infected
     { id = "clean_secs", default = 0  },   -- how long we stayed clean
     -- The role, clearly stated on the LCD in both playing states.
@@ -216,21 +235,21 @@ return {
       icon_var = "energy_icon" },
     -- VIRUS screen
     { var = "role",       icon = "ROLE",   col = 0, row = 0, states = { S.VIRUS, S.DOWN } },
-    { var = "infections", icon = "SCORE",  col = 1, row = 0, states = { S.VIRUS } },
+    { var = "points",     icon = "SCORE",  col = 1, row = 0, states = { S.VIRUS } },
     -- DOWN screen: a bar filling over the wait, from the instant it began
     { var = "respawn_zero", icon = "DOWN", col = 1, row = 0, states = { S.DOWN },
       bar = true, bar_at = 0, fill_var = "respawn_ms", start_var = "respawn_from" },
-    { var = "clean_left", icon = "LIFE",   col = 1, row = 1, states = { S.DOWN } },
+    { var = "points",     icon = "SCORE",  col = 1, row = 1, states = { S.DOWN } },
     -- GAME_END screen
-    { var = "clean_secs", icon = "TIME",   col = 0, row = 0, states = { S.GAME_END } },
-    { var = "infections", icon = "SCORE",  col = 1, row = 0, states = { S.GAME_END } },
-    { var = "clean_left", icon = "LIFE",   col = 0, row = 1, states = { S.GAME_END } },
+    { var = "points",     icon = "SCORE",  col = 0, row = 0, states = { S.GAME_END } },
+    { var = "clean_secs", icon = "TIME",   col = 1, row = 0, states = { S.GAME_END } },
+    { var = "infections", icon = "LIFE",   col = 0, row = 1, states = { S.GAME_END } },
     { var = "role",       icon = "ROLE",   col = 1, row = 1, states = { S.GAME_END } },
   },
 
   winners = {
-    { var = "clean_secs", dir = "max" },   -- last clean player wins
-    { var = "infections", dir = "max" },   -- tie-break: most infections caused
+    { var = "points",     dir = "max" },   -- most points
+    { var = "clean_secs", dir = "max" },   -- tie-break: stayed clean longest
   },
 
   totem_slots = {
@@ -243,6 +262,7 @@ return {
   on_begin = function(vars)
     vars.energy_max = vars.start_energy
     vars.time_left  = vars.game_time
+    vars.points     = 0
     vars.infections = 0
     vars.clean_secs = 0
     vars.role       = "CLEAN"
@@ -252,6 +272,7 @@ return {
     pending_down     = false
     downed_by        = nil
     respawn_at       = 0
+    safe_until       = 0
     can_respawn      = false
     touching         = false
     touch.reset()
@@ -293,13 +314,13 @@ return {
       -- from arm's length: the claim has to mean "I am standing at it".
       [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
-      -- A viral beam does nothing to a virus; a clean one puts it down
-      -- (direct, or the area of a clean SPLASH landing nearby).
+      -- Any beam puts a virus down (direct, or the area of a clean SPLASH
+      -- landing nearby) — except in the grace after it came back.
       [MSG.LIT] = function(vars, pkt)
-        if viral(pkt) then return R.VIRUS end
+        if la.now() < safe_until then return R.SAFE end
         pending_down = true
         downed_by    = la.player_short(pkt.sender)
-        return R.SHONE
+        return viral(pkt) and R.VDOWN or R.SHONE
       end,
       [MSG_INFECTED] = function(vars, pkt)
         note_infected(vars, pkt.sender)
@@ -317,18 +338,27 @@ return {
 
   on_reply = {
     [MSG.LIT] = {
-      -- One knock-out code, two meanings: who shot says which.
+      -- One knock-out code, two meanings: who shot says which.  A clean
+      -- SPLASH's area downs come back here too, credited by the firmware.
       [R.SHONE] = function(vars, reply)
+        local who = la.player_short(reply.sender)
         if is_virus() then
           vars.infections = vars.infections + 1
-          la.show(la.player_short(reply.sender) .. " INFECTED!", 3000)
+          vars.points     = vars.points + PTS.INFECT
+          la.show(who .. " INFECTED! +" .. PTS.INFECT, 3000)
         else
-          la.show(la.player_short(reply.sender) .. " is DOWN!", 3000)
+          vars.points = vars.points + PTS.CLEAN_DOWNS_VIRUS
+          la.show(who .. " is DOWN! +" .. PTS.CLEAN_DOWNS_VIRUS, 3000)
         end
         la.ui("Lit")
       end,
+      [R.VDOWN] = function(vars, reply)
+        vars.points = vars.points + PTS.VIRUS_DOWNS_VIRUS
+        la.show(la.player_short(reply.sender) .. " is DOWN! +" .. PTS.VIRUS_DOWNS_VIRUS, 3000)
+        la.ui("Lit")
+      end,
       [R.FRIEND] = function() la.ui("Friend") end,
-      [R.VIRUS]  = function() la.ui("Immune") end,
+      [R.SAFE]   = function() la.ui("Immune") end,
       [R.DOWN]   = function(vars, reply)
         la.show(la.player_short(reply.sender) .. " is down", 2000)
         la.ui("Immune")
@@ -345,9 +375,14 @@ return {
     { from = S.CLEAN, to = S.GAME_END,
       when   = function(vars) return vars.time_left <= 0 or last_clean(vars) end,
       action = function(vars)
-        -- Still clean at the end: full survival time (possibly the win).
+        -- Still clean at the end: full survival time.
         vars.clean_secs = vars.game_time - vars.time_left
         game_over(vars)
+        -- The game ended on the last clean player: this one.
+        if vars.clean_left == 1 then
+          vars.points = vars.points + PTS.LAST_CLEAN
+          la.show("Last clean! +" .. PTS.LAST_CLEAN, 3000)
+        end
       end },
     { from = S.CLEAN, to = S.VIRUS,
       when   = function() return pending_infected end,
@@ -385,9 +420,11 @@ return {
         touching    = false
         downed_by   = nil
         vars.energy = vars.energy_max
+        safe_until  = la.now() + GRACE_MS
         la.background(virus_bg)
         la.clear_tray()
         la.show("Back in game!", 1000)
+        la.show("Safe for " .. GRACE_MS // 1000 .. " s", GRACE_MS)
         la.ui("Up")
       end },
   },

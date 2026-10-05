@@ -107,14 +107,17 @@ players and one BONUS totem; Virus at its defaults.
 | # | Check | How | Pass |
 |---|---|---|---|
 | 5.1 | Friendly fire | A clean player shines another clean player | no effect; the shooter hears the friendly-fire cue |
-| 5.2 | Down | A clean player shines the virus | virus: "Down" cue, red pulse stops, DOWN bar filling over 30 s, "Wait to respawn" / "LIT by …"; shooter: "<virus> is DOWN!" |
+| 5.2 | Down | A clean player shines the virus | virus: "Down" cue, red pulse stops, DOWN bar filling over 30 s, "Wait to respawn" / "LIT by …"; shooter: "<virus> is DOWN! +2" |
 | 5.3 | No early respawn | The down virus stands at the totem during the 30 s | nothing happens |
-| 5.4 | Back at a totem | Wait out the 30 s, then walk to the totem | tray switches to "Go to a totem"; within ~2 m the totem plays the chaser in the virus's colour and the virus is back ("Up", red pulse, energy full) |
+| 5.4 | Back at a totem | Wait out the 30 s, then walk to the totem | tray switches to "Go to a totem"; within ~2 m the totem plays the chaser in the virus's colour and the virus is back ("Up", red pulse, energy full, "Safe for 5 s") |
+| 5.4b | Grace | Shine the virus within 5 s of it coming back | nothing; the shooter hears "Immune". After 5 s it goes down again |
 | 5.5 | Too far | Wait out the 30 s at ~5 m from the totem | nothing until the virus walks closer |
 | 5.6 | Pickup untouched | Respawn at a BONUS totem that is READY | it stays READY: a clean player can still claim it right after |
 | 5.7 | Cooldown no obstacle | Respawn at a BONUS totem just claimed (in cooldown) | the chaser plays and the virus is back |
 | 5.8 | No totems | A match with no totems assigned | the virus is back when the 30 s are up, on the spot |
-| 5.9 | SPLASH | A clean player holding SPLASH (BONUS) shines a virus standing ~1 m from another virus | both go down; the shooter sees both "is DOWN!" |
+| 5.9 | SPLASH | A clean player holding SPLASH (BONUS) shines a virus standing ~1 m from another virus | both go down; the shooter sees both "is DOWN! +2" |
+| 5.10 | Virus on virus | One virus shines another | the target goes down; the shooter sees "is DOWN! +1" |
+| 5.11 | Points | Infect a clean player; play until one clean player is left | infection "+5"; the last clean player sees "Last clean! +10"; the end screen and the winner follow points, then time stayed clean |
 
 Bring back: how far from the totem the touch is answered (gate −55 dBm),
 since the totem's antenna and the player's body move it.
