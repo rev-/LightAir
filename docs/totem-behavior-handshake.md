@@ -295,6 +295,35 @@ also frees the totem path's RAM.
 
 ---
 
+## 4b. The touch — what a totem answers outside its program
+
+A player can tell the totems near it "I am here" with `MSG_TOTEM_TOUCH`
+(0xF4), a single-hop broadcast `[rssi gate, action]` (`config.h`).  An
+ACTIVE totem's driver answers it **before and outside the program**:
+
+- **The totem judges the distance**, on its own reading of the touch
+  against the gate the player sent.  So it works for every role in every
+  state — a BONUS in its cooldown beacons nothing, but it still hears.
+- **Action 0, acknowledge** (`TotemTouch::ACK`): the arrival chaser
+  (`TotemUIEvent::Respawn`, one dot around the strip in the toucher's
+  colour) and a reply 0xF5 `[action, roleId]`.  The chaser plays only while
+  the strip shows no other one-shot, and at most one per tick: a touch never
+  delays what the role animates.  The reply goes out regardless.
+- **The program never sees a touch**, so a touch cannot claim a pickup,
+  start a cooldown or move a score.
+- **Actions from 1 up are reserved for the program** (`TotemTouch::
+  FIRST_PROGRAM`).  A touch that changes a cooldown or forces a state acts
+  on state the role owns, so it belongs in TotemVM — a `touch` trigger is
+  the additive opcode §5 describes.  Until then a totem ignores them: no
+  chaser, no reply.
+
+Player side, `std.totem_touch{ rssi = …, every = … }` sends at most one
+touch per period; replies arrive in `on_reply[MSG.TOTEM_TOUCH][0]`, with
+`reply.sender` the totem and `reply:byte(2)` its role.  Silence means no
+totem is in reach.  Host-tested in `test/host/test_totemdriver.cpp`.
+
+---
+
 ## 5. When a future role doesn't fit the VM
 
 In order of preference:

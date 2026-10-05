@@ -186,6 +186,20 @@ constexpr uint8_t MSG_TOTEM_BEACON  = 0xF0;
 // TotemDriver calls runner->onRoster(), then reset() on receipt.
 constexpr uint8_t MSG_TOTEM_ROSTER  = 0xF2;
 
+// Totem touch: a player telling the totems near it "I am here".  Broadcast,
+// single hop, scoped to the game like any game message.  An ACTIVE totem
+// handles it in its driver, before and outside its program, so a touch
+// never moves the role's state machine (claims, cooldowns, scores).
+//   payload[0] = RSSI gate, positive magnitude (55 means -55 dBm; 0 = none):
+//                the totem acts only if it reads the touch at least this
+//                strongly — proximity is judged where the totem stands
+//   payload[1] = action (TotemTouch::ACK, or reserved, see below)
+// Reply (0xF5), from each totem that acted: [action, the totem's roleId].
+// A touch nobody acted on gets no reply: the player's ruleset learns
+// "no totem here" from silence.
+constexpr uint8_t MSG_TOTEM_TOUCH   = 0xF4;
+// Next available in 0xF0 block: 0xF6
+
 } // namespace RadioMsg
 
 // The two LIT reply sub-types the firmware reads (see MSG_LIT).  Every
@@ -195,6 +209,20 @@ constexpr uint8_t MSG_TOTEM_ROSTER  = 0xF2;
 namespace HitReply {
     constexpr uint8_t TAKEN = 1;   // the hit landed
     constexpr uint8_t SHONE = 2;   // the hit put the player out of play
+}
+
+// Totem touch actions (RadioMsg::MSG_TOTEM_TOUCH payload[1]).
+namespace TotemTouch {
+    // Acknowledge: play the arrival chaser (TotemUIEvent::Respawn, one dot
+    // around the strip in the toucher's colour) and reply.  The chaser plays
+    // only while the strip shows no other one-shot, so a touch never delays
+    // what the role itself animates; the reply goes out regardless.
+    constexpr uint8_t ACK = 0;
+    // Codes from here up are reserved for the totem's program — a touch that
+    // changes a cooldown or forces a state belongs to the role, which owns
+    // that state.  Until TotemVM can react to a touch, a totem ignores them
+    // (no animation, no reply).
+    constexpr uint8_t FIRST_PROGRAM = 1;
 }
 
 // Area effects (LightAir_GameRunner's area service; policies are declared

@@ -45,7 +45,15 @@ local rssi_probe = { vm = 1, states = { {
     run  = { {"anim", "Malus"} } },
 } } }
 
+-- Synthetic role for the totem driver test: a program that answers a touch
+-- (0xF4) by broadcasting BASE_BEACON with payload 7.  The driver must keep
+-- every touch from the program, so that broadcast must never go out.
+local touch_probe = { vm = 1, states = { {
+  { msg = 0xF4, run = { {"bcast", la.msg.BASE_BEACON, 7} } },
+} } }
+
 local out = {
+  touch  = touch_probe,
   base0  = std.totems.base(0),
   baseX  = std.totems.base(1),
   baseA  = std.totems.base("any"),

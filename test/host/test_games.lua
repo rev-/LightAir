@@ -8,7 +8,7 @@ la = {
   msg = { LIT = 0x10, SCORE_COLLECT = 0x12, POINT_REPORT = 0x14, AREA = 0x18,
           FLAG_EVENT = 0x50, CP_BEACON = 0x52, CP_SCORE = 0x54,
           BASE_BEACON = 0x56, FLAG_BEACON = 0x58,
-          BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60 },
+          BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60, TOTEM_TOUCH = 0xF4 },
   flag_event = { TAKEN = 1, DROPPED = 2, SCORED = 3 },
   hit = { TAKEN = 1, SHONE = 2 },         -- HitReply in src/config.h
   -- Mirrors IconType in src/ui/player/display/LightAir_Display_Icons.h.
@@ -1803,6 +1803,38 @@ do
         "an area hit that empties the lives is not a SHONE")
 
   print("OK   area hits     immunity is the beam's: area hits neither check nor open it; friendly fire and knock-outs still apply; an own area hit is its policy's call")
+end
+
+-- ================================================================
+--   std.totem_touch: "I am here" to the totems near this player
+-- ================================================================
+-- The totem judges the distance (config.h MSG_TOTEM_TOUCH), so what the
+-- helper must get right is the wire: the gate as a positive magnitude, the
+-- acknowledge action, single hop, and no more than one touch per period.
+do
+  local function fail(what, msg)
+    failures = failures + 1
+    print(string.format("  FAIL %-12s %s: %s", "totem_touch", what, msg))
+  end
+  local function check(cond, what, msg) if not cond then fail(what, msg) end end
+  local S = dofile(ROOT .. "lib/std.lua")
+  check(not pcall(S.totem_touch, {}), "rssi", "a touch without a gate was accepted")
+  check(not pcall(S.totem_touch, { rssi = 10 }), "rssi", "a positive dBm gate was accepted")
+
+  local t = S.totem_touch{ rssi = -55, every = 1000 }
+  out.radio = {}
+  clock = 5000
+  check(t.send() == true, "send", "the first touch did not go out")
+  local m = out.radio[1]
+  check(m and m[1] == "bcast" and m[2] == la.msg.TOTEM_TOUCH and m[3] == 55 and m[4] == 0
+        and #out.radio == 1, "wire", "not a single-hop TOTEM_TOUCH [55, 0]")
+  clock = 5500
+  check(t.send() == false and #out.radio == 1, "period", "a second touch inside the period went out")
+  clock = 6000
+  check(t.send() == true and #out.radio == 2, "period", "the touch after the period did not go out")
+  t.reset()
+  check(t.send() == true and #out.radio == 3, "reset", "reset() did not let the next touch out")
+  print("OK   totem_touch   single-hop [gate, ACK], once per period, gate required")
 end
 
 -- ================================================================

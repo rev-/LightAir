@@ -168,6 +168,40 @@ function std.base_respawn(cfg)
 end
 
 -- ----------------------------------------------------------------
+-- Totem touch: "I am here", to the totems near this player.
+--
+--   local touch = std.totem_touch{ rssi = -55, every = 1000 }
+--   update   = { [S.WAITING] = function(vars) touch.send() end },
+--   on_reply = { [MSG.TOTEM_TOUCH] = { [0] = function(vars, reply) ... end } },
+--
+-- send() broadcasts MSG_TOTEM_TOUCH (single hop) at most once per cfg.every
+-- ms.  Every ACTIVE totem that reads it at cfg.rssi or stronger plays its
+-- arrival chaser in this player's colour and replies: sub-type 0, and
+-- reply:byte(2) is that totem's role id.  The totem judges the distance on
+-- its own reading of the touch, so it works whatever the role is doing (a
+-- pickup in its cooldown hears it too), and the role's state never moves —
+-- the touch never reaches its program.  Silence means no totem is near.
+-- reset() lets the next send() go out at once.
+--
+-- cfg.rssi is required, for the same reason as base_respawn.
+-- ----------------------------------------------------------------
+function std.totem_touch(cfg)
+  assert(cfg.rssi and cfg.rssi < 0 and cfg.rssi >= -127,
+         "std.totem_touch: cfg.rssi (dBm, -127..-1) is required")
+  local gate, every, last = -cfg.rssi, cfg.every or 1000, nil
+  local t = {}
+  function t.send()
+    local now = la.now()
+    if last and now - last < every then return false end
+    last = now
+    la.broadcast(la.msg.TOTEM_TOUCH, gate, 0)     -- 0 = acknowledge
+    return true
+  end
+  function t.reset() last = nil end
+  return t
+end
+
+-- ----------------------------------------------------------------
 -- BONUS / MALUS claim handler.
 --
 --   [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = -57 },

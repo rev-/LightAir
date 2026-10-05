@@ -67,6 +67,7 @@ static const NamedU8 kMsgConsts[] = {
     { "FLAG_BEACON",   RadioMsg::MSG_FLAG_BEACON },
     { "BONUS_BEACON",  RadioMsg::MSG_BONUS_BEACON },
     { "MALUS_BEACON",  RadioMsg::MSG_MALUS_BEACON },
+    { "TOTEM_TOUCH",   RadioMsg::MSG_TOTEM_TOUCH },
 };
 
 /* =========================================================

@@ -49,6 +49,9 @@ public:
     // Advance strip animation state.  Call every loop tick.
     void update();
 
+    // True while the strip plays (or has queued) a one-shot animation.
+    bool busy() const { return _strip.busy(); }
+
 private:
     LightAir_TotemRGB&  _rgb;
     LightAir_LEDStrip&  _strip;

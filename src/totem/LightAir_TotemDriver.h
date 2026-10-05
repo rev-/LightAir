@@ -21,6 +21,8 @@
 //      VM (RSSI-aware).  Calls update() every tick.
 //   5. On MSG_TOTEM_ROSTER (universal): calls runner->onRoster(), then
 //      runner->reset() and returns to IDLE (typeId = UNIVERSAL).
+//   6. While ACTIVE, answers MSG_TOTEM_TOUCH itself (handleTouch): the
+//      program never sees a touch, so it cannot move the role's state.
 //
 // Lifecycle:
 //   LightAir_TotemDriver driver(radio, ui);
@@ -48,11 +50,16 @@ private:
 
     LightAir_TotemRunner* _runner;          // nullptr = IDLE
     LightAir_TotemVM      _vm;              // interpreter for over-the-air programs
+    uint8_t               _roleId;          // from the activation, for touch replies
     uint32_t              _lastBeacon;      // millis() of last beacon broadcast
     uint32_t              _revertDeadline;  // millis() deadline for self-revert; 0 = no watchdog armed
 
     // Flush all queued radio and UI commands to the hardware.
     void flushOutput(LightAir_TotemOutput& out);
+
+    // MSG_TOTEM_TOUCH while ACTIVE (config.h).  `animated` is true once a
+    // chaser was queued this tick: the strip only learns about it at flush.
+    void handleTouch(const RadioEvent& ev, LightAir_TotemOutput& out, bool& animated);
 
     // Shared teardown: reset()s the runner, clears role/token/typeId, and
     // returns to the Idle animation.  Used both when MSG_TOTEM_ROSTER arrives

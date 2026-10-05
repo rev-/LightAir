@@ -1,12 +1,13 @@
 #include "LightAir_TotemDriver.h"
 using RadioMsg::MSG_TOTEM_BEACON;
 using RadioMsg::MSG_TOTEM_ROSTER;
+using RadioMsg::MSG_TOTEM_TOUCH;
 
 // ----------------------------------------------------------------
 LightAir_TotemDriver::LightAir_TotemDriver(LightAir_Radio&       radio,
                                             LightAir_TotemUICtrl& ui)
     : _radio(radio), _ui(ui),
-      _runner(nullptr), _lastBeacon(0), _revertDeadline(0)
+      _runner(nullptr), _roleId(0), _lastBeacon(0), _revertDeadline(0)
 {}
 
 // ----------------------------------------------------------------
@@ -41,6 +42,7 @@ void LightAir_TotemDriver::loop() {
     }
 
     // ---- 3. Process incoming events ----
+    bool touchAnimated = false;
     for (uint8_t i = 0; i < report.count; i++) {
         const RadioEvent& ev = report.events[i];
 
@@ -86,6 +88,7 @@ void LightAir_TotemDriver::loop() {
                 if (progLen == (uint16_t)(ev.packet.payloadLen - 7) &&
                     _vm.load(ev.packet.payload + 7, progLen)) {
                     _runner = &_vm;
+                    _roleId = info.roleId;
                     _radio.setTypeId(incomingTypeId);
                     _radio.setSessionToken(info.sessionToken);
                     _revertDeadline = (info.gameTimeLeftSecs == 0xFFFF)
@@ -94,6 +97,13 @@ void LightAir_TotemDriver::loop() {
                     _runner->onActivate(info, out);
                 }
             }
+            continue;
+        }
+
+        // A touch is the driver's, never the program's.
+        if (_runner && ev.type == RadioEventType::MessageReceived &&
+            ev.packet.msgType == MSG_TOTEM_TOUCH) {
+            handleTouch(ev, out, touchAnimated);
             continue;
         }
 
@@ -114,6 +124,33 @@ void LightAir_TotemDriver::loop() {
 
     // ---- 6. Advance strip animation ----
     _ui.update();
+}
+
+// ----------------------------------------------------------------
+// MSG_TOTEM_TOUCH: proximity is judged here, on this totem's own reading of
+// the touch, so it works for every role in every state — a pickup in its
+// cooldown is silent, but it still hears.  Only ACK is the driver's; the
+// codes above it are reserved for the program, and ignored until TotemVM
+// can take them.
+void LightAir_TotemDriver::handleTouch(const RadioEvent& ev, LightAir_TotemOutput& out,
+                                       bool& animated) {
+    const RadioPacket& t = ev.packet;
+    if (t.payloadLen < 2) return;
+    const uint8_t gate   = t.payload[0];
+    const uint8_t action = t.payload[1];
+    if (action != TotemTouch::ACK) return;
+    if (gate > 0 && ev.rssi < -(int)gate) return;
+
+    // The chaser yields to whatever the role is animating, and to another
+    // touch's chaser: one arrival at a time, never a queue of them.
+    if (!animated && !_ui.busy()) {
+        const uint8_t pid = (t.senderId < PlayerDefs::MAX_PLAYER_ID) ? t.senderId : 0;
+        out.ui.trigger(TotemUIEvent::Respawn, PlayerColors::kColors[pid][0],
+                       PlayerColors::kColors[pid][1], PlayerColors::kColors[pid][2]);
+        animated = true;
+    }
+    const uint8_t reply[2] = { action, _roleId };
+    out.radio.replyWithPayload(t, reply, sizeof(reply));
 }
 
 // ----------------------------------------------------------------

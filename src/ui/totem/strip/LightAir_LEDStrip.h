@@ -115,4 +115,7 @@ public:
 
     // Advance animation state.  Call every loop tick.
     virtual void update() = 0;
+
+    // True while a one-shot is playing or queued.
+    virtual bool busy() const = 0;
 };

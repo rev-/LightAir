@@ -10,6 +10,9 @@
 #                every TotemVM program with the reference encoder.
 #   totemvm    — feeds reference-encoder programs into the real C++
 #                LightAir_TotemVM and asserts the five roles' behaviour.
+#   totemdriver — what a totem handles outside its program: the touch
+#                (MSG_TOTEM_TOUCH) — proximity gate, arrival chaser, reply,
+#                and the program never seeing it.
 #   radio      — LightAir_Radio's reply bookkeeping: every reply to a
 #                broadcast is delivered, a unicast's slot closes on the
 #                first answer, timeouts fire only where they mean something.
@@ -56,8 +59,8 @@ FW_SRC := $(ROOT)/src/lua/LightAir_LuaGame.cpp \
 
 PROGS := $(BUILD)/prog_base0.bin
 
-.PHONY: all games totemvm radio strip ledwave luagame clean
-all: games totemvm radio strip ledwave luagame
+.PHONY: all games totemvm totemdriver radio strip ledwave luagame clean
+all: games totemvm totemdriver radio strip ledwave luagame
 	@echo "ALL HOST TESTS PASS"
 
 games:
@@ -77,6 +80,16 @@ $(BUILD)/test_totemvm: test_totemvm.cpp $(ROOT)/src/totem/LightAir_TotemVM.cpp
 
 totemvm: $(BUILD)/test_totemvm $(PROGS)
 	$(BUILD)/test_totemvm $(BUILD)
+
+$(BUILD)/test_totemdriver: test_totemdriver.cpp $(ROOT)/src/totem/LightAir_TotemDriver.cpp \
+                       $(ROOT)/src/totem/LightAir_TotemVM.cpp \
+                       $(ROOT)/src/ui/totem/LightAir_TotemUICtrl.cpp \
+                       $(ROOT)/src/radio/LightAir_Radio.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+totemdriver: $(BUILD)/test_totemdriver $(PROGS)
+	$(BUILD)/test_totemdriver $(BUILD)
 
 $(BUILD)/test_radio: test_radio.cpp $(ROOT)/src/radio/LightAir_Radio.cpp
 	@mkdir -p $(BUILD)
