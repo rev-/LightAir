@@ -1712,6 +1712,71 @@ do
   print("OK   area hits     immunity is the beam's: area hits neither check nor open it; friendly fire and knock-outs still apply; an own area hit is its policy's call")
 end
 
+-- ================================================================
+--   Every game weighs a hit by its strength
+-- ================================================================
+-- Strength and area hits are shared mechanics: a game that takes hits
+-- must not re-implement them, or it drifts (freeforall once took every
+-- hit as one life).  Per game, in its play state: a strength-3 LIT
+-- costs 3 units (lives, or Outflow's lit_cost energy), the same shooter
+-- inside the immunity window is refused where the game has one, and an
+-- area hit costs its band's strength and ignores that window.
+do
+  local function fail(what, msg)
+    failures = failures + 1
+    print(string.format("  FAIL %-12s %s: %s", "strength", what, msg))
+  end
+  local function check(cond, what, msg) if not cond then fail(what, msg) end end
+  local function fresh(f)
+    libcache = {}
+    local g = dofile(ROOT .. f .. ".lua")
+    local v = {}
+    for _, c in ipairs(g.config) do v[c.id] = c.default end
+    for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
+    clock = 0
+    g.on_begin(v)
+    return g, v
+  end
+  local function hit(strength, area)
+    return mk_pkt{ sender = 3, team = la.team_of(3), area = area,
+                   payload = { strength, 0, 0, 0, area and 1 or nil } }
+  end
+  -- { file, play state, var, unit, immune reply or nil }
+  local games = {
+    { "freeforall",             0, "lives", 1, 4 },
+    { "teams",                  0, "lives", 1, 5 },
+    { "flag",                   0, "lives", 1 },
+    { "kingofhill",             0, "lives", 1 },
+    { "upkeep",                 0, "lives", 1 },
+    { "custom/festasportsasso", 1, "lives", 1 },
+    { "outflow",                0, "energy" },
+  }
+  for _, c in ipairs(games) do
+    local f, st, var = c[1], c[2], c[3]
+    local g, v = fresh(f)
+    local unit = c[4] or v.lit_cost
+    local h = g.on_message[st] and g.on_message[st][la.msg.LIT]
+    check(h ~= nil, f, "no LIT handler in the play state")
+    if h then
+      v[var] = 20 * unit
+      clock = 1000
+      local r = h(v, hit(3))
+      check(r == la.hit.TAKEN and v[var] == 17 * unit, f,
+            "a strength-3 hit cost " .. (20 * unit - v[var]) // unit .. " units, reply " .. tostring(r))
+      if c[5] then
+        clock = 1100
+        r = h(v, hit(1))
+        check(r == c[5] and v[var] == 17 * unit, f, "the same shooter inside the window was not refused")
+      end
+      clock = 1200
+      r = h(v, hit(2, true))
+      check(r == la.hit.TAKEN and v[var] == 15 * unit, f,
+            "an area hit of 2 cost " .. (17 * unit - v[var]) // unit .. " units, reply " .. tostring(r))
+    end
+  end
+  print("OK   strength      every game that takes hits weighs them by strength, area hits by band, past immunity")
+end
+
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")
 local keys = {}
 for k in pairs(totem_sizes) do keys[#keys+1] = k end

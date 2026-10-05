@@ -307,7 +307,8 @@ Ids are **fixed and reserved**, because a projector id travels on the wire:
 a LIT names the projector that fired, an area beacon names its policy by
 the same id, and every receiver looks either up by that id locally. A game's own profiles start above this range.
 
-STRONG weighs **three standard hits**, which in a lives game is three lives
+STRONG weighs **three standard hits**: in a lives game three lives, in
+Outflow three times `lit_cost` of energy
 from one beam.
 
 ### Shine feedback: the burst is the whole action, not each note
@@ -404,7 +405,7 @@ the timer only: once it is full the player still has to reach a base.
 ## 8. The projector is the only route to Enlight
 
 Every ruleset goes through it, with no exceptions — including
-`freeforall`, which used to be the deliberately library-free tutorial.
+`freeforall`, the reference game every new one is copied from.
 
 Two reasons it has to be all of them. A ruleset that fires or polls on its
 own bypasses the energy cost, the reach, the hit weight and the splash. And

@@ -45,7 +45,7 @@ every ruleset that loads both libraries (upkeep 109.9 → 97.9 KB).
 | # | Check | How | Pass |
 |---|---|---|---|
 | 2.1 | Every game loads and plays | Each game in the list: start it, play a minute | no load failure, no Lua fault on serial |
-| 2.2 | Lua cost dropped | Compare `LuaGame: loaded '…' (N KB of Lua)` with the same line on an older build | about 10–12 KB lower per game (freeforall and tirobersaglio, which load one library, less) |
+| 2.2 | Lua cost dropped | Compare `LuaGame: loaded '…' (N KB of Lua)` with the same line on an older build | about 10–12 KB lower per game (tirobersaglio, which loads one library, less; freeforall loads both from the area-service build on, so compare it only between builds that agree) |
 | 2.3 | Library errors still name the library | Upload a custom game that calls `proj.define{ max_owned = "3" }` | failure screen reads `projector.lua:-1: attempt to compare …` |
 
 ---
@@ -69,12 +69,12 @@ bystander.  Hand the shooter SPLASH from a BONUS totem set to SPLASH
 | 3.6 | Missed or refused hit | Shooter hits a victim who is immune (second hit within 3 s) | no bystander loses anything |
 | 3.7 | Area knock-out credits the shooter | 3.1 with the bystander on 2 lives | bystander out; shooter's points +1 and "<bystander> SHONE!" on the shooter's screen |
 | 3.8 | Area hits open no immunity window | 3.1, then the shooter hits the bystander directly at once | the direct hit lands (−1) |
-| 3.9 | Other games | Repeat 3.1 in flag and upkeep | same behaviour |
+| 3.9 | Other games | Repeat 3.1 in freeforall, flag and upkeep | same behaviour |
 
-Freeforall is left out until its LIT handler moves to `std.lit_target`: its
-own handler takes every hit as one life and applies its immunity window to
-area hits too.  In Virus a SPLASH area hit is a clean hit, so it has no
-effect there by Virus's own rule.
+In Virus a SPLASH area hit is a clean hit, so it has no effect there by
+Virus's own rule.  Outflow offers no projector bonus (its pool is the
+player's life), so no Outflow player can hold STRONG or SPLASH: its hit
+cost scales with strength, but nothing on the field can show it yet.
 
 Bring back: the distances at which the 2-life and 1-life bands actually
 switch (RSSI bands −55 / −70 dBm), since body shadowing moves them.

@@ -141,8 +141,8 @@ totems = {
 
 `games/lib/std.lua` provides factories that build these tables —
 `std.totems.base(team)`, `.bonus()`, `.malus()`, `.flag(team)`, `.cp()` —
-so most games write one-liners; `games/freeforall.lua` spells the tables
-out in full as the tutorial.  The CP program in `std.lua` is the acid test:
+so every game writes one-liners; `pickup()` in `std.lua` (BONUS / MALUS)
+is the simplest complete table to read first.  The CP program in `std.lua` is the acid test:
 the hardest existing role is nine rules / 199 bytes (26 of the 225-byte
 budget free), using ordered `cont` rules over one 2 s window.
 

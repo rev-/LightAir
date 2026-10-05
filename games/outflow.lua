@@ -5,7 +5,8 @@
 -- migration; the original is in git history).
 --
 -- Energy is simultaneously ammo and life total: shining costs 1,
--- being lit costs lit_cost, and a passive drain eats 1 energy every
+-- being lit costs lit_cost per unit of the hit's strength (an area
+-- hit: per unit of its band), and a passive drain eats 1 energy every
 -- (10 s / drain_rate).  Reaching 0 puts you out until the timed
 -- respawn.  Eliminating another player refills you by start_energy
 -- (uncapped) and grants a point; draining yourself to 0 costs one.
@@ -150,8 +151,11 @@ return {
       [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = function(vars, pkt)
-        if vars.energy > vars.lit_cost then
-          vars.energy = vars.energy - vars.lit_cost
+        -- A hit weighs its strength (STRONG 3, an area hit its band), as
+        -- in every game; here the unit is lit_cost energy, not a life.
+        local cost = vars.lit_cost * std.absorbed(pkt)
+        if vars.energy > cost then
+          vars.energy = vars.energy - cost
           la.show("Lit by " .. la.player_short(pkt.sender), 2000)
           la.ui("GotLit")
           return R.TAKEN

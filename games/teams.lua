@@ -3,8 +3,8 @@
 --
 -- Port of the retired native C++ ruleset (deleted in the Lua
 -- migration; the original is in git history).  Uses the standard library
--- (games/lib/std.lua) for the recurring idioms; compare with
--- games/freeforall.lua, which spells everything out.
+-- (games/lib/std.lua) for the recurring idioms, like every game;
+-- games/freeforall.lua is the simplest of them, commented throughout.
 --
 -- Eliminating an opponent scores 1 point and broadcasts a point
 -- report so teammates track the aggregate.  Respawn requires the

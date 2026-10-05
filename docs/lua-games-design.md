@@ -9,7 +9,7 @@ as Lua (Virus, and the two festival-stand rulesets under `games/custom/`):
 
 | File | Notes |
 |---|---|
-| `games/freeforall.lua` | the readable reference — every idiom spelled out except the shine, which goes through the projector like everything else |
+| `games/freeforall.lua` | the reference game to copy — the simplest complete ruleset, every section commented, built on `std` and the projector like every other game |
 | `games/teams.lua` | teams, friendly fire, point reports, BASE respawn |
 | `games/flag.lua` | flag events, carry background alert, team announce |
 | `games/kingofhill.lua` | per-player CP slots, teamless BASE |
@@ -479,8 +479,10 @@ what goes where:
    different semantics simply doesn't call it.  This is where "easy to
    define new games" comes from: `games/teams.lua` is ~½ the logic of its
    C++ original because the idioms are one-liners, and
-   `games/freeforall.lua` stays the readable reference by spelling out
-   everything else.  The one library every ruleset takes is the projector:
+   `games/freeforall.lua`, the reference to copy, uses them like every
+   other game: a reference that re-implemented the shared mechanics
+   drifted from them (it once took every hit as one life, whatever its
+   strength).  The one library every ruleset takes is the projector:
    it is the only route to Enlight, because a ruleset firing or polling on
    its own would bypass the shine economy and race the projector for a
    read-and-clear poll.
@@ -525,7 +527,7 @@ and custom roles alike.  Measured sizes: BASE 41 B, BONUS/MALUS 53 B, FLAG
 
 `games/lib/std.lua` provides factories (`std.totems.base(0)`, `.cp()`, …)
 returning these tables, so most games write one-liners;
-`games/freeforall.lua` spells two programs out in full as the tutorial.
+the BONUS / MALUS program (`pickup()` in `std.lua`) is the one to read first.
 Doctrine that keeps the VM small: totems beacon, referee presence and
 render — decisions live player-side, where the Lua files are.
 
