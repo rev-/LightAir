@@ -6,6 +6,8 @@
 #include <cstring>
 #include <string>
 #include <functional>
+#include <vector>
+#include <initializer_list>
 
 #include "Arduino.h"
 #include "ArduinoLog.h"
@@ -279,9 +281,8 @@ int main() {
     CHECK(game.monitorCount == 9, "ffa monitor count (incl. the respawn bar)");
     CHECK(game.ruleCount == 4, "ffa rule count");
     CHECK(game.behaviorCount == 3, "ffa behaviour rows (states 0..2)");
-    CHECK(game.directRadioRuleCount == 6,
-          "ffa direct rules (LIT in 2 states + the 2 pickup beacons + SPLASH "
-          "beside each LIT, added by the projector's load hook)");
+    CHECK(game.directRadioRuleCount == 4,
+          "ffa direct rules (LIT in 2 states + the 2 pickup beacons)");
     CHECK(game.replyRadioRuleCount == 2, "ffa reply rules (any + timeout)");
     CHECK(game.winnerVarCount == 2, "ffa winner vars");
     CHECK(game.totemRequirementCount == 2, "ffa totem slots");
@@ -1563,8 +1564,9 @@ int main() {
 
     // ---- 21. hold = { accept, on_enter, on_exit } --------------------------
     // The ruleset's own refinement: accept narrows what a held player still
-    // receives (LIT yes, SPLASH no), the hooks bracket the hold, the update
-    // body stops and the countdown_in clock does not.
+    // receives (LIT yes, POINT_REPORT no; an area hit is a LIT, whoever is
+    // its centre), the hooks bracket the hold, the update body stops and
+    // the countdown_in clock does not.
     {
         struct ScriptTool : LightAir_HoldTool {
             std::function<void(LightAir_HoldHost&)> body;
@@ -1601,7 +1603,7 @@ int main() {
         run5.begin(hd, d5, in5, rad5, nullptr);
 
         int* lits     = slotOf(hd, "lits");
-        int* splashes = slotOf(hd, "splashes");
+        int* reports  = slotOf(hd, "reports");
         int* updates  = slotOf(hd, "updates");
         int* clock5   = slotOf(hd, "clock");
         int* entered  = slotOf(hd, "entered");
@@ -1612,22 +1614,27 @@ int main() {
             CHECK(*entered == 1 && *exited == 0, "hold.on_enter ran on the way in");
             const int u0 = *updates, c0 = *clock5;
             tr5.push(3, 0, 0, RadioMsg::MSG_LIT,    0x42, ts++, 0, nullptr, 0);
-            tr5.push(3, 0, 0, RadioMsg::MSG_SPLASH, 0x42, ts++, 0, nullptr, 0);
+            tr5.push(3, 0, 0, RadioMsg::MSG_POINT_REPORT, 0x42, ts++, 0, nullptr, 0);
             g_millis += 20;   host.service();
             g_millis += 2000; host.service();
             CHECK(*lits == 1,     "held: an accepted msgType still arrives");
-            CHECK(*splashes == 0, "held: one outside hold.accept does not");
+            CHECK(*reports == 0, "held: one outside hold.accept does not");
             CHECK(*updates == u0, "held: the update body does not run");
             CHECK(*clock5 <= c0 - 2, "held: the countdown_in clock keeps running");
+            const uint8_t area[3] = { 50, 3, 0xFF };
+            tr5.push(4,   0, 0, RadioMsg::MSG_AREA, 0x42, ts++, 0, area, 3);
+            tr5.push(254, 0, 0, RadioMsg::MSG_AREA, 0x42, ts++, 0, area, 3);
+            g_millis += 20; host.service();
+            CHECK(*lits == 3, "held: area hits arrive as LITs, a totem's beacon included");
         };
         kp5.down = true;
         for (int i = 0; i < 100 && *entered == 0; i++) { g_millis += 10; run5.update(); }
         CHECK(*exited == 1, "hold.on_exit ran on the way out");
         kp5.down = false;
         for (int i = 0; i < 5; i++) { g_millis += 10; run5.update(); }
-        tr5.push(3, 0, 0, RadioMsg::MSG_SPLASH, 0x42, ts++, 0, nullptr, 0);
+        tr5.push(3, 0, 0, RadioMsg::MSG_POINT_REPORT, 0x42, ts++, 0, nullptr, 0);
         g_millis += 10; run5.update();
-        CHECK(*splashes == 1, "after the hold, everything arrives again");
+        CHECK(*reports == 1, "after the hold, everything arrives again");
 
         g_millisStep = 0;
     }
@@ -1688,71 +1695,303 @@ int main() {
         g_millisStep = 0;
     }
 
-    // ---- Splash is the projector's, through the real loader ----
-    // projector.lua registers an la.on_load hook, and the loader runs it
-    // before reading the table: teams never mentions splash, yet its
-    // IN_GAME state must end up with a SPLASH handler the firmware routes
-    // to, and a LIT handler that bursts when a splashing projector's hit
-    // lands.  The Lua suite covers the rules; this covers the plumbing.
+    // ---- 23. Area effects: the runner's service, each game's own LIT ------
+    // A SPLASH hit that lands makes its victim the centre of an area: the
+    // victim's runner broadcasts a beacon crediting the shooter, a
+    // bystander's runner turns it into a LIT for its own ruleset at the
+    // band's strength, and a knock-out goes back to the shooter as a SHONE.
+    // Teams never mentions any of it.  Real binding, radio and runner; this
+    // device is player 2 (team 0), 3, 5 and 7 are team 1, 4 is team 0.
     {
-        CHECK(shared.load("games/teams.lua"), "teams loads for the splash test");
-        const LightAir_Game& sg = shared.descriptor();
-        runner.setTeam(2, 0);                  // this device
-        runner.setTeam(3, 1);                  // the shooter of the direct hit
-        runner.setTeam(5, 1);                  // the shooter of the splash
-        *sg.currentState = sg.initialState;
-        sg.onBegin(disp, radio, &ui, runner);
-        int* slives = slotOf(sg, "lives");
-
-        auto inGame = [&](uint8_t msgType) -> const DirectRadioRule* {
-            for (uint8_t i = 0; i < sg.directRadioRuleCount; i++)
-                if (sg.directRadioRules[i].fromState == sg.initialState &&
-                    sg.directRadioRules[i].msgType == msgType)
-                    return &sg.directRadioRules[i];
+        FakeDisplay          raw7;
+        LightAir_DisplayCtrl d7(raw7);
+        LightAir_InputCtrl   in7;
+        LightAir_RadioTestTransport tr7;
+        LightAir_Radio       rad7(tr7, 2, 0x42, 0, 0);
+        rad7.begin();
+        LightAir_GameRunner  run7;
+        auto roster7 = [&](LightAir_GameRunner& r) {
+            r.clearRoster();
+            const uint8_t ids[]   = { 2, 3, 4, 5, 7 };
+            const uint8_t teams[] = { 0, 1, 0, 1, 1 };
+            for (uint8_t i = 0; i < 5; i++) { r.addToRoster(ids[i]); r.setTeam(ids[i], teams[i]); }
+        };
+        auto cfgOf = [](const LightAir_Game& g, const char* name) -> int* {
+            for (uint8_t i = 0; i < g.configCount; i++)
+                if (!strcmp(g.configVars[i].name, name)) return g.configVars[i].value;
             return nullptr;
         };
-        const DirectRadioRule* litRule = inGame(RadioMsg::MSG_LIT);
-        const DirectRadioRule* splRule = inGame(RadioMsg::MSG_SPLASH);
-        CHECK(litRule && litRule->onReceive, "teams handles LIT in play");
-        CHECK(splRule && splRule->onReceive,
-              "the loader routes SPLASH to the handler the projector added");
 
-        // Victim: a SPLASH-projector hit from player 3 lands and bursts.
-        RadioPacket lit = {};
-        lit.senderId = 3; lit.team = 1; lit.msgType = RadioMsg::MSG_LIT;
-        lit.payloadLen = 4; lit.payload[0] = 1; lit.payload[1] = 1;   // strength 1, SPLASH
-        if (litRule && litRule->onReceive && slives) {
-            const int before = *slives;
-            out = GameOutput();
-            litRule->onReceive(lit, /*rssi*/ -40, disp, out);
-            CHECK(*slives == before - 1, "the direct hit is the game's: one life");
-            bool burst = false;
-            for (uint8_t i = 0; i < out.radio.count; i++) {
-                const RadioOutMsg& m = out.radio.msgs[i];
-                if (m.isBroadcast && m.msgType == RadioMsg::MSG_SPLASH && m.resend == 0 &&
-                    m.payloadLen == 5 && m.payload[0] == 1 && m.payload[3] == 1 &&
-                    m.payload[4] == 3)
-                    burst = true;
-            }
-            CHECK(burst, "a landed SPLASH hit broadcasts a single-hop beacon naming its shooter");
+        // What one update put on the wire, kept until the next one.
+        std::vector<LightAir_RadioTestTransport::SentEntry> sent7;
+        uint32_t ts7 = 90000;
+        auto step = [&](LightAir_GameRunner& r, LightAir_RadioTestTransport& tr) {
+            g_millis += 20; r.update();
+            sent7.clear();
+            while (tr.hasSent()) sent7.push_back(tr.popSent());
+        };
+        auto from = [&](uint8_t sender, uint8_t team, uint8_t type,
+                        std::initializer_list<uint8_t> p) {
+            const std::vector<uint8_t> b(p);
+            tr7.push(sender, 0, team, type, 0x42, ts7++, 0, b.data(), (uint8_t)b.size());
+            step(run7, tr7);
+        };
+        auto sentOf = [&](uint8_t type) -> const LightAir_RadioTestTransport::SentEntry* {
+            for (const auto& e : sent7) if (e.pkt.msgType == type) return &e;
+            return nullptr;
+        };
+        auto replied = [&]() -> int {               // sub of the LIT answer, -1 = none
+            const auto* e = sentOf(RadioMsg::MSG_LIT + 1);
+            return e && e->pkt.payloadLen ? e->pkt.payload[0] : -1;
+        };
+        auto beacon = [&](uint8_t originator) {     // a broadcast area beacon for it
+            const auto* e = sentOf(RadioMsg::MSG_AREA);
+            return e && e->dstMac[0] == 0xFF && e->pkt.resend == 0 &&
+                   e->pkt.payloadLen == 3 && e->pkt.payload[0] == 1 &&
+                   e->pkt.payload[1] == originator && e->pkt.payload[2] == 1;
+        };
+
+        roster7(run7);
+        CHECK(shared.load("games/teams.lua"), "teams loads for the area test");
+        const LightAir_Game& ag = shared.descriptor();
+        CHECK(ag.areaPolicyCount == 1 && ag.areaPolicies && ag.areaPolicies[0].id == 1 &&
+              ag.areaPolicies[0].on == AreaTrigger::LIT && ag.areaPolicies[0].projector == 1,
+              "the projector library declared SPLASH's area, triggered by its hits");
+        g_millisStep = 1;
+        run7.begin(ag, d7, in7, rad7, nullptr);
+        int* al = slotOf(ag, "lives");
+        int* ff = cfgOf(ag, "FriendlyFire");
+        CHECK(al && ff, "teams lives and friendly-fire slots");
+        if (!al || !ff) { g_millisStep = 0; return 1; }
+
+        // -- Victim: the trigger --
+        *al = 5;
+        from(3, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });            // SPLASH, strength 1
+        CHECK(*al == 4 && replied() == HitReply::TAKEN, "victim: the direct SPLASH hit is the game's");
+        CHECK(beacon(3), "victim: a landed SPLASH hit broadcasts a single-hop beacon crediting its shooter");
+        from(7, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        CHECK(*al == 3 && !sentOf(RadioMsg::MSG_AREA),
+              "victim: a second burst within the gap is not sent, the hit still lands");
+        g_millis += 300;
+        from(3, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        CHECK(*al == 3 && replied() != HitReply::TAKEN && !sentOf(RadioMsg::MSG_AREA),
+              "victim: a hit the game refuses (immune) bursts nothing");
+        from(4, 0, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        CHECK(*al == 3 && !sentOf(RadioMsg::MSG_AREA), "victim: a teammate's refused hit bursts nothing");
+        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0 });            // BASE projector
+        CHECK(*al == 2 && !sentOf(RadioMsg::MSG_AREA), "victim: a projector without an area bursts nothing");
+        g_millis += 3100;                                         // every window closed
+        *al = 1;
+        from(7, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        CHECK(replied() == HitReply::SHONE && beacon(7), "victim: a knock-out bursts too (on = \"lit\")");
+
+        // -- Bystander: the receive side --
+        CHECK(shared.load("games/teams.lua"), "teams reloads for the bystander");
+        run7.begin(ag, d7, in7, rad7, nullptr);
+        g_millis += 3100;
+        *al = 6;
+        tr7.testRssi = -90;
+        from(3, 1, RadioMsg::MSG_AREA, { 1, 5, 1 });
+        CHECK(*al == 6, "bystander: out of the area, nothing");
+        tr7.testRssi = -50;
+        *ff = 1;
+        from(3, 1, RadioMsg::MSG_AREA, { 1, 2, 0 });
+        CHECK(*al == 6, "bystander: never caught by an area of its own (self = false), friendly fire or not");
+        *ff = 0;
+        from(3, 1, RadioMsg::MSG_AREA, { 1, 4, 0 });
+        CHECK(*al == 6, "bystander: a teammate's area is the game's friendly-fire call");
+        from(3, 1, RadioMsg::MSG_AREA, { 99, 5, 1 });
+        CHECK(*al == 6, "bystander: an unknown policy is ignored");
+        tr7.testRssi = -65;
+        from(3, 1, RadioMsg::MSG_AREA, { 1, 5, 1 });
+        CHECK(*al == 5, "bystander: the outer band is one life");
+        tr7.testRssi = -50;
+        from(3, 1, RadioMsg::MSG_AREA, { 1, 5, 1 });
+        CHECK(*al == 3, "bystander: the inner band is two lives, by the game's own LIT rule");
+        CHECK(!sentOf(RadioMsg::MSG_LIT + 1) && !sentOf(RadioMsg::MSG_AREA) &&
+              !sentOf(RadioMsg::MSG_AREA_CREDIT),
+              "bystander: an area hit answers nobody, never bursts again, credits only a knock-out");
+        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0 });
+        CHECK(*al == 2 && replied() == HitReply::TAKEN,
+              "bystander: area hits opened no immunity window for their originator");
+        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0, AreaDefaults::HIT_FLAG_AREA });
+        CHECK(*al == 2 && replied() != HitReply::TAKEN,
+              "bystander: a LIT from the air claiming the area flag is a direct hit (immune)");
+        from(7, 1, RadioMsg::MSG_AREA, { 1, 5, 1 });
+        CHECK(*al == 0, "bystander: an open immunity window does not stop an area hit");
+        const auto* cr = sentOf(RadioMsg::MSG_AREA_CREDIT);
+        CHECK(cr && cr->dstMac[0] != 0xFF && cr->dstMac[5] == 5 && cr->pkt.payloadLen == 2 &&
+              cr->pkt.payload[0] == 1 && cr->pkt.payload[1] == HitReply::SHONE,
+              "bystander: an area knock-out is credited to its originator, by unicast");
+        CHECK(!sentOf(RadioMsg::MSG_LIT + 1), "bystander: the knock-out answers nobody either");
+        RadioPacket credit = cr ? cr->pkt : RadioPacket{};
+
+        tr7.testRssi = -40;
+
+        // -- Originator: the credit --
+        LightAir_RadioTestTransport tr8;
+        LightAir_Radio       rad8(tr8, 5, 0x42, 0, 0);
+        rad8.begin();
+        LightAir_GameRunner  run8;
+        roster7(run8);
+        CHECK(shared.load("games/teams.lua"), "teams loads for the originator");
+        run8.begin(ag, d7, in7, rad8, nullptr);
+        int* ap = slotOf(ag, "points");
+        if (ap && cr) {
+            CHECK(*ap == 0, "originator: no points yet");
+            tr8.push(credit);
+            step(run8, tr8);
+            CHECK(*ap == 1, "originator: an area knock-out scores as its own SHONE");
+            const auto* a = sentOf(RadioMsg::MSG_AREA_CREDIT + 1);
+            CHECK(a && a->dstMac[5] == 2, "originator: the credit is acknowledged");
+            CHECK(sentOf(RadioMsg::MSG_POINT_REPORT) != nullptr,
+                  "originator: the game reports the point as it does any knock-out");
+            const uint8_t stray[2] = { 99, HitReply::SHONE };
+            tr8.push(2, 0, 0, RadioMsg::MSG_AREA_CREDIT, 0x42, ts7++, 0, stray, 2);
+            step(run8, tr8);
+            CHECK(*ap == 1 && sentOf(RadioMsg::MSG_AREA_CREDIT + 1),
+                  "originator: a credit for an unknown policy is acknowledged, not scored");
         }
 
-        // Bystander: player 9's beacon for player 5's shot, heard close by.
-        RadioPacket bcn = {};
-        bcn.senderId = 9; bcn.msgType = RadioMsg::MSG_SPLASH; bcn.payloadLen = 5;
-        bcn.payload[0] = 1;  bcn.payload[1] = 1;  bcn.payload[2] = 70;  // SPLASH, 1, -70 gate
-        bcn.payload[3] = 1;  bcn.payload[4] = 5;                       // direct, shooter 5
-        if (splRule && splRule->onReceive && slives) {
-            *slives = 3;
-            out = GameOutput();
-            splRule->onReceive(bcn, /*rssi*/ -50, disp, out);
-            CHECK(*slives == 1, "a close bystander takes the 2-hit band by the game's own rule");
-            bool again = false;
-            for (uint8_t i = 0; i < out.radio.count; i++)
-                if (out.radio.msgs[i].msgType == RadioMsg::MSG_SPLASH) again = true;
-            CHECK(!again, "the bystander's hit does not burst again");
-            CHECK(out.radio.replyCount == 0, "a splash beacon is never answered");
+        // -- A ruleset's own area: la.area_emit, and the chain guard --
+        CHECK(shared.load("test/host/fixtures/area.lua"), shared.loadError());
+        const LightAir_Game& fg = shared.descriptor();
+        run7.begin(fg, d7, in7, rad7, nullptr);
+        int* hits = slotOf(fg, "hits");     int* areaHits = slotOf(fg, "area_hits");
+        int* emitted = slotOf(fg, "emitted"); int* refused = slotOf(fg, "refused");
+        CHECK(hits && areaHits && emitted && refused, "area fixture slots");
+        if (hits && areaHits && emitted && refused) {
+            from(3, 0, RadioMsg::MSG_LIT, {});
+            const auto* b = sentOf(RadioMsg::MSG_AREA);
+            CHECK(*emitted == 1 && b && b->pkt.payload[0] == 40 && b->pkt.payload[1] == 2,
+                  "la.area_emit: a real hit makes this player the centre and the originator");
+            tr7.testRssi = -58;
+            from(3, 0, RadioMsg::MSG_AREA, { 40, 3, 0xFF });
+            CHECK(*hits == 2 && *areaHits == 1, "an area hit reaches the handler as pkt.area");
+            CHECK(*refused == 1 && !sentOf(RadioMsg::MSG_AREA),
+                  "la.area_emit from an area hit is refused: no chain reaction");
+            tr7.testRssi = -70;
+            from(3, 0, RadioMsg::MSG_AREA, { 40, 3, 0xFF });
+            CHECK(*hits == 2, "past the last band, nothing");
+
+            // Two knock-outs, two credits: one acknowledged, one left to
+            // time out.  Neither end of a credit is the ruleset's.
+            tr7.testRssi = -50;
+            from(3, 0, RadioMsg::MSG_AREA, { 40, 3, 0xFF });
+            const auto* c1 = sentOf(RadioMsg::MSG_AREA_CREDIT);
+            CHECK(c1 && c1->dstMac[5] == 3 && c1->pkt.payload[0] == 40,
+                  "the inner band knocks out: credit to the originator");
+            const uint32_t c1ts = c1 ? c1->pkt.timestamp : 0;
+            from(7, 0, RadioMsg::MSG_AREA, { 40, 7, 0xFF });
+            CHECK(sentOf(RadioMsg::MSG_AREA_CREDIT) != nullptr, "a second credit, to 7");
+            const uint8_t ack = 0;
+            tr7.push(3, 0, 0, RadioMsg::MSG_AREA_CREDIT + 1, 0x42, c1ts, 0, &ack, 1);
+            step(run7, tr7);
+            g_millis += 2500;                           // the credit to 7 times out
+            step(run7, tr7);
+
+            // Policy 42: teammates never, its originator yes, no credit.
+            // Roster teams: this device and 4 are team 0, 3 is team 1.
+            const int h0 = *hits;
+            from(3, 0, RadioMsg::MSG_AREA, { 42, 4, 0 });
+            CHECK(*hits == h0, "friendly = \"never\": a teammate's area spares this player");
+            from(3, 0, RadioMsg::MSG_AREA, { 42, 2, 0 });
+            CHECK(*hits == h0 + 1, "self = true: the originator is caught, \"never\" or not");
+            from(3, 0, RadioMsg::MSG_AREA, { 42, 3, 1 });
+            CHECK(*hits == h0 + 2 && !sentOf(RadioMsg::MSG_AREA_CREDIT),
+                  "credit = false: a knock-out goes unreported");
+            tr7.testRssi = -40;
         }
+        // DONE-state rows: on_begin ran after the load, so its declaration
+        // was refused; and the credits' two ends never reached on_reply.
+        *fg.currentState = fg.scoringState;
+        int* late  = slotOf(fg, "late");
+        int* leaks = slotOf(fg, "leaks");
+        CHECK(late && *late == 1, "la.area_policy after the load is refused");
+        CHECK(leaks && *leaks == 0, "a credit's acknowledgement and timeout stay the service's");
+
+        // Held, with a hold.accept that takes no LIT: no area hit either.
+        {
+            struct Tool : LightAir_HoldTool {
+                std::function<void(LightAir_HoldHost&)> body;
+                const char* holdName() const override { return "Script"; }
+                void runHeld(LightAir_HoldHost& h) override { if (body) body(h); }
+            };
+            struct Chord : LightAir_Keypad {
+                bool down = false, have = false;
+                uint8_t getEvents(KeypadRawEvent* buf, uint8_t maxN) override {
+                    if (down == have || maxN < 2) return 0;
+                    have = down;
+                    buf[0] = { 'A', down }; buf[1] = { 'B', down };
+                    return 2;
+                }
+            };
+            CHECK(shared.load("test/host/fixtures/area.lua"), "area fixture reloads for the hold");
+            LightAir_InputCtrl in9;
+            Chord              kp9;
+            in9.registerKeypad(InputDefaults::KEYPAD_ID, kp9);
+            LightAir_RadioTestTransport tr9;
+            LightAir_Radio     rad9(tr9, 2, 0x42, 0, 0);
+            rad9.begin();
+            LightAir_GameRunner run9;
+            roster7(run9);
+            Tool tool9;
+            run9.setHoldTool(tool9);
+            run9.begin(fg, d7, in9, rad9, nullptr);
+            int* h9 = slotOf(fg, "hits");
+            bool ran = false;
+            tool9.body = [&](LightAir_HoldHost& host) {
+                ran = true;
+                const uint8_t area[3] = { 40, 3, 1 };
+                tr9.push(3, 0, 1, RadioMsg::MSG_AREA, 0x42, ts7++, 0, area, 3);
+                g_millis += 20; host.service();
+                CHECK(h9 && *h9 == 0, "held, no LIT accepted: an area hit does not arrive either");
+            };
+            kp9.down = true;
+            for (int i = 0; i < 100 && !ran; i++) { g_millis += 10; run9.update(); }
+            CHECK(ran, "the area fixture's hold ran");
+        }
+
+        // Malformed policies refuse the load, each for its own reason.
+        const char* bpath = "test/host/build/ba.lua";
+        const char* bads[][2] = {
+            { "la.area_policy(41, {})",                                   "bands required" },
+            { "la.area_policy(41, { bands = { { -60, 0 } } })",           "band out of range" },
+            { "la.area_policy(41, { bands = { { 5, 1 } } })",             "band out of range" },
+            { "la.area_policy(41, { bands = { {-60,1},{-61,1},{-62,1},{-63,1},{-64,1} } })",
+                                                                          "1-4 bands" },
+            { "la.area_policy(41, { bands = { { -60, 1 } }, on = \"lit\" })", "needs a projector" },
+            { "la.area_policy(41, { bands = { { -60, 1 } }, on = \"hit\" })", "on must be" },
+            { "la.area_policy(41, { bands = { { -60, 1 } }, friendly = \"no\" })", "friendly must be" },
+            { "la.area_policy(0, { bands = { { -60, 1 } } })",            "1-255" },
+            { "la.area_policy(41, { bands = {{-60,1}}, on = \"lit\", projector = 3 })"
+              " la.area_policy(42, { bands = {{-60,1}}, on = \"shone\", projector = 3 })",
+                                                                          "already triggers" },
+        };
+        for (auto& b : bads) {
+            FILE* f = fopen(bpath, "w");
+            fprintf(f, "%s\nreturn { api = 1, type_id = 0x7F0C, name = \"Bad\", initial_state = 0,\n"
+                       "  config = {}, vars = {}, monitor = {}, winners = {},\n"
+                       "  totem_slots = {}, teams = 0, rules = {}, update = {} }\n", b[0]);
+            fclose(f);
+            CHECK(!shared.load(bpath) && strstr(shared.loadError(), b[1]), b[1]);
+        }
+        // Declaring an id again replaces it, triggers included.
+        {
+            FILE* f = fopen(bpath, "w");
+            fprintf(f, "la.area_policy(41, { bands = {{-60,1}}, on = \"lit\", projector = 3 })\n"
+                       "la.area_policy(41, { bands = {{-50,2},{-70,1}}, on = \"lit\", projector = 3 })\n"
+                       "return { api = 1, type_id = 0x7F0C, name = \"Re\", initial_state = 0,\n"
+                       "  config = {}, vars = {}, monitor = {}, winners = {},\n"
+                       "  totem_slots = {}, teams = 0, rules = {}, update = {} }\n");
+            fclose(f);
+            CHECK(shared.load(bpath), shared.loadError());
+            const LightAir_Game& rg = shared.descriptor();
+            CHECK(rg.areaPolicyCount == 1 && rg.areaPolicies[0].bandCount == 2,
+                  "declaring a policy again replaces it");
+        }
+        remove(bpath);
+        g_millisStep = 0;
     }
 
     printf(failures == 0 ? "\nLUAGAME HOST TESTS PASS\n" : "\n%d FAILURES\n", failures);

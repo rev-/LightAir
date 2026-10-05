@@ -72,8 +72,16 @@ end
 
 function std.lit_target(cfg)
   return function(vars, pkt)
-    if cfg.friendly and cfg.friendly(pkt) then return cfg.reply.friend end
-    if cfg.immunity.active(pkt.sender)   then return cfg.reply.immune end
+    -- An area hit whose originator is this player got here only because
+    -- its policy allows self-hits (self = true): that flag is the whole
+    -- rule, so friendly fire does not get a second say.
+    local own_area = pkt.area and pkt.sender == la.my_id()
+    if cfg.friendly and not own_area and cfg.friendly(pkt) then return cfg.reply.friend end
+    -- Immunity is a rule about BEAMS: a direct hit is refused inside the
+    -- window and opens one.  An area hit (pkt.area — the firmware's area
+    -- service, from someone else's beam landing nearby) neither checks it
+    -- nor marks it.
+    if not pkt.area and cfg.immunity.active(pkt.sender) then return cfg.reply.immune end
     -- Only gate when the game has somewhere to report the refusal.  A
     -- silent decline is the worst failure this game can have — the shooter
     -- aimed, hit, and saw nothing — so the gate is available exactly to
@@ -84,7 +92,7 @@ function std.lit_target(cfg)
     end
     vars[cfg.lives] = vars[cfg.lives] - std.absorbed(pkt)
     if vars[cfg.lives] < 0 then vars[cfg.lives] = 0 end
-    cfg.immunity.mark(pkt.sender)
+    if not pkt.area then cfg.immunity.mark(pkt.sender) end
     if vars[cfg.lives] > 0 then
       la.ui("GotLit")
       return cfg.reply.taken

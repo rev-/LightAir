@@ -151,18 +151,16 @@ Splash is unaffected either way: its radius is *meant* to be fuzzy.
 
 ## 5. Splash
 
-A player who absorbs a beam broadcasts a beacon; bystanders take graded
-damage from its RSSI. The reach comes from the **attacker's** profile and
-is relayed by the victim.
+A player who absorbs a SPLASH beam becomes the centre of an area: their
+device broadcasts a beacon, and bystanders take graded damage from its RSSI.
+The bands come from the projector's area policy, the credit goes to the
+**shooter**, and the victim only relays.
 
 RSSI is the right tool here and the wrong one in §4, for three reasons: a
 splash radius is inherently fuzzy, graded bands degrade by one step rather
 than between hit and nothing, and there is no optical measurement to a
 bystander who was never aimed at — so RSSI is not a worse choice than
 something better, it is the only choice.
-
-MSG.SPLASH payload: `[projector id, strength, rssi gate, origin, shooter id]`,
-single-hop.
 
 **One of the four standard profiles carries it: `proj.standard.SPLASH`.**
 Splash is loud,
@@ -173,37 +171,78 @@ the point is the two-band beacon it triggers around whoever it lands on. It
 carries its own icon, its own shine feedback, a long cooldown and a slow
 refill, so it reads and feels different in the hand.
 
-### Splash is the projector's, not the ruleset's
+### The area service is the firmware's, the hit is the ruleset's
 
-No game file calls `emit_splash` or `on_splash`.  `projector.lua` registers
-an `la.on_load` hook, which the firmware runs on the game table before it
-reads it, and that hook wires splash into every state that handles a LIT:
+Splash is one use of a general mechanism, the **area service** in
+`LightAir_GameRunner` (wire format in `src/game/LightAir_AreaEffect.h`,
+policy in `LightAir_Game.h` §7b).  A profile declares its area as data:
 
-- **Victim.** The state's LIT handler is wrapped.  The game's own handler
-  still decides what the beam did; when its reply says the hit landed, a
-  hit from a splashing projector bursts.  The profile's `on` picks which
-  hits: `"lit"` (the default, SPLASH's) bursts on every hit that landed,
-  the knock-out included; `"shone"` on the knock-out alone.
-- **Bystander.** The state gains a SPLASH handler.  A beacon in reach
-  becomes a hit from the **shooter**, worth the band's share, handed to
-  the same, unwrapped LIT handler — so lives, immunity, friendly fire and
-  being out mean exactly what that ruleset says they mean.  Because it
-  goes to the unwrapped handler it can never burst again, and its reply
-  goes nowhere.  A shooter is never splashed by their own beam.
+```lua
+area = {
+  on       = "lit",                      -- or "shone": the knock-out alone
+  bands    = { { -55, 2 }, { -70, 1 } }, -- { rssi floor, hit strength }
+  friendly = "game",                     -- or "never"
+  self     = false,                      -- may the shooter be caught
+  credit   = true,                       -- an area knock-out scores for the shooter
+},
+```
 
-A state that declares its own SPLASH handler keeps it.
+and `define()` registers it with `la.area_policy` under the projector's own
+id.  Every device runs the same file, so every device holds the same
+policies; no game file mentions splash.  From there the firmware does it:
 
-**The reply convention.**  Splash learns whether a beam landed from the LIT
-reply, and reads two codes: **1 = the hit was taken, 2 = it put the player
-down**.  Every other reply (immune, friendly, already out, no effect) means
-it did not land.  All the lives games already answered that way; Virus moved
-its "no effect" reply off 1 so a clean player's harmless hit does not burst.
-A new ruleset that takes hits should keep 1 and 2 for those two meanings.
+- **Trigger (the victim).** A LIT from that projector which the ruleset
+  answered TAKEN or SHONE (`la.hit`) makes this player the centre: the
+  runner broadcasts `MSG_AREA [policy, shooter, shooter's team]`,
+  single-hop.  `on = "shone"` triggers on the knock-out alone.  A refused
+  hit (immune, friendly, already out, no effect) triggers nothing.
+- **Receive (the bystander).** A beacon in reach becomes a LIT from the
+  **shooter**, at the first band its RSSI reaches, flagged as an area hit
+  (`pkt.area`), handed to the state's own LIT handler — so lives, friendly
+  fire and being out mean exactly what that ruleset says they mean.  Its
+  reply goes nowhere: the shooter never sent it.
+- **Credit (the shooter).** An area hit the ruleset answered SHONE is sent
+  back to the shooter (`MSG_AREA_CREDIT`, acknowledged), whose runner plays
+  it to the ruleset as a SHONE reply to one of its own LITs — each game
+  scores it exactly as it scores a direct knock-out, and `reply.sender`
+  names who went down.
 
-**Not decided yet.**  A splash knock-out does not credit the shooter: the
-bystander's reply goes nowhere, because the shooter never sent that player
-anything to reply to.  In Virus a SPLASH hit carries no virus tag, so splash
-is a no-op there by Virus's own rule.
+**Immunity is the beam's.**  `std.lit_target` refuses a direct hit inside
+the shooter's immunity window and opens one, for SPLASH as for every
+projector; an area hit neither checks the window nor opens it.  Hit B with
+SPLASH and A and C, close by, take the area; hit A straight away and C takes
+it again.
+
+**Self is the policy's.**  With `self = false` (SPLASH) the shooter is never
+caught in their own area; with `self = true` they are, and neither a
+`friendly = "never"` policy nor the game's friendly-fire rule overrides it.
+
+**The reply convention.**  The trigger reads two codes from the ruleset's
+LIT reply, the named constants `la.hit.TAKEN = 1` and `la.hit.SHONE = 2`;
+every other reply means the hit did not land.  A ruleset that takes hits
+uses them for those two meanings (every game's `R` table starts from them).
+
+**A ruleset's own area.**  `la.area_policy(id, spec)` with no `on` declares
+an area nothing triggers; the ruleset starts it with `la.area_emit(id)`
+from a handler, a rule or `update`, with this player as centre and
+originator.  It returns false from inside an area hit's handler.
+
+**Virus.**  An area hit carries its policy's `role_tag` (SPLASH: 0), so in
+Virus it is a clean hit and has no effect by Virus's own rule today.
+
+Guards, each with a test that fails when it is removed:
+
+| Guard | Why |
+|---|---|
+| an area hit never triggers a beacon, and `la.area_emit` refuses inside one | otherwise one beam cascades across the field |
+| the area flag is local: a LIT from the air has it cleared | a peer could otherwise skip every immunity window |
+| single-hop broadcast, never a relay | a flooded area is the opposite of a radius |
+| one triggered beacon per 250 ms (`EMIT_MIN_GAP_MS`) | repeated hits would flood the channel |
+| the shooter's id and team travel | friendly fire is judged against whoever fired, not the victim who relayed |
+| `self` alone decides about the shooter | with friendly fire on, nothing else would spare them |
+| an area hit's reply is dropped; only SHONE sends a credit | the shooter never sent a LIT to be answered |
+| a held player takes an area hit only if `hold.accept` takes a LIT | an area hit is a LIT |
+| policies are declared while the game loads, never later | the runner reads the count once |
 
 ---
 
@@ -231,8 +270,9 @@ That includes the values the baseline fixes today (cycles, cooldown):
 they may become menu values, and a relation keeps holding when they do.
 `proj.rel` follows a game's *own* baseline (id 0) when it declares one, and
 clamps the result to the field's limits, like a literal at load. Every
-receiver resolves against the same config, so a profile looked up by id
-from a splash beacon means the same thing on every device.
+receiver resolves against the same config, so a profile looked up by the
+id a LIT carries (an area hit's included) means the same thing on every
+device.
 
 | | id | pool | recharge | cooldown | cycles | strength | range label | ready |
 |---|---|---|---|---|---|---|---|---|
@@ -264,8 +304,8 @@ A profile field may be a literal, the id of a game var, or a function of
 vars — the var-id form is what keeps menu-owned values live.
 
 Ids are **fixed and reserved**, because a projector id travels on the wire:
-a splash beacon names the projector that fired and every receiver looks the
-profile up by that id locally. A game's own profiles start above this range.
+a LIT names the projector that fired, an area beacon names its policy by
+the same id, and every receiver looks either up by that id locally. A game's own profiles start above this range.
 
 STRONG weighs **three standard hits**, which in a lives game is three lives
 from one beam.
@@ -287,22 +327,6 @@ That is a fix, not a constraint: previously each step took the *full* burst,
 so an N-step action ran N times too long. The catalogue's signatures are now
 two rising ticks (FAST), a chirp into a held tone (LONG), three descending
 notes (STRONG), and a punch that flares (SPLASH).
-
-Six guards, each with a test that fails when it is removed:
-
-| Guard | Why |
-|---|---|
-| only a direct optical LIT emits (`origin`), and `on_splash` never calls `emit_splash` | otherwise one beam cascades across the field |
-| single-hop broadcast, never a relay | a flooded splash is the opposite of a radius |
-| a player never splashes themselves | the emitter already took the direct hit |
-| one beacon per shot, rate-limited | repeated hits would flood the channel |
-| the shooter's id travels | friendly fire is judged against whoever fired, not the victim who relayed |
-| a shooter's own beacon never hits them | with friendly fire on, nothing else would spare them |
-
-**Bands are the reach.** When a profile declares them, the outermost band
-is the cutoff and the flat `rssi` is just the one-band shorthand; the gate
-byte on the wire carries the outermost band so a receiver falling back to
-it admits everyone the bands would.
 
 ---
 
@@ -439,7 +463,8 @@ submenu. `std.pickup_effect` applies it when the player claims the totem.
 **The standard catalogue is always known.** `define()` registers SPLASH,
 FAST, LONG and STRONG in every game, declared or not, so a bonus can give
 any of them. Known is not owned: the inventory still starts with the
-baseline alone. Splash lookup-by-id gets the same guarantee for free.
+baseline alone. SPLASH's area policy is registered in every game for the
+same reason, so a SPLASH bonus splashes wherever it is picked up.
 
 **`proj.bonus_options()`** builds the BONUS list: `LIFE`, the catalogue in
 id order, then the game's own profiles. A profile marked `bonus = false`

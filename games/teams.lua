@@ -38,7 +38,8 @@ local pickup = std.pickup_effect{ proj = proj, lives = "lives",
 
 local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
-local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
+-- TAKEN and SHONE are the firmware's (la.hit): its area service reads them.
+local R   = { TAKEN = la.hit.TAKEN, SHONE = la.hit.SHONE, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
 
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
 -- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).

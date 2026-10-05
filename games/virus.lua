@@ -34,11 +34,11 @@ local MSG = la.msg
 -- reuse the 0xA0 infrastructure or 0xF0 totem-protocol blocks.
 local MSG_INFECTED = 0x16
 
--- Reply sub-types for MSG.LIT.  The projector library reads a LIT reply of
--- 1 as "the hit was taken" and 2 as "it put the player down" (that is what
--- makes a SPLASH projector burst), so NOEFFECT keeps clear of 1 and an
--- infection takes 2.
-local R = { INFECTED = 2, VIRUS = 3, NOEFFECT = 4 }
+-- Reply sub-types for MSG.LIT.  The firmware reads two of them (la.hit):
+-- TAKEN means the hit landed and SHONE that it put the player out of play —
+-- its area service triggers and credits on those.  An infection is this
+-- game's SHONE; "no effect" and "already a virus" stay off both.
+local R = { INFECTED = la.hit.SHONE, VIRUS = 3, NOEFFECT = 4 }
 
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
 -- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).

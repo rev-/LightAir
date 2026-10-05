@@ -43,6 +43,7 @@ FW_SRC := $(ROOT)/src/lua/LightAir_LuaGame.cpp \
           $(ROOT)/src/lua/LightAir_TotemEncoder.cpp \
           $(ROOT)/src/lua/LightAir_LuaEngine.cpp \
           $(ROOT)/src/game/LightAir_GameRunner.cpp \
+          $(ROOT)/src/game/LightAir_AreaEffect.cpp \
           $(ROOT)/src/game/LightAir_ToolsMenu.cpp \
           $(ROOT)/src/game/LightAir_ConfigBlob.cpp \
           $(ROOT)/src/radio/LightAir_Radio.cpp \

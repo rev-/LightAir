@@ -27,7 +27,8 @@ local S = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg          -- MSG.LIT, MSG.SCORE_COLLECT, MSG.BONUS_BEACON, ...
 
 -- Reply sub-types (payload[0] of the 0x11 reply) — game-private.
-local R = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
+-- TAKEN and SHONE are the firmware's (la.hit): its area service reads them.
+local R = { TAKEN = la.hit.TAKEN, SHONE = la.hit.SHONE, DOWN = 3, IMMUNE = 4 }
 
 local IMMUNITY_MS = 3000
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),

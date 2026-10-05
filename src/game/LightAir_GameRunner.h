@@ -195,6 +195,10 @@ private:
     uint32_t     _restartDownAt       = 0;     // millis() A went down on the end screen
     bool         _restartSpoiled      = false; // B was down during this A press
 
+    // ---- Area service (see "Area effects" in the .cpp) ----
+    uint32_t _areaSentAt   = 0;      // millis() of the last triggered beacon
+    bool     _areaSentEver = false;  // "never" is not "at time zero"
+
     bool holdChord(const InputReport& in);
     void runHold();
     void holdBegin();
@@ -212,6 +216,14 @@ private:
     void scoreRadio(const RadioReport&, GameOutput&);
     void scoreInput(const InputReport&);
     void replyToTotemBeacon(const RadioEvent& ev, GameOutput& output);
+    bool holdDrops(uint8_t senderId, uint8_t msgType) const;
+    bool holdAccepts(uint8_t msgType) const;
+    void dispatchReply(RadioEventType type, const RadioPacket& reply,
+                       const RadioPacket& original, int8_t rssi, GameOutput& output);
+    const DirectRadioRule* directRuleFor(const RadioPacket& pkt) const;
+    void areaAfterHit(const RadioPacket& lit, uint8_t sub, GameOutput& output);
+    void areaReceive(const RadioEvent& ev, GameOutput& output);
+    void areaCredit(const RadioEvent& ev, GameOutput& output);
 
     // Score collection helpers (all defined in .cpp)
     void postScoreAnnounce();

@@ -21,6 +21,7 @@
 
 #include "../totem/TotemRoleIds.h"
 #include "../game/LightAir_GameRunner.h"
+#include "../game/LightAir_AreaEffect.h"
 #include "../radio/LightAir_Radio.h"
 #include "../ui/player/display/LightAir_DisplayCtrl.h"
 #include "../ui/player/LightAir_UICtrl.h"
@@ -58,7 +59,7 @@ static const NamedU8 kMsgConsts[] = {
     { "LIT",           RadioMsg::MSG_LIT },
     { "SCORE_COLLECT", RadioMsg::MSG_SCORE_COLLECT },
     { "POINT_REPORT",  RadioMsg::MSG_POINT_REPORT },
-    { "SPLASH",        RadioMsg::MSG_SPLASH },
+    { "AREA",          RadioMsg::MSG_AREA },
     { "FLAG_EVENT",    RadioMsg::MSG_FLAG_EVENT },
     { "CP_BEACON",     RadioMsg::MSG_CP_BEACON },
     { "CP_SCORE",      RadioMsg::MSG_CP_SCORE },
@@ -97,6 +98,9 @@ int LightAir_LuaGame::l_pkt_index(lua_State* L) {
     else if (strcmp(k, "msg")    == 0) lua_pushinteger(L, p->msgType);
     else if (strcmp(k, "len")    == 0) lua_pushinteger(L, p->payloadLen);
     else if (strcmp(k, "rssi")   == 0) lua_pushinteger(L, g_luaCtx.pktRssi[which]);
+    // An area hit the runner built from a beacon (not a beam that reached
+    // this player): no immunity applies to it, and it never answers.
+    else if (strcmp(k, "area")   == 0) lua_pushboolean(L, areaIsHit(*p));
     else lua_pushnil(L);
     return 1;
 }
@@ -585,22 +589,139 @@ int LightAir_LuaGame::l_lib(lua_State* L) {
     return 1;
 }
 
-// la.on_load(fn) — fn(game) runs once, after the ruleset file has returned
-// its table and before the firmware reads it (loaderBody).  It is how a
-// library attaches behaviour that belongs to it rather than to any one
-// ruleset: projector.lua uses it to wire splash into every game that
-// handles a LIT, so no game file has to.  Hooks run in registration order,
-// protected — an error refuses the load like any other.  A manifest peek
-// never reaches them: it does not run loaderBody, and libraries are inert
-// stand-ins there anyway.
-int LightAir_LuaGame::l_on_load(lua_State* L) {
-    LightAir_LuaGame* g = self(L);
-    luaL_checktype(L, 1, LUA_TFUNCTION);
-    lua_rawgeti(L, LUA_REGISTRYINDEX, g->_loadHooksRef);
-    lua_pushvalue(L, 1);
-    lua_rawseti(L, -2, (lua_Integer)lua_rawlen(L, -2) + 1);
+// la.area_policy(id, spec) — declare an area effect (LightAir_Game.h §7b).
+// The mechanism is the runner's; this is the data it follows, and every
+// device in the session runs the same file, so holds the same policies.
+//
+//   bands     = { { rssi, magnitude }, ... }  required, 1..MAX_BANDS: the
+//               first floor (dBm) the beacon reaches is the hit's strength
+//   projector = id, on = "lit" | "shone"     optional trigger: a hit from
+//               that projector the target's ruleset answered TAKEN/SHONE
+//               ("lit", the knock-out included) or SHONE alone ("shone")
+//   friendly  = "game" (default) | "never"   who decides about teammates
+//   self      = false (default)              may the originator be caught
+//   credit    = true (default)               knock-outs credit the originator
+//   role_tag  = 0 (default)                  role tag the area hit carries
+//
+// Declaring an id again replaces it.  Anything malformed refuses the load,
+// with the reason on the failure screen.
+static uint8_t areaByte(lua_State* L, int t, const char* k, lua_Integer lo,
+                        lua_Integer hi, lua_Integer dflt) {
+    lua_getfield(L, t, k);
+    lua_Integer v = dflt;
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isinteger(L, -1)) luaL_error(L, "area policy: %s must be an integer", k);
+        v = lua_tointeger(L, -1);
+        if (v < lo || v > hi) luaL_error(L, "area policy: %s out of range", k);
+    }
     lua_pop(L, 1);
+    return (uint8_t)v;
+}
+
+int LightAir_LuaGame::l_area_policy(lua_State* L) {
+    LightAir_LuaGame* g = self(L);
+    // The descriptor copies the count when the load ends; a later
+    // declaration would never reach the runner.
+    if (g->_loaded) return luaL_error(L, "la.area_policy: only while the game loads");
+    const lua_Integer id = luaL_checkinteger(L, 1);
+    if (id < 1 || id > 255) return luaL_error(L, "area policy id must be 1-255");
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    AreaPolicy p;
+    memset(&p, 0, sizeof(p));
+    p.id = (uint8_t)id;
+
+    lua_getfield(L, 2, "bands");
+    if (!lua_istable(L, -1)) return luaL_error(L, "area policy %d: bands required", (int)id);
+    const lua_Integer n = (lua_Integer)lua_rawlen(L, -1);
+    if (n < 1 || n > AreaDefaults::MAX_BANDS)
+        return luaL_error(L, "area policy %d: 1-%d bands", (int)id, AreaDefaults::MAX_BANDS);
+    for (lua_Integer i = 1; i <= n; i++) {
+        lua_rawgeti(L, -1, i);
+        lua_rawgeti(L, -1, 1);
+        lua_rawgeti(L, -2, 2);
+        if (!lua_isinteger(L, -2) || !lua_isinteger(L, -1))
+            return luaL_error(L, "area policy %d: a band is { rssi, magnitude }", (int)id);
+        const lua_Integer rssi = lua_tointeger(L, -2), mag = lua_tointeger(L, -1);
+        if (rssi < -127 || rssi > 0 || mag < 1 || mag > 255)
+            return luaL_error(L, "area policy %d: band out of range", (int)id);
+        p.bands[i - 1] = { (int8_t)rssi, (uint8_t)mag };
+        lua_pop(L, 3);
+    }
+    lua_pop(L, 1);
+    p.bandCount = (uint8_t)n;
+    // Strongest first: the first floor a reading reaches is its band.
+    for (uint8_t i = 1; i < p.bandCount; i++)
+        for (uint8_t j = i; j > 0 && p.bands[j].rssi > p.bands[j - 1].rssi; j--) {
+            const AreaBand t = p.bands[j]; p.bands[j] = p.bands[j - 1]; p.bands[j - 1] = t;
+        }
+
+    lua_getfield(L, 2, "on");
+    const char* on = lua_tostring(L, -1);
+    if (!on)                       p.on = AreaTrigger::NONE;
+    else if (!strcmp(on, "lit"))   p.on = AreaTrigger::LIT;
+    else if (!strcmp(on, "shone")) p.on = AreaTrigger::SHONE;
+    else return luaL_error(L, "area policy %d: on must be \"lit\" or \"shone\"", (int)id);
+    lua_pop(L, 1);
+    if (p.on != AreaTrigger::NONE) {
+        lua_getfield(L, 2, "projector");
+        if (!lua_isinteger(L, -1))
+            return luaL_error(L, "area policy %d: on needs a projector id", (int)id);
+        lua_pop(L, 1);
+        p.projector = areaByte(L, 2, "projector", 0, 255, 0);
+    }
+
+    lua_getfield(L, 2, "friendly");
+    const char* fr = lua_tostring(L, -1);
+    if (!fr || !strcmp(fr, "game")) p.friendly = AreaFriendly::GAME;
+    else if (!strcmp(fr, "never"))  p.friendly = AreaFriendly::NEVER;
+    else return luaL_error(L, "area policy %d: friendly must be \"game\" or \"never\"", (int)id);
+    lua_pop(L, 1);
+
+    lua_getfield(L, 2, "self");   p.self   = lua_toboolean(L, -1) != 0;   lua_pop(L, 1);
+    lua_getfield(L, 2, "credit"); p.credit = lua_isnil(L, -1) || lua_toboolean(L, -1); lua_pop(L, 1);
+    p.roleTag = areaByte(L, 2, "role_tag", 0, 255, 0);
+
+    uint8_t slot = g->_areaPolicyCount;
+    for (uint8_t i = 0; i < g->_areaPolicyCount; i++) {
+        const AreaPolicy& q = g->_areaPolicies[i];
+        if (q.id == p.id) { slot = i; continue; }
+        if (p.on != AreaTrigger::NONE && q.on != AreaTrigger::NONE && q.projector == p.projector)
+            return luaL_error(L, "area policy %d: projector %d already triggers policy %d",
+                              (int)id, (int)p.projector, (int)q.id);
+    }
+    if (slot == g->_areaPolicyCount) {
+        if (g->_areaPolicyCount >= AreaDefaults::MAX_POLICIES)
+            return luaL_error(L, "too many area policies (max %d)", AreaDefaults::MAX_POLICIES);
+        g->_areaPolicyCount++;
+    }
+    g->_areaPolicies[slot] = p;
     return 0;
+}
+
+// la.area_emit(id) -> bool — this player is the centre of an area effect,
+// and its originator.  For effects a ruleset decides on (a figure that
+// bursts when shone, …); a projector's area needs no call, the runner
+// triggers it.  Returns false while handling an area hit: an area effect
+// never starts another, which is what keeps them from chaining.
+int LightAir_LuaGame::l_area_emit(lua_State* L) {
+    LightAir_LuaGame* g = self(L);
+    const lua_Integer id = luaL_checkinteger(L, 1);
+    bool known = false;
+    for (uint8_t i = 0; i < g->_areaPolicyCount; i++)
+        if (g->_areaPolicies[i].id == id) known = true;
+    if (!known) return luaL_error(L, "unknown area policy %d", (int)id);
+    if (!g_luaCtx.out || !g_luaCtx.radio)
+        return luaL_error(L, "la.area_emit: only from a handler, a rule or update");
+    if (g_luaCtx.pkts[0] && areaIsHit(*g_luaCtx.pkts[0])) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const uint8_t me = g_luaCtx.radio->playerId();
+    areaBeacon(g_luaCtx.out->radio, (uint8_t)id, me,
+               g_luaCtx.runner ? g_luaCtx.runner->teamOf(me) : 0xFF);
+    lua_pushboolean(L, 1);
+    return 1;
 }
 
 /* =========================================================
@@ -633,7 +754,8 @@ void LightAir_LuaGame::registerKernel() {
         { "show", l_show }, { "clear_tray", l_clear_tray },
         { "background", l_background },
         { "lib", LightAir_LuaGame::l_lib },
-        { "on_load", LightAir_LuaGame::l_on_load },
+        { "area_policy", LightAir_LuaGame::l_area_policy },
+        { "area_emit",   LightAir_LuaGame::l_area_emit },
     };
     for (const Verb& v : kVerbs) {
         lua_pushlightuserdata(L, this);
@@ -657,6 +779,15 @@ void LightAir_LuaGame::registerKernel() {
         lua_setfield(L, -2, m.name);
     }
     lua_setfield(L, -2, "msg");
+
+    // la.hit — the two LIT replies the firmware reads (HitReply): a ruleset
+    // answers TAKEN when a hit landed and SHONE when it put the player out
+    // of play, and keeps every other meaning off both.  The area service
+    // triggers on them and credits on SHONE.
+    lua_newtable(L);
+    lua_pushinteger(L, HitReply::TAKEN); lua_setfield(L, -2, "TAKEN");
+    lua_pushinteger(L, HitReply::SHONE); lua_setfield(L, -2, "SHONE");
+    lua_setfield(L, -2, "hit");
 
     // la.icons — the icon registry, so a projector profile can name the icon
     // its energy cell should carry.  Same shape as la.msg: data, pushed once.
@@ -745,8 +876,4 @@ void LightAir_LuaGame::registerKernel() {
     // ---- la.lib cache ----
     lua_newtable(L);
     _libCacheRef = luaL_ref(L, LUA_REGISTRYINDEX);
-
-    // ---- la.on_load hooks ----
-    lua_newtable(L);
-    _loadHooksRef = luaL_ref(L, LUA_REGISTRYINDEX);
 }

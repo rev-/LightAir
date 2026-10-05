@@ -34,7 +34,17 @@ namespace RadioMsg {
 // Used by every game where players shine each other directly.
 
 // Unicast lit notification, sent by the shining player to the lit target.
-// Reply (0x11) payload[0] = ReplySubType (TAKEN / SHONE / DOWN / FRIEND).
+//   payload[0] = strength, in standard hits
+//   payload[1] = projector id (games/lib/projector.lua)
+//   payload[2] = role tag
+//   payload[3] = RSSI gate, positive magnitude (50 means -50 dBm; 0 = none)
+//   payload[4] = flags, never sent on the wire: AreaDefaults::HIT_FLAG_AREA
+//                marks a hit the area service built locally from a MSG_AREA
+//                beacon (see below).  A real LIT is 4 bytes or fewer, and
+//                the runner clears the flag on any LIT from the air.
+// Reply (0x11) payload[0] = the game's reply sub-type.  Two values are
+// fixed for every ruleset, because the firmware reads them (HitReply):
+// TAKEN = the hit landed, SHONE = it put the player out of play.
 constexpr uint8_t MSG_LIT           = 0x10;
 
 // End-game score broadcast, one packet per player.
@@ -47,19 +57,29 @@ constexpr uint8_t MSG_POINT_REPORT  = 0x14;
 // game files may claim even msgTypes outside the 0xA0/0xF0 blocks —
 // typeId + sessionToken isolate games on the wire).
 
-// Splash broadcast, sent by a player who has just absorbed a LIT, so that
-// bystanders can take graded splash damage from the same beam.  Used by
-// games/lib/projector.lua for any profile that declares a splash.
-//   payload[0] = splash strength, in standard hits
-//   payload[1] = RSSI gate, as a positive magnitude (50 means -50 dBm):
-//                the ATTACKER's projector declares it; a bystander compares
-//                its own reading of this packet against it.
-//   payload[2] = origin: 1 = a direct optical LIT.  A splash-induced hit
-//                never re-broadcasts, which is what stops a chain reaction.
-// Single-hop only (resend 0) — a flooded splash would reach the whole field.
-// No reply expected.
-constexpr uint8_t MSG_SPLASH        = 0x18;
-// Next available in 0x10 block: 0x1A
+// Area-effect beacon (the area service in LightAir_GameRunner).  Broadcast
+// from where an area effect happens — by the player a splashing projector
+// just hit, or (later) by a totem or by game code — so that everyone in
+// radio range applies the effect graded by the beacon's RSSI.
+//   payload[0] = area policy id (declared with la.area_policy; every device
+//                in the session holds the same policies)
+//   payload[1] = originator: who the effect is credited to and whose team
+//                friendly fire is judged against (not the relayer)
+//   payload[2] = originator's team (0xFF = none)
+// Single-hop only (resend 0): a flooded beacon would reach the whole field,
+// and the radius IS the beacon's reach.  Never answered.  A hit built from
+// one never emits another, which is what stops a chain reaction.
+constexpr uint8_t MSG_AREA          = 0x18;
+
+// Area knock-out credit, unicast to the originator by a player an area
+// effect put out of play.  payload[0] = policy id, payload[1] = the reply
+// sub-type the knocked-out player's ruleset gave (HitReply::SHONE).  The
+// originator's runner acknowledges it (0x1B, which frees the sender's
+// pending slot) and delivers it to its ruleset as if that player had
+// answered one of its own LITs with SHONE — so each game scores an area
+// knock-out exactly as it scores a direct one.
+constexpr uint8_t MSG_AREA_CREDIT   = 0x1A;
+// Next available in 0x10 block: 0x1C
 
 // ── 0x50 block: totem-mediated game messages ────────────────────
 // Messages that travel between a player and a totem (not player→player).
@@ -167,6 +187,26 @@ constexpr uint8_t MSG_TOTEM_BEACON  = 0xF0;
 constexpr uint8_t MSG_TOTEM_ROSTER  = 0xF2;
 
 } // namespace RadioMsg
+
+// The two LIT reply sub-types the firmware reads (see MSG_LIT).  Every
+// ruleset that takes hits answers with these for these two meanings — the
+// area service triggers on them and credits on SHONE — and keeps every
+// other meaning (immune, friendly, already out, no effect) off both.
+namespace HitReply {
+    constexpr uint8_t TAKEN = 1;   // the hit landed
+    constexpr uint8_t SHONE = 2;   // the hit put the player out of play
+}
+
+// Area effects (LightAir_GameRunner's area service; policies are declared
+// by game files and libraries with la.area_policy).
+namespace AreaDefaults {
+    constexpr uint8_t  MAX_POLICIES     = 8;    // per game
+    constexpr uint8_t  MAX_BANDS        = 4;    // RSSI bands per policy
+    constexpr uint8_t  HIT_FLAG_AREA    = 0x01; // MSG_LIT payload[4]: a locally built area hit
+    // One beacon per hit: a projector-triggered emission inside this window
+    // of the previous one is dropped, so a burst of hits cannot flood.
+    constexpr uint16_t EMIT_MIN_GAP_MS  = 250;
+}
 
 // ---------------------------------------------------------------
 // FlagEvent — payload[0] sub-types of MSG_FLAG_EVENT (0x50).

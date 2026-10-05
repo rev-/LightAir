@@ -32,6 +32,7 @@
 //   §5  StateBehavior                 — per-state tick bodies
 //   §6  WinnerVar / ScoreTable        — end-game winner election
 //   §7  TotemRequirement / -Program   — totem roles + TotemVM bytes
+//   §7b AreaPolicy                    — area effects (GameRunner's area service)
 //   §8  MenuResult                    — pre-game menu result
 //   §9  struct LightAir_Game          — the descriptor itself
 //
@@ -478,6 +479,59 @@ struct TotemProgramEntry {
 };
 
 /* ================================================================
+ * §7b AreaPolicy — area effects
+ * ================================================================ */
+
+// ----------------------------------------------------------------
+// An area effect is something that happens at one place and reaches
+// everyone near it: a splashing projector's hit, and later a totem or a
+// game figure.  The MECHANISM is the runner's (LightAir_GameRunner, "area
+// service"): the beacon, its reach graded by RSSI, who is spared, the hit
+// it becomes, the credit.  What a hit DOES stays the ruleset's — an area
+// hit is handed to the current state's own LIT handler, marked as one.
+// A policy is the data in between, declared by the game file or a library
+// (la.area_policy) and identical on every device in the session, so the
+// beacon only has to name it.
+//
+//   id         on the wire (MSG_AREA payload[0]); 1–255
+//   on         what triggers it without game code: a hit from projector
+//              `projector` that the target's ruleset answered TAKEN (LIT,
+//              any hit that landed, the knock-out included) or SHONE alone.
+//              NONE = only explicit emission (la.area_emit).
+//   bands      RSSI floor → magnitude, strongest first: the first band the
+//              beacon's RSSI reaches is the hit's strength.  None reached =
+//              out of the area.
+//   friendly   GAME: the ruleset's own friendly-fire rule decides, judged
+//              against the ORIGINATOR's team.  NEVER: the originator's
+//              teammates are spared before the ruleset is asked.
+//   self       the originator may be caught in their own area.  This flag
+//              alone decides: `friendly` is about the originator's
+//              teammates, never the originator.
+//   credit     a player the area puts out of play credits the originator
+//              (MSG_AREA_CREDIT).
+//   roleTag    the role tag the area hit carries (MSG_LIT payload[2]).
+// ----------------------------------------------------------------
+enum class AreaTrigger  : uint8_t { NONE = 0, LIT = 1, SHONE = 2 };
+enum class AreaFriendly : uint8_t { GAME = 0, NEVER = 1 };
+
+struct AreaBand {
+    int8_t  rssi;        // dBm floor: the beacon must read at least this
+    uint8_t magnitude;   // hit strength in standard hits (>= 1)
+};
+
+struct AreaPolicy {
+    uint8_t      id;
+    AreaTrigger  on;
+    uint8_t      projector;     // meaningful when on != NONE
+    AreaFriendly friendly;
+    bool         self;
+    bool         credit;
+    uint8_t      roleTag;
+    uint8_t      bandCount;
+    AreaBand     bands[AreaDefaults::MAX_BANDS];
+};
+
+/* ================================================================
  * §8  MenuResult
  * ================================================================ */
 
@@ -660,4 +714,10 @@ struct LightAir_Game {
     // that starts the match has it before onBegin.  Never in the menu.
     int* const* drawnPlayerVars;
     uint8_t     drawnPlayerCount;
+
+    // ---- Area effects (optional, §7b) ----
+    // The policies this game's area effects follow.  nullptr / 0 = the
+    // game neither emits nor accepts any: MSG_AREA is ignored.
+    const AreaPolicy* areaPolicies;
+    uint8_t           areaPolicyCount;
 };

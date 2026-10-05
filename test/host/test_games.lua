@@ -5,11 +5,12 @@ local ROOT = "games/"
 local clock = 0
 
 la = {
-  msg = { LIT = 0x10, SCORE_COLLECT = 0x12, POINT_REPORT = 0x14, SPLASH = 0x18,
+  msg = { LIT = 0x10, SCORE_COLLECT = 0x12, POINT_REPORT = 0x14, AREA = 0x18,
           FLAG_EVENT = 0x50, CP_BEACON = 0x52, CP_SCORE = 0x54,
           BASE_BEACON = 0x56, FLAG_BEACON = 0x58,
           BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60 },
   flag_event = { TAKEN = 1, DROPPED = 2, SCORED = 3 },
+  hit = { TAKEN = 1, SHONE = 2 },         -- HitReply in src/config.h
   -- Mirrors IconType in src/ui/player/display/LightAir_Display_Icons.h.
   -- A profile naming an icon that is not here fails the standard-catalogue
   -- check below, which is what catches this stub drifting from the enum.
@@ -84,39 +85,22 @@ function la.totem_ui(ev, ...) end
 
 local libcache = {}
 
--- la.on_load: on the device a hook belongs to the lua_State its library
--- was loaded into, so it sees that state's games and no other.  Here the
--- library instance stands in for the state: hooks registered while la.lib
--- loads a library belong to that instance, and a library dofile'd directly
--- by a test (a throwaway instance) registers into nothing that ever runs.
-local pending_hooks = {}
-local lib_hooks = setmetatable({}, { __mode = "k" })
-function la.on_load(fn) pending_hooks[#pending_hooks+1] = fn end
-
 function la.lib(name)
-  if not libcache[name] then
-    pending_hooks = {}
-    local mod = dofile(ROOT .. "lib/" .. name .. ".lua")
-    lib_hooks[mod], pending_hooks = pending_hooks, {}
-    libcache[name] = mod
-  end
+  if not libcache[name] then libcache[name] = dofile(ROOT .. "lib/" .. name .. ".lua") end
   return libcache[name]
 end
 
--- Load a game file the way the firmware does: the file runs, then every
--- hook its libraries registered sees the table before anything reads it.
-function run_hooks(g)
-  for _, mod in pairs(libcache) do
-    for _, h in ipairs(lib_hooks[mod] or {}) do h(g) end
-  end
-  return g
-end
-function load_game(path) return run_hooks(dofile(path)) end
+-- The area service is firmware (LightAir_GameRunner, tested in the luagame
+-- suite).  Here the two verbs only record what a library declared or a
+-- ruleset emitted, for the checks below.
+area_policies = {}
+function la.area_policy(id, spec) area_policies[id] = spec end
+function la.area_emit(id) out.radio[#out.radio+1] = { "area", id }; return true end
 
 -- fake packet proxy
 local function mk_pkt(fields)
   local p = { sender = fields.sender or 3, team = fields.team or 1,
-              rssi = fields.rssi or -40, msg = fields.msg,
+              rssi = fields.rssi or -40, msg = fields.msg, area = fields.area,
               len = fields.payload and #fields.payload or 0 }
   function p.byte(self, i) return fields.payload[i] end
   return p
@@ -139,7 +123,7 @@ local failures = 0
 local totem_sizes = {}
 
 for _, f in ipairs(files) do
-  local ok, game = pcall(load_game, ROOT .. f .. ".lua")
+  local ok, game = pcall(dofile, ROOT .. f .. ".lua")
   assert(ok, f .. ": load failed: " .. tostring(game))
 
   -- build the vars "proxy" (plain table with declared defaults)
@@ -724,87 +708,30 @@ do
     check(p.cooldown_ms == 0, "clamp", "cooldown_ms = " .. tostring(p.cooldown_ms))
   end
 
-  -- ---- splash: the attacker's reach, the victim's beacon -----------
+  -- ---- area: a profile's area is a policy for the firmware ---------
+  -- The area service itself (trigger, bands, credit) is firmware and is
+  -- tested through the real runner in the luagame suite.  What the
+  -- projector owes it is the declaration, under the projector's own id.
   do
-    clock, shine_busy_until = 0, 0
-    local P = fresh{ vars = BASE_VARS,
-                     profiles = { { id = 1, name = "BOOM", max_energy = 5,
-                                    splash = { on = "lit", strength = 2, rssi = -60,
-                                               bands = { { -55, 2 }, { -70, 1 } } } },
-                                  { id = 2, name = "QUIET", max_energy = 5 } } }
-    local v = mk_vars(50)
-    P.reset(v)
-    la.trigger_down = function() return false end
-
-    -- Victim side: a LIT from projector 1 relays that projector's reach.
-    local n0 = #out.radio
-    local lit = mk_pkt{ sender = 9, payload = { 1, 1, 0, 0 } }   -- [strength, proj, role, gate]
-    check(P.emit_splash(v, lit, "lit"), "splash", "a splash profile did not emit")
-    local sent = out.radio[#out.radio]
-    check(sent and sent[2] == la.msg.SPLASH, "splash", "the beacon was not MSG.SPLASH")
-    check(sent and sent[1] == "bcast", "splash",
-          "the beacon was relayed; splash must be single-hop")
-    -- The gate on the wire is the OUTERMOST band (-70), not the flat rssi
-    -- (-60): bands are the reach when a profile declares them, and the byte
-    -- is what a bystander without the profile falls back to, so it has to
-    -- admit everyone the bands would.
-    check(sent and sent[3] == 1 and sent[4] == 2 and sent[5] == 70
-          and sent[6] == 1 and sent[7] == 9, "splash",
-          "beacon payload wrong: " .. table.concat({ tostring(sent[3]), tostring(sent[4]),
-              tostring(sent[5]), tostring(sent[6]), tostring(sent[7]) }, "/"))
-
-    -- A projector with no splash stays silent.
-    clock = clock + 1000
-    local n1 = #out.radio
-    P.emit_splash(v, mk_pkt{ sender = 9, payload = { 1, 2, 0, 0 } }, "lit")
-    check(#out.radio == n1, "splash", "a projector with no splash still emitted")
-
-    -- splash.on gates the event.  "lit" answers every hit that landed, the
-    -- knock-out included ("every accepted hit bursts, not just the fatal
-    -- one"); "shone" answers the knock-out alone.
-    clock = clock + 1000
-    local n2 = #out.radio
-    P.emit_splash(v, lit, "shone")
-    check(#out.radio == n2 + 1, "splash", "an on = \"lit\" splash stayed silent on the knock-out")
-    do
-      local PS = fresh{ vars = BASE_VARS,
-                        profiles = { { id = 1, name = "KO", max_energy = 5,
-                                       splash = { on = "shone", rssi = -60 } } } }
-      local vs = mk_vars(50)
-      PS.reset(vs)
-      local ns = #out.radio
-      PS.emit_splash(vs, lit, "lit")
-      check(#out.radio == ns, "splash", "an on = \"shone\" splash burst on a hit taken")
-      clock = clock + 1000
-      PS.emit_splash(vs, lit, "shone")
-      check(#out.radio == ns + 1, "splash", "an on = \"shone\" splash stayed silent on the knock-out")
-    end
-
-    -- Rate limit: two calls for one event produce one beacon.
-    clock = clock + 1000
-    local n3 = #out.radio
-    P.emit_splash(v, lit, "lit")
-    P.emit_splash(v, lit, "lit")
-    check(#out.radio == n3 + 1, "splash", "the rate limit let a second beacon through")
-
-    -- Bystander side, graded by distance.
-    local near  = mk_pkt{ sender = 9, rssi = -50, payload = { 1, 2, 60, 1, 4 } }
-    local mid   = mk_pkt{ sender = 9, rssi = -65, payload = { 1, 2, 60, 1, 4 } }
-    local far   = mk_pkt{ sender = 9, rssi = -90, payload = { 1, 2, 60, 1, 4 } }
-    check(P.on_splash(v, near) == 2, "splash", "a close bystander took the wrong band")
-    check(P.on_splash(v, mid)  == 1, "splash", "a mid-range bystander took the wrong band")
-    check(P.on_splash(v, far)  == nil, "splash", "a distant bystander was hit")
-
-    -- THE cascade guard: a beacon that is not a direct optical hit is
-    -- dropped, so one beam cannot chain across a field.
-    local relayed = mk_pkt{ sender = 9, rssi = -50, payload = { 1, 2, 60, 0, 4 } }
-    local absorbed, why = P.on_splash(v, relayed)
-    check(absorbed == nil and why == "cascade", "splash",
-          "a non-direct beacon was absorbed: splash can cascade")
-
-    -- And a player never splashes themselves.
-    local mine = mk_pkt{ sender = la.my_id(), rssi = -40, payload = { 1, 2, 60, 1, 4 } }
-    check(P.on_splash(v, mine) == nil, "splash", "the emitter splashed itself")
+    area_policies = {}
+    fresh{ vars = BASE_VARS,
+           profiles = { { id = 12, name = "BOOM", max_energy = 5, role_tag = 7,
+                          area = { on = "shone", bands = { { -60, 3 } }, friendly = "never",
+                                   self = true, credit = false } },
+                        { id = 13, name = "QUIET", max_energy = 5 } } }
+    local a = area_policies[12]
+    check(a and a.projector == 12 and a.on == "shone" and a.bands[1][1] == -60
+          and a.bands[1][2] == 3 and a.friendly == "never" and a.self == true
+          and a.credit == false and a.role_tag == 7, "area",
+          "a profile's area did not reach la.area_policy as declared, under its id")
+    check(area_policies[13] == nil, "area", "a profile without an area registered one")
+    local s = area_policies[P_STANDARD.SPLASH.id]
+    check(s and s.projector == P_STANDARD.SPLASH.id and s.on == "lit", "area",
+          "the standard SPLASH is not registered as a projector-triggered area")
+    local ok = pcall(function()
+      fresh{ vars = BASE_VARS, profiles = { { id = 0, area = { bands = { { -60, 1 } } } } } }
+    end)
+    check(not ok, "area", "the baseline projector accepted an area")
   end
 
   -- ---- a retired field name is named, not silently ignored --------
@@ -834,11 +761,11 @@ do
     for _, field in ipairs({ "id", "name", "icon", "cycles", "cooldown_ms",
                              "range_m", "cost", "max_energy", "recharge",
                              "recharge_delay_ms", "ready_ms", "strength",
-                             "target_immunity_ms", "splash", "shine_action" }) do
+                             "target_immunity_ms", "area", "shine_action" }) do
       check(S[field] ~= nil, "SPLASH", "the standard profile declares no " .. field)
     end
-    check(S.splash.bands and #S.splash.bands >= 2, "SPLASH",
-          "the splash profile has no graded bands")
+    check(S.area.bands and #S.area.bands >= 2, "SPLASH",
+          "the SPLASH area has no graded bands")
 
     -- The whole standard catalogue has to be playable and self-consistent.
     local seen_id, seen_name = {}, {}
@@ -893,12 +820,12 @@ do
 
     -- It is the ONLY profile that splashes: a field where everything
     -- splashed would be chaos rather than tactics.
-    check(P_STANDARD.SPLASH.splash ~= nil, "SPLASH", "SPLASH lost its splash")
+    check(P_STANDARD.SPLASH.area ~= nil, "SPLASH", "SPLASH lost its area")
     local others = 0
     for name, prof in pairs(P_STANDARD) do
-      if name ~= "SPLASH" and prof.splash then others = others + 1 end
+      if name ~= "SPLASH" and prof.area then others = others + 1 end
     end
-    check(others == 0, "SPLASH", others .. " other standard profiles declare a splash")
+    check(others == 0, "SPLASH", others .. " other standard profiles declare an area")
   end
 
   -- ---- the standard catalogue is stated relative to the baseline -----
@@ -1100,7 +1027,7 @@ do
   local function check(cond, what, msg) if not cond then fail(what, msg) end end
 
   libcache = {}                       -- a projector of its own for this copy
-  local g = load_game(ROOT .. "custom/festasportsasso.lua")
+  local g = dofile(ROOT .. "custom/festasportsasso.lua")
   local v = {}
   for _, c in ipairs(g.config) do v[c.id] = c.default end
   for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
@@ -1193,7 +1120,7 @@ do
 
   local function fresh()
     libcache = {}                   -- a projector of its own for this copy
-    g = load_game(ROOT .. "custom/tirobersaglio.lua")
+    g = dofile(ROOT .. "custom/tirobersaglio.lua")
     v = {}
     for _, c in ipairs(g.config) do v[c.id] = c.default end
     for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
@@ -1355,7 +1282,7 @@ do
     local function check(cond, what, msg) if not cond then fail(what, msg) end end
 
     libcache = {}                       -- this game's own projector instance
-    local g = load_game(ROOT .. case.file .. ".lua")
+    local g = dofile(ROOT .. case.file .. ".lua")
     local v = {}
     for _, c in ipairs(g.config) do v[c.id] = c.default end
     for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
@@ -1443,7 +1370,7 @@ do
   end
   local function fresh_game(f)
     libcache = {}                       -- this game's own projector instance
-    local g = load_game(ROOT .. f .. ".lua")
+    local g = dofile(ROOT .. f .. ".lua")
     local v = {}
     for _, c in ipairs(g.config) do v[c.id] = c.default end
     for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
@@ -1642,7 +1569,7 @@ do
             "the drawn player was not counted out of the clean ones")
     end
     drawn_player = 1
-    local g = load_game(ROOT .. "virus.lua")
+    local g = dofile(ROOT .. "virus.lua")
     for _, c in ipairs(g.config) do
       check(c.id ~= "virus_id", "virus", "the first virus is in the config menu")
     end
@@ -1734,138 +1661,55 @@ do
 end
 
 -- ================================================================
---   Splash is the projector's: wired at load, in no game file
+--   Area hits: the ruleset's own rule, minus immunity
 -- ================================================================
+-- The firmware hands an area hit to the state's LIT handler with pkt.area
+-- set.  Immunity is a rule about beams: an area hit neither checks the
+-- window nor opens one, while friendly fire — judged against the
+-- originator, who is the hit's sender — still applies.
 do
   local function fail(what, msg)
     failures = failures + 1
-    print(string.format("  FAIL %-12s %s: %s", "splash", what, msg))
+    print(string.format("  FAIL %-12s %s: %s", "area hits", what, msg))
   end
   local function check(cond, what, msg) if not cond then fail(what, msg) end end
-  local LIT, SPLASH = la.msg.LIT, la.msg.SPLASH
-  local SPLASH_ID = 1                 -- proj.standard.SPLASH
-  -- la.team_of(id) = id % 2 and this device (id 2) is team 0.
-  local ENEMY, ENEMY2, ENEMY3, FRIEND = 3, 5, 7, 4
 
-  -- A device in play in `file`, with its own projector instance.
-  local function in_game(file)
-    libcache = {}
-    local g = load_game(ROOT .. file .. ".lua")
-    local v = {}
-    for _, c in ipairs(g.config) do v[c.id] = c.default end
-    for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
-    vars = v                          -- the global load-time closures read
-    clock, shine_busy_until = 0, 0
-    g.on_begin(v)
-    return g, v, g.on_message[g.initial_state]
+  local S   = dofile(ROOT .. "lib/std.lua")
+  local imm = S.immunity(3000)
+  local REPLY = { taken = 1, shone = 2, friend = 4, immune = 5 }
+  local take = S.lit_target{
+    lives = "lives", immunity = imm, reply = REPLY,
+    friendly = function(pkt) return pkt.team == la.my_team() end,
+  }
+  local function hit(sender, strength, area)
+    return mk_pkt{ sender = sender, team = la.team_of(sender), area = area,
+                   payload = { strength, 1, 0, 0, area and 1 or nil } }
   end
-  local function bursts_since(n)
-    local k = 0
-    for i = n + 1, #out.radio do
-      local r = out.radio[i]
-      if r[1] == "bcast" and r[2] == SPLASH then k = k + 1 end
-    end
-    return k
-  end
-  local function lit_from(shooter, proj)
-    return mk_pkt{ sender = shooter, team = la.team_of(shooter), msg = LIT,
-                   payload = { 1, proj, 0, 0 } }
-  end
-  -- A victim's beacon as a bystander hears it: [projector, strength,
-  -- gate, origin, shooter], relayed by player 9.
-  local function beacon(rssi, shooter, origin)
-    return mk_pkt{ sender = 9, rssi = rssi, msg = SPLASH,
-                   payload = { SPLASH_ID, 1, 70, origin or 1, shooter } }
-  end
+  local v = { lives = 20 }
+  clock = 0
+  imm.reset()
 
-  -- ---- Victim: the game decides whether the beam landed; the projector bursts
-  do
-    local g, v, h = in_game("teams")
-    check(type(h[SPLASH]) == "function", "wiring",
-          "a state handling LIT got no SPLASH handler")
-    local lives0 = v.lives
+  check(take(v, hit(3, 1)) == REPLY.taken and v.lives == 19, "direct",
+        "a direct hit did not land")
+  check(take(v, hit(3, 1)) == REPLY.immune and v.lives == 19, "direct",
+        "a second direct hit inside the window was not refused")
+  check(take(v, hit(3, 2, true)) == REPLY.taken and v.lives == 17, "window",
+        "an area hit was refused by the shooter's immunity window")
+  check(take(v, hit(5, 1, true)) == REPLY.taken and v.lives == 16, "window",
+        "an area hit from a fresh shooter did not land")
+  check(take(v, hit(5, 1)) == REPLY.taken and v.lives == 15, "window",
+        "an area hit opened an immunity window: the shooter's beam right after was refused")
+  check(take(v, hit(4, 2, true)) == REPLY.friend and v.lives == 15, "friendly",
+        "friendly fire let a teammate's area hit through")
+  check(take(v, hit(la.my_id(), 1, true)) == REPLY.taken and v.lives == 14, "self",
+        "an own area hit (its policy said self = true) was refused as friendly fire")
+  check(take(v, hit(la.my_id(), 1)) == REPLY.friend and v.lives == 14, "self",
+        "the self exemption leaked to a direct hit")
+  v.lives = 2
+  check(take(v, hit(7, 2, true)) == REPLY.shone and v.lives == 0, "knock-out",
+        "an area hit that empties the lives is not a SHONE")
 
-    local n0 = #out.radio
-    local r = h[LIT](v, lit_from(ENEMY, SPLASH_ID))
-    check(r == 1 and v.lives == lives0 - 1, "victim",
-          "the wrapped handler changed what the hit did")
-    check(bursts_since(n0) == 1, "victim", "a SPLASH hit that landed did not burst")
-    local b = out.radio[#out.radio]
-    check(b[3] == SPLASH_ID and b[6] == 1 and b[7] == ENEMY, "victim",
-          "the beacon does not name the projector, a direct origin and the shooter")
-
-    clock = clock + 5000              -- past the immunity and the rate limit
-    local n1 = #out.radio
-    h[LIT](v, lit_from(ENEMY, 0))
-    check(bursts_since(n1) == 0, "victim", "a projector without splash burst")
-
-    local n2 = #out.radio
-    local r2 = h[LIT](v, lit_from(ENEMY, SPLASH_ID))   -- still immune to ENEMY
-    check(r2 ~= 1 and r2 ~= 2, "victim", "expected the game to refuse an immune hit")
-    check(bursts_since(n2) == 0, "victim", "a hit the game refused burst")
-
-    local n3 = #out.radio
-    local r3 = h[LIT](v, lit_from(FRIEND, SPLASH_ID))
-    check(r3 ~= 1 and r3 ~= 2, "victim", "expected friendly fire to be refused")
-    check(bursts_since(n3) == 0, "victim", "a friendly hit burst")
-
-    -- The knock-out bursts too: SPLASH answers every hit that lands.
-    v.lives = 1
-    clock = clock + 5000
-    local n4 = #out.radio
-    check(h[LIT](v, lit_from(ENEMY2, SPLASH_ID)) == 2, "victim", "expected a knock-out")
-    check(bursts_since(n4) == 1, "victim", "the knock-out did not burst")
-  end
-
-  -- ---- Bystander: a beacon in reach is a hit from the shooter, by the game's rules
-  do
-    local g, v, h = in_game("teams")
-    local lives0 = v.lives
-    local n0 = #out.radio
-    h[SPLASH](v, beacon(-50, ENEMY))                    -- close: the 2-hit band
-    check(v.lives == lives0 - 2, "bystander",
-          "a close bystander lost " .. (lives0 - v.lives) .. " lives, expected 2")
-    check(bursts_since(n0) == 0, "bystander", "a splash hit burst again: splash cascades")
-
-    local function unchanged(pkt, why)
-      local before = v.lives
-      h[SPLASH](v, pkt)
-      check(v.lives == before, "bystander", why)
-    end
-    unchanged(beacon(-50, ENEMY),         "the shooter's immunity window did not apply")
-    unchanged(beacon(-90, ENEMY2),        "a bystander out of reach was hit")
-    -- With friendly fire on, so the shooter's own team rule cannot be what
-    -- spares them: only the projector's own guard can.
-    v.friendly_fire = 1
-    unchanged(beacon(-50, la.my_id()),    "the shooter was splashed by their own beam")
-    v.friendly_fire = 0
-    unchanged(beacon(-50, ENEMY2, 0),     "a non-direct beacon was absorbed")
-    unchanged(beacon(-50, FRIEND),        "friendly fire got through a splash")
-
-    h[SPLASH](v, beacon(-65, ENEMY3))                   -- mid range: the 1-hit band
-    check(v.lives == lives0 - 3, "bystander", "the mid band did not take one life")
-  end
-
-  -- ---- A reply that is not a landed hit never bursts (virus: NOEFFECT)
-  do
-    local g, v, h = in_game("virus")
-    local n0 = #out.radio
-    h[LIT](v, lit_from(ENEMY, SPLASH_ID))               -- no virus tag: no effect
-    check(bursts_since(n0) == 0, "virus",
-          "a hit with no effect burst: virus's NOEFFECT reads as a landed hit")
-  end
-
-  -- ---- A state that handles SPLASH itself keeps its handler
-  do
-    libcache = {}
-    la.lib("projector")
-    local own = function() end
-    local g = run_hooks{ on_message = { [0] = { [LIT] = function() return 1 end,
-                                                [SPLASH] = own } } }
-    check(g.on_message[0][SPLASH] == own, "wiring", "a game's own SPLASH handler was replaced")
-  end
-
-  print("OK   splash        wired at load: victim bursts on a landed hit, bystander hit by the game's rules, no cascade")
+  print("OK   area hits     immunity is the beam's: area hits neither check nor open it; friendly fire and knock-outs still apply; an own area hit is its policy's call")
 end
 
 print("\nTotemVM encoded program sizes (bytes, single-packet budget = 225):")

@@ -19,7 +19,7 @@ as Lua (Virus, and the two festival-stand rulesets under `games/custom/`):
 | `games/custom/festasportsasso.lua` | stand ruleset, **not flashed**: a King of Hill that never ends — 500 s turns inside one endless match, restarted by an admin `<`+`>` chord |
 | `games/custom/tirobersaglio.lua` | stand ruleset, **not flashed**: a six-panel shooting gallery for children, same `<`+`>` hand-over |
 | `games/lib/std.lua` | pure-Lua standard library (see §"API layering") |
-| `games/lib/projector.lua` | the projector object: profile, energy, recharge, range, splash, inventory (see `docs/projector.md`) |
+| `games/lib/projector.lua` | the projector object: profile, energy, recharge, range, area (SPLASH), inventory (see `docs/projector.md`) |
 
 `games/*.lua` and `games/lib/*.lua` are embedded in the firmware by
 `tools/embed_games.py` and seeded into `/games/stock` and `/games/lib` on
@@ -296,8 +296,9 @@ The spec details the games rely on:
   out of the game*:
   - messages from other players still reach the `on_message` handlers of
     the state the player is in: a LIT is taken, answered and scored as
-    usual, so are a splash, a team point report or a flag event.  Totem
-    messages are dropped — no pickups, no CP presence, no BASE respawn;
+    usual, so are an area hit (if `hold.accept` takes a LIT), a team point
+    report or a flag event.  Totem messages are dropped — no pickups, no CP
+    presence, no BASE respawn;
   - `update` does not run, so nothing is fired, sent or claimed on the
     player's behalf, and the game cannot reach Enlight (the tool owns it);
     `rules` still run but see no keys, so the player's state follows from
@@ -341,7 +342,9 @@ every such key, which is what makes a chord like
 work at all.
 
 **Constant tables (data, not calls; pushed once at load)** — `la.msg.*`
-(RadioMsg registry), `la.flag_event.*`, `la.colors.team[0..7]`,
+(RadioMsg registry), `la.hit.TAKEN` / `la.hit.SHONE` (the two LIT
+replies that mean a hit landed — the area service reads them, so a ruleset
+that takes hits answers with them), `la.flag_event.*`, `la.colors.team[0..7]`,
 `la.colors.player[0..16]` (each `{r,g,b}`), `la.rhythm[0..7]`
 (`{period, pulses}`).  Icon names and UI event names are strings validated
 at load time.
@@ -406,16 +409,21 @@ split one decision across two ticks; `la.background` and
 No verbs run on totems: totem behaviour is TotemVM data (§5), and totem
 animations are referenced by name inside those programs.
 
+**Area effects** — `la.area_policy(id, spec)` declares one, while the game
+loads (a later call is refused): `bands = { { rssi, strength }, ... }`
+(1–4, required), an optional trigger `projector = id, on = "lit" | "shone"`,
+`friendly = "game" | "never"`, `self` (default false), `credit` (default
+true), `role_tag`.  The mechanism is the runner's — beacon, reach, who is
+spared, the hit, the knock-out's credit — and the hit goes to the state's
+own LIT handler with `pkt.area` set (see `docs/projector.md` §5).
+`projector.lua` declares a profile's `area` this way, so no game file
+mentions SPLASH.  `la.area_emit(id)` → bool starts a declared area with
+this player as centre and originator; it returns false from inside an area
+hit's handler, which is what keeps areas from chaining, and like
+`la.broadcast` it is not rate-limited.
+
 **Loader** — `la.lib(name)` runs `/games/lib/<name>.lua` once per state and
 caches the result (there is no `require`/`package`).
-
-**Load hooks** — `la.on_load(fn)` registers `fn(game)` to run once, after the
-ruleset file has returned its table and before the firmware reads it; hooks
-run in registration order, protected, and an error refuses the load.  It is
-for behaviour that belongs to a library rather than to any one ruleset:
-`projector.lua` uses it to wire splash into every state that handles a LIT
-(see `docs/projector.md` §5), so no game file has to.  A hook may add to the
-table, and what it adds is read like the rest.
 
 During a **manifest peek** it returns an inert stand-in instead: a table
 answering any index or call with itself.  A peek reads three literal fields
@@ -431,7 +439,9 @@ The `vars` proxy is passed to every handler as the first argument *and*
 installed as a global, so load-time closures (e.g. a friendly-fire predicate)
 can reference it.  `pkt:byte(i)` is 1-based over the payload
 (`pkt:byte(1)` = `payload[0]`); `pkt.len`, `pkt.sender`, `pkt.team`,
-`pkt.role`, `pkt.rssi`, `pkt.msg` are fields.  `pkt.rssi` is the
+`pkt.role`, `pkt.rssi`, `pkt.msg`, `pkt.area` are fields (`pkt.area`:
+a LIT the area service made from a beacon, whose `sender` is the area's
+originator).  `pkt.rssi` is the
 receive-side signal strength in dBm — measured locally, never carried on the
 wire — and is the only distance information a ruleset has, so every
 proximity gate (BASE respawn, flag pickup, CP presence) is a comparison

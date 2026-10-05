@@ -212,9 +212,9 @@ local function half_pool(x)  return math.max(1, x // 2) end
 --
 --   Ready-made profiles a game can drop straight into its `profiles`
 --   list.  Their ids are FIXED and reserved, because a projector id
---   travels on the wire: a splash beacon names the projector that fired,
---   and every receiver looks the profile up by that id locally.  A game's
---   own profiles should start above this range.
+--   travels on the wire: a LIT names the projector that fired, and every
+--   receiver looks the profile up by that id locally.  A game's own
+--   profiles should start above this range.
 --
 --     profiles = { proj.standard.SPLASH, { id = 10, name = "MINE", ... } }
 --
@@ -224,12 +224,12 @@ local function half_pool(x)  return math.max(1, x // 2) end
 --     FAST    B      ramp: B/2 - 500 ms     B/2       B       B
 --                    idle, then 10 ms/unit
 --     STRONG  B/2    B/2                    2B        B       3
---     SPLASH  B/2    B/2                    2B        B       B + splash
+--     SPLASH  B/2    B/2                    2B        B       B + area
 --     LONG    B/2    B                      B/2       5B      B
 --
 --   Every one costs what the baseline costs.  Every receiver resolves
---   these against the same config, so a profile looked up by id from a
---   splash beacon means the same thing on every device.
+--   these against the same config, so a profile looked up by id means the
+--   same thing on every device.
 -- ================================================================
 P.standard = {
   -- SPLASH — the burst projector.  The point is not the direct hit but
@@ -237,7 +237,7 @@ P.standard = {
   -- direct hit is a single standard hit, while the beacon it triggers
   -- hands out two at close range and one further out.
   --
-  -- It is the ONLY profile that declares a splash.  Splash is loud, in
+  -- It is the ONLY profile that declares an area.  An area is loud, in
   -- radio traffic and in play, and a field where every projector splashed
   -- would be chaos rather than tactics.
   SPLASH = {
@@ -265,12 +265,18 @@ P.standard = {
     strength           = rel("strength"),
     target_immunity_ms = 1500,
 
-    splash = {
-      on     = "lit",        -- every accepted hit bursts, not just the fatal one
+    -- The area its hits throw around whoever they land on: an area policy
+    -- for the firmware's area service (la.area_policy, registered by
+    -- define() under this projector's id).  The firmware triggers it, grades
+    -- it, credits it; the ruleset's own LIT handler decides what a hit does.
+    area = {
+      on       = "lit",      -- every hit that lands bursts, the knock-out included
       -- Graded: RSSI is coarse, so a misread moves a bystander one band
       -- rather than between hit and nothing.
-      bands  = { { -55, 2 }, { -70, 1 } },
-      strength = 1,          -- what a receiver without the profile falls back to
+      bands    = { { -55, 2 }, { -70, 1 } },
+      friendly = "game",     -- the ruleset's friendly fire, against the shooter
+      self     = false,      -- the shooter is never caught in their own area
+      credit   = true,       -- an area knock-out scores for the shooter
     },
 
     -- A punch that flares out: the step ms are a SHAPE, scaled to fit the
@@ -424,15 +430,28 @@ function P.define(decl)
   for k in pairs(LIM) do clamp_field(defs[0], k) end
 
   -- The standard catalogue is always KNOWN, declared or not: a BONUS totem
-  -- may hand any of it to any game, and a splash beacon names its
-  -- projector by id for every receiver to look up.  Known is not owned —
-  -- the inventory still starts with the baseline alone.
+  -- may hand any of it to any game.  Known is not owned — the inventory
+  -- still starts with the baseline alone.
   for _, std_p in pairs(P.standard) do
     if not defs[std_p.id] then
       local p = {}
       for k, v in pairs(std_p) do p[k] = v end
       for k in pairs(LIM) do clamp_field(p, k) end
       defs[std_p.id] = p
+    end
+  end
+
+  -- A profile's area is a policy for the firmware's area service, under
+  -- the projector's own id: a hit from this projector that the target's
+  -- ruleset answers TAKEN / SHONE triggers it, and every device registers
+  -- the same policies because every device runs the same file.
+  for id, p in pairs(defs) do
+    if p.area then
+      assert(id ~= 0, "the baseline projector cannot carry an area")
+      local a = p.area
+      la.area_policy(id, { projector = id, on = a.on or "lit", bands = a.bands,
+                           friendly = a.friendly, self = a.self, credit = a.credit,
+                           role_tag = type(p.role_tag) == "number" and p.role_tag or 0 })
     end
   end
 
@@ -765,7 +784,6 @@ function P.reset(vars)
   awaiting_release = false
   lit_at      = {}
   evicted_name   = nil
-  splash_sent_at = nil
   dimmed         = false
 
   slots[1].energy = max_energy(vars, defs[0])
@@ -827,185 +845,6 @@ function P.payload(vars)
          val(vars, p.role_tag, 0),
          (gate < 0) and -gate or 0
 end
-
--- ================================================================
---   SPLASH
---
---   A player who has just absorbed a beam broadcasts a beacon; anyone
---   near enough absorbs a share of the same shot.  The reach is declared
---   by the ATTACKER's projector and relayed by the victim, so a
---   short-range profile splashes tightly and a heavy one does not.
---
---   Distance is judged from the RSSI of that beacon, which is coarse —
---   body shadowing alone is worth 10-20 dB at 2.4 GHz.  That is
---   acceptable here and nowhere else: a splash radius is meant to be
---   fuzzy, graded bands degrade by one step rather than between hit and
---   nothing, and there is no optical measurement to a bystander who was
---   never aimed at, so RSSI is not a worse choice than something better.
---
---   Wire format, MSG.SPLASH, single-hop:
---     [1] attacker's projector id — lets a bystander find the profile
---         locally and grade the damage; the flat values below stand in
---         when it cannot
---     [2] splash strength, in standard hits
---     [3] RSSI gate, positive magnitude (55 means -55 dBm)
---     [4] origin: 1 = a direct optical LIT.  ONLY a direct hit emits;
---         on_splash never calls emit_splash.  That is what stops one
---         beam from cascading across a whole field.
---     [5] the SHOOTER's id, so friendly fire is judged against whoever
---         fired rather than against the victim who relayed it
--- ================================================================
-local SPLASH_ORIGIN_DIRECT = 1
--- nil, not 0: "never sent" has to be distinguishable from "sent at time
--- zero", or the rate limit would swallow the first beacon of a match.
-local splash_sent_at       = nil
-
--- Cheapest useful rate limit: one beacon per shot, and never two inside
--- the same window even if a ruleset calls this twice for one event.
-local SPLASH_MIN_GAP_MS = 250
-
-local function splash_of(id)
-  local p = defs[id]
-  return p and p.splash or nil
-end
-
--- Bands, when a profile declares them, ARE the reach: the outermost one is
--- the cutoff, and the flat `rssi` is just the one-band shorthand.  Keeping
--- one answer for "how far does this splash go" stops the two from
--- disagreeing, which would gate a bystander out at the flat threshold
--- before their band was ever consulted.
-local function splash_gate(s)
-  if s.bands and #s.bands > 0 then
-    local weakest = s.bands[1][1]
-    for _, band in ipairs(s.bands) do
-      if band[1] < weakest then weakest = band[1] end
-    end
-    return weakest
-  end
-  return s.rssi or 0
-end
-
--- Victim side.  `pkt` is the incoming LIT packet and `event` is what just
--- happened to this player — "lit" for a hit taken, "shone" for the one
--- that put them down.  A profile's `on` says which it answers: "lit" (the
--- default) bursts on every hit that landed, the knock-out included;
--- "shone" on the knock-out alone.
-function P.emit_splash(vars, pkt, event)
-  if pkt.len < 2 then return false end
-  local attacker_proj = pkt:byte(2)
-  local s = splash_of(attacker_proj)
-  if not s then return false end
-  if s.on == "shone" and event ~= "shone" then return false end
-
-  local now = la.now()
-  if splash_sent_at and (now - splash_sent_at) < SPLASH_MIN_GAP_MS then return false end
-  splash_sent_at = now
-
-  local gate = splash_gate(s)
-  -- Single-hop: la.broadcast, never la.broadcast_relay.  A flooded splash
-  -- would reach the entire field, which is the opposite of a radius.
-  la.broadcast(la.msg.SPLASH,
-               attacker_proj,
-               s.strength or 1,
-               (gate < 0) and -gate or 0,
-               SPLASH_ORIGIN_DIRECT,
-               pkt.sender)
-  return true
-end
-
--- Bystander side.  Returns how much this player absorbs, or nil for a
--- beacon that does not reach them.  The second return says why, so a
--- ruleset can stay quiet rather than reporting a miss.
-function P.on_splash(vars, pkt)
-  if pkt.len < 4 then return nil, "short" end
-  local origin = pkt:byte(4)
-  -- Only a direct optical hit may splash.  A beacon claiming any other
-  -- origin is either a cascade or a stray, and is dropped either way.
-  if origin ~= SPLASH_ORIGIN_DIRECT then return nil, "cascade" end
-  -- Never splash yourself: the emitter already took the direct hit.
-  if pkt.sender == la.my_id() then return nil, "self" end
-
-  -- Graded by distance where the profile says so, flat otherwise.  The
-  -- bands are read locally by attacker projector id rather than sent, so
-  -- a profile can carry as many as it likes without growing the packet;
-  -- the gate on the wire is what a bystander without the profile falls
-  -- back to, and it already carries the outermost band.
-  local s = splash_of(pkt:byte(1))
-  if s and s.bands then
-    for _, band in ipairs(s.bands) do
-      if pkt.rssi >= band[1] then return band[2] end
-    end
-    return nil, "far"
-  end
-
-  local gate = pkt:byte(3)
-  if gate > 0 and pkt.rssi < -gate then return nil, "far" end
-  return pkt:byte(2)
-end
-
--- ================================================================
---   Splash belongs to the projector, not to the ruleset
---
---   No game file calls emit_splash or on_splash.  When a ruleset loads,
---   before the firmware reads its table (la.on_load), every state that
---   handles a LIT has that handler wrapped and gains a SPLASH handler:
---
---     victim     the game's own LIT handler decides whether the beam
---                landed, and its reply says so; a hit that landed from a
---                splashing projector then bursts.
---     bystander  a beacon in reach becomes a hit from the SHOOTER, worth
---                the band's share, handed to that same LIT handler — so
---                lives, immunity, friendly fire and being out already mean
---                what the ruleset says they mean.
---
---   The bystander's hit goes to the unwrapped handler, so it can never
---   burst again, and its reply goes nowhere.  A state that handles SPLASH
---   itself keeps its own handler.
--- ================================================================
--- The two LIT replies splash reads, the same in every ruleset that takes
--- hits: the beam landed, or it landed and put this player down.  Any other
--- reply (immune, friendly, already out, no effect) means it did not.
-local HIT_TAKEN, HIT_SHONE = 1, 2
-
--- A bystander's share of the shot, shaped like the LIT the shooter would
--- have sent them: [strength, projector id, role tag, no rssi gate], from
--- the shooter.  The reach was already judged on the beacon.
-local function splash_hit(pkt, share)
-  local id      = pkt:byte(1)
-  local p       = defs[id]
-  local tag     = (p and type(p.role_tag) == "number") and p.role_tag or 0
-  local payload = { share, id, tag, 0 }
-  local shooter = pkt:byte(5)
-  return { sender = shooter, team = la.team_of(shooter), msg = la.msg.LIT,
-           len = #payload, rssi = pkt.rssi,
-           byte = function(_, i) return payload[i] end }
-end
-
-la.on_load(function(game)
-  -- A malformed on_message is the loader's to report, in its own words.
-  if type(game.on_message) ~= "table" then return end
-  local LIT, SPLASH = la.msg.LIT, la.msg.SPLASH
-  for _, handlers in pairs(game.on_message) do
-    local lit = type(handlers) == "table" and handlers[LIT]
-    if type(lit) == "function" then
-      handlers[LIT] = function(vars, pkt)
-        local r = lit(vars, pkt)
-        if r == HIT_TAKEN or r == HIT_SHONE then
-          P.emit_splash(vars, pkt, (r == HIT_SHONE) and "shone" or "lit")
-        end
-        return r
-      end
-      if handlers[SPLASH] == nil then
-        handlers[SPLASH] = function(vars, pkt)
-          -- The shooter's own beam never splashes them.
-          if pkt.len < 5 or pkt:byte(5) == la.my_id() then return end
-          local share = P.on_splash(vars, pkt)
-          if share and share > 0 then lit(vars, splash_hit(pkt, share)) end
-        end
-      end
-    end
-  end
-end)
 
 -- ================================================================
 --   Recharge

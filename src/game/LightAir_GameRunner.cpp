@@ -1,4 +1,5 @@
 #include "LightAir_GameRunner.h"
+#include "LightAir_AreaEffect.h"
 #include "../enlight/Enlight.h"
 #include <Arduino.h>
 #include <string.h>
@@ -37,6 +38,8 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     _lastEnlightActiveMs = 0;
     _nextSensorReadMs    = 0;
     _sensorReadPending   = false;
+    _areaSentAt          = 0;
+    _areaSentEver        = false;
 
     // -- Build display binding sets from MonitorVar::stateMask --
     // From zero: the set table belongs to one ruleset at a time, and a second
@@ -316,39 +319,55 @@ void LightAir_GameRunner::logic(const InputReport& inputs,
         replyToTotemBeacon(ev, output);
     }
 
+    // MSG_AREA / MSG_AREA_CREDIT: the area service (see "Area effects").
+    // A beacon becomes a hit for the current state's own LIT handler; a
+    // credit is an area knock-out this device caused, scored like its own.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType == RadioMsg::MSG_AREA) {
+            infraHandled[e] = true;
+            areaReceive(ev, output);
+        } else if (ev.packet.msgType == RadioMsg::MSG_AREA_CREDIT) {
+            infraHandled[e] = true;
+            areaCredit(ev, output);
+        }
+    }
+
     // Step 2b: DirectRadioRules — handle all incoming MessageReceived events.
-    // Events intercepted above (MSG_END_GAME, MSG_TOTEM_BEACON) are skipped.
+    // Events intercepted above (MSG_END_GAME, MSG_TOTEM_BEACON, the area
+    // service's) are skipped.
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type != RadioEventType::MessageReceived) continue;
         if (infraHandled[e]) continue;
+        if (_held && holdDrops(ev.packet.senderId, ev.packet.msgType)) continue;
 
-        if (_held) {
-            // Every totem action is an answer to a totem's beacon (pickups,
-            // CP presence, BASE respawn): dropping totem senders removes all
-            // of them and nothing else.
-            if (TotemDefs::isTotemId(ev.packet.senderId)) continue;
-            if (_game->holdAccept) {
-                bool ok = false;
-                for (uint8_t k = 0; k < _game->holdAcceptCount; k++)
-                    if (_game->holdAccept[k] == ev.packet.msgType) { ok = true; break; }
-                if (!ok) continue;
-            }
+        // The area flag is local (LightAir_AreaEffect.h): a LIT from the air
+        // is a direct hit, whatever its fifth byte says.
+        RadioPacket direct;
+        const RadioPacket* pkt = &ev.packet;
+        if (areaIsHit(ev.packet)) {
+            direct = ev.packet;
+            direct.payload[4] &= (uint8_t)~AreaDefaults::HIT_FLAG_AREA;
+            pkt = &direct;
         }
 
-        for (uint8_t i = 0; i < _game->directRadioRuleCount; i++) {
-            const DirectRadioRule& r = _game->directRadioRules[i];
-            if (r.fromState != *_game->currentState) continue;
-            if (r.msgType   != ev.packet.msgType)    continue;
-            if (r.condition && !r.condition(ev.packet)) continue;
-
-            if (r.onReceive) r.onReceive(ev.packet, ev.rssi, *_display, output);
-            // DYNAMIC_REPLY: the callback queued its own reply with a
-            // runtime-decided sub-type (Lua handlers return it).
-            if (r.replySubType != DirectRadioRule::DYNAMIC_REPLY)
-                output.radio.reply(ev.packet, r.replySubType);
-            break;
+        const DirectRadioRule* r = directRuleFor(*pkt);
+        if (!r) continue;
+        const uint8_t repliesBefore = output.radio.replyCount;
+        if (r->onReceive) r->onReceive(*pkt, ev.rssi, *_display, output);
+        // DYNAMIC_REPLY: the callback queued its own reply with a
+        // runtime-decided sub-type (Lua handlers return it).
+        uint8_t sub = r->replySubType;
+        if (sub != DirectRadioRule::DYNAMIC_REPLY) {
+            output.radio.reply(*pkt, sub);
+        } else {
+            const RadioOutput& ro = output.radio;
+            sub = (ro.replyCount > repliesBefore && ro.replies[repliesBefore].payloadLen)
+                ? ro.replies[repliesBefore].payload[0] : 0;
         }
+        if (pkt->msgType == RadioMsg::MSG_LIT) areaAfterHit(*pkt, sub, output);
         // No blanket reply for an unmatched message.  Totem beacons are
         // broadcasts every player in range hears; answering all of them was
         // pure airtime, and it let an uninterested player's empty reply stand
@@ -357,24 +376,14 @@ void LightAir_GameRunner::logic(const InputReport& inputs,
     }
 
     // Step 2c: ReplyRadioRules — handle all ReplyReceived and Timeout events.
+    // The acknowledgement of an area credit is the area service's own
+    // bookkeeping, not an answer the ruleset asked for.
     for (uint8_t e = 0; e < radio.count; e++) {
         const RadioEvent& ev = radio.events[e];
         if (ev.type != RadioEventType::ReplyReceived &&
             ev.type != RadioEventType::Timeout) continue;
-
-        uint8_t state = *_game->currentState;
-        for (uint8_t i = 0; i < _game->replyRadioRuleCount; i++) {
-            const ReplyRadioRule& r = _game->replyRadioRules[i];
-            if (!(r.activeInStateMask & (1u << state))) continue;
-            if (r.eventType != ev.type) continue;
-            if (ev.type == RadioEventType::ReplyReceived &&
-                r.replySubType != 0 &&
-                (ev.packet.payloadLen == 0 || ev.packet.payload[0] != r.replySubType)) continue;
-            if (r.condition && !r.condition(ev.packet, ev.original)) continue;
-
-            if (r.onReply) r.onReply(ev.packet, ev.original, ev.rssi, *_display, output);
-            break;
-        }
+        if (ev.original.msgType == RadioMsg::MSG_AREA_CREDIT) continue;
+        dispatchReply(ev.type, ev.packet, ev.original, ev.rssi, output);
     }
 
     // Step 2d: StateRules — evaluate transitions (first match wins).
@@ -388,6 +397,156 @@ void LightAir_GameRunner::logic(const InputReport& inputs,
         else if (r.onTransition)              r.onTransition(*_display, output);
         break;
     }
+}
+
+// A held player takes messages from other players only: every totem
+// action is an answer to a totem's beacon (pickups, CP presence, BASE
+// respawn), so dropping totem senders removes all of them and nothing else.
+// The ruleset's hold.accept list can narrow that further.
+bool LightAir_GameRunner::holdDrops(uint8_t senderId, uint8_t msgType) const {
+    return TotemDefs::isTotemId(senderId) || !holdAccepts(msgType);
+}
+
+bool LightAir_GameRunner::holdAccepts(uint8_t msgType) const {
+    if (!_game->holdAccept) return true;
+    for (uint8_t k = 0; k < _game->holdAcceptCount; k++)
+        if (_game->holdAccept[k] == msgType) return true;
+    return false;
+}
+
+// The current state's handler for this message, or nullptr.
+const DirectRadioRule* LightAir_GameRunner::directRuleFor(const RadioPacket& pkt) const {
+    for (uint8_t i = 0; i < _game->directRadioRuleCount; i++) {
+        const DirectRadioRule& r = _game->directRadioRules[i];
+        if (r.fromState != *_game->currentState) continue;
+        if (r.msgType   != pkt.msgType)          continue;
+        if (r.condition && !r.condition(pkt))    continue;
+        return &r;
+    }
+    return nullptr;
+}
+
+void LightAir_GameRunner::dispatchReply(RadioEventType type, const RadioPacket& reply,
+                                        const RadioPacket& original, int8_t rssi,
+                                        GameOutput& output) {
+    const uint8_t state = *_game->currentState;
+    for (uint8_t i = 0; i < _game->replyRadioRuleCount; i++) {
+        const ReplyRadioRule& r = _game->replyRadioRules[i];
+        if (!(r.activeInStateMask & (1u << state))) continue;
+        if (r.eventType != type) continue;
+        if (type == RadioEventType::ReplyReceived &&
+            r.replySubType != 0 &&
+            (reply.payloadLen == 0 || reply.payload[0] != r.replySubType)) continue;
+        if (r.condition && !r.condition(reply, original)) continue;
+
+        if (r.onReply) r.onReply(reply, original, rssi, *_display, output);
+        break;
+    }
+}
+
+/* =========================================================
+ *   Area effects
+ *
+ *   The mechanism of an area effect is the runner's, so it works the same
+ *   for every ruleset, and later for totems: the beacon, its reach, who is
+ *   spared, the hit it becomes, the credit.  What a hit DOES stays the
+ *   ruleset's: an area hit goes to the current state's own LIT handler.
+ *   Policies are the game's data (LightAir_Game.h §7b); the wire format is
+ *   LightAir_AreaEffect's.
+ *
+ *     trigger   a real LIT the ruleset answered TAKEN or SHONE, from a
+ *               projector a policy names, makes THIS player the centre: it
+ *               broadcasts the beacon, crediting the shooter.  At most one
+ *               per EMIT_MIN_GAP_MS.  (A ruleset's own la.area_emit is not
+ *               gated: like la.broadcast, its airtime is the ruleset's.)
+ *     receive   a beacon in reach becomes a LIT from the originator, at the
+ *               band's strength, flagged as an area hit.  The ruleset's
+ *               reply to it is dropped (the originator never sent it), and
+ *               it can never trigger another beacon — no chain reaction.
+ *               The flag is local: a LIT from the air has it cleared.
+ *     credit    a hit the ruleset answered SHONE is reported to the
+ *               originator, whose runner acknowledges it and plays it to
+ *               its ruleset as a SHONE reply to one of its own LITs.
+ * ========================================================= */
+void LightAir_GameRunner::areaAfterHit(const RadioPacket& lit, uint8_t sub,
+                                       GameOutput& output) {
+    if (sub != HitReply::TAKEN && sub != HitReply::SHONE) return;
+    if (lit.payloadLen < 2) return;
+    const AreaPolicy* p = areaForProjector(*_game, lit.payload[1]);
+    if (!p) return;
+    if (p->on == AreaTrigger::SHONE && sub != HitReply::SHONE) return;
+
+    const uint32_t now = millis();
+    if (_areaSentEver && now - _areaSentAt < AreaDefaults::EMIT_MIN_GAP_MS) return;
+    _areaSentEver = true;
+    _areaSentAt   = now;
+    areaBeacon(output.radio, p->id, lit.senderId, teamOf(lit.senderId));
+}
+
+void LightAir_GameRunner::areaReceive(const RadioEvent& ev, GameOutput& output) {
+    const RadioPacket& b = ev.packet;
+    if (b.payloadLen < 3) return;
+    const AreaPolicy* p = areaFind(*_game, b.payload[0]);
+    if (!p) return;
+    const uint8_t origin = b.payload[1];
+    const uint8_t team   = b.payload[2];
+    const uint8_t me     = _radio->playerId();
+
+    // The originator is judged by `self` alone; teammates by `friendly`.
+    if (origin == me) {
+        if (!p->self) return;
+    } else if (p->friendly == AreaFriendly::NEVER && team != 0xFF && team == teamOf(me)) {
+        return;
+    }
+    const uint8_t magnitude = areaMagnitude(*p, ev.rssi);
+    if (magnitude == 0) return;                  // out of the area
+    // An area hit is a LIT, whoever is the centre: hold.accept decides.
+    // Totem senders are dropped while held for their pickups and claims,
+    // which an area hit is not.
+    if (_held && !holdAccepts(RadioMsg::MSG_LIT)) return;
+
+    const RadioPacket hit = areaHit(*p, origin, team, magnitude);
+    const DirectRadioRule* r = directRuleFor(hit);
+    if (!r) return;                              // this state takes no hits
+
+    const uint8_t repliesBefore = output.radio.replyCount;
+    if (r->onReceive) r->onReceive(hit, ev.rssi, *_display, output);
+    uint8_t sub = r->replySubType;
+    if (sub == DirectRadioRule::DYNAMIC_REPLY) {
+        const RadioOutput& ro = output.radio;
+        sub = (ro.replyCount > repliesBefore && ro.replies[repliesBefore].payloadLen)
+            ? ro.replies[repliesBefore].payload[0] : 0;
+    }
+    output.radio.replyCount = repliesBefore;     // an area hit answers nobody
+
+    if (sub == HitReply::SHONE && p->credit && origin != me &&
+        origin > 0 && origin < PlayerDefs::MAX_PLAYER_ID) {
+        const uint8_t credit[2] = { p->id, sub };
+        output.radio.sendTo(origin, RadioMsg::MSG_AREA_CREDIT, credit, sizeof(credit));
+    }
+}
+
+void LightAir_GameRunner::areaCredit(const RadioEvent& ev, GameOutput& output) {
+    const RadioPacket& c = ev.packet;
+    output.radio.reply(c, 0);                    // acknowledged: frees its pending slot
+    if (c.payloadLen < 2 || !areaFind(*_game, c.payload[0])) return;
+
+    // Played to the ruleset as the knocked-out player's SHONE answer to one
+    // of this player's own LITs: each game scores it as it scores a direct
+    // knock-out, and reply.sender names who went down.
+    RadioPacket reply;
+    memset(&reply, 0, sizeof(reply));
+    reply.senderId   = c.senderId;
+    reply.team       = c.team;
+    reply.msgType    = RadioMsg::MSG_LIT | 1;
+    reply.timestamp  = c.timestamp;
+    reply.payloadLen = 1;
+    reply.payload[0] = c.payload[1];
+    RadioPacket original;
+    memset(&original, 0, sizeof(original));
+    original.senderId = _radio->playerId();
+    original.msgType  = RadioMsg::MSG_LIT;
+    dispatchReply(RadioEventType::ReplyReceived, reply, original, ev.rssi, output);
 }
 
 // The transition into the scoring state, by rule or by MSG_END_GAME.

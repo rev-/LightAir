@@ -100,7 +100,8 @@ end
 
 local S   = { PRE_START = 0, ACTIVE = 1, DOWN = 2, SUB_END = 3 }
 local MSG = la.msg
-local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
+-- TAKEN and SHONE are the firmware's (la.hit): its area service reads them.
+local R   = { TAKEN = la.hit.TAKEN, SHONE = la.hit.SHONE, DOWN = 3, IMMUNE = 4 }
 
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
 -- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).  NEAR_CP_RSSI is

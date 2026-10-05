@@ -170,6 +170,10 @@ private:
     LightAir_TotemRequirement _totReqs[TotemDefs::MAX_TOTEM_ROLES];
     char    _optLabels[TotemDefs::MAX_OPTION_LABELS][TotemDefs::OPTION_LABEL_LEN];
     uint8_t _optLabelCount = 0;
+
+    // Area-effect policies declared with la.area_policy (descriptor §7b).
+    AreaPolicy _areaPolicies[AreaDefaults::MAX_POLICIES];
+    uint8_t    _areaPolicyCount = 0;
     uint8_t _teamMap[PlayerDefs::MAX_PLAYER_ID];
 
     // Countdown vars (declarative per-second decrement)
@@ -200,7 +204,6 @@ private:
     int _pktUdRef[3];                        // reusable packet proxies
     int _pktByteFnRef = LUA_NOREF;           // shared pkt:byte method
     int _libCacheRef  = LUA_NOREF;           // la.lib() results
-    int _loadHooksRef = LUA_NOREF;           // la.on_load() functions, in order
 
     uint8_t _stateMax = 0;                   // highest state index seen
 
@@ -248,7 +251,8 @@ private:
     static int l_pkt_index(lua_State* L);
     static int l_pkt_byte(lua_State* L);
     static int l_lib(lua_State* L);
-    static int l_on_load(lua_State* L);
+    static int l_area_policy(lua_State* L);
+    static int l_area_emit(lua_State* L);
     // (plain-context verbs are file-local in LightAir_LuaKernel.cpp)
 
     // ---- static trampoline plumbing ----
