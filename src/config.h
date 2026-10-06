@@ -194,6 +194,8 @@ constexpr uint8_t MSG_TOTEM_ROSTER  = 0xF2;
 //                the totem acts only if it reads the touch at least this
 //                strongly — proximity is judged where the totem stands
 //   payload[1] = action (TotemTouch::ACK, or reserved, see below)
+//   payload[2] = optional role filter: a TotemRoleId, and only totems of
+//                that role act; absent or 0 = any role
 // Reply (0xF5), from each totem that acted: [action, the totem's roleId].
 // A touch nobody acted on gets no reply: the player's ruleset learns
 // "no totem here" from silence.

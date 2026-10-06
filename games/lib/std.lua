@@ -171,6 +171,7 @@ end
 -- Totem touch: "I am here", to the totems near this player.
 --
 --   local touch = std.totem_touch{ rssi = -55, every = 1000 }
+--   local touch = std.totem_touch{ rssi = -55, role = la.totem_role.BASE }
 --   update   = { [S.WAITING] = function(vars) touch.send() end },
 --   on_reply = { [MSG.TOTEM_TOUCH] = { [0] = function(vars, reply) ... end } },
 --
@@ -181,20 +182,23 @@ end
 -- its own reading of the touch, so it works whatever the role is doing (a
 -- pickup in its cooldown hears it too), and the role's state never moves —
 -- the touch never reaches its program.  Silence means no totem is near.
--- reset() lets the next send() go out at once.
+-- cfg.role, optional: only totems of that role act (and answer); the
+-- others stay silent, chaser included.  reset() lets the next send() go
+-- out at once.
 --
 -- cfg.rssi is required, for the same reason as base_respawn.
 -- ----------------------------------------------------------------
 function std.totem_touch(cfg)
   assert(cfg.rssi and cfg.rssi < 0 and cfg.rssi >= -127,
          "std.totem_touch: cfg.rssi (dBm, -127..-1) is required")
-  local gate, every, last = -cfg.rssi, cfg.every or 1000, nil
+  local gate, every, role, last = -cfg.rssi, cfg.every or 1000, cfg.role, nil
   local t = {}
   function t.send()
     local now = la.now()
     if last and now - last < every then return false end
     last = now
-    la.broadcast(la.msg.TOTEM_TOUCH, gate, 0)     -- 0 = acknowledge
+    if role then la.broadcast(la.msg.TOTEM_TOUCH, gate, 0, role)   -- 0 = acknowledge
+    else         la.broadcast(la.msg.TOTEM_TOUCH, gate, 0) end
     return true
   end
   function t.reset() last = nil end

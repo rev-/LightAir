@@ -118,6 +118,8 @@ players and one BONUS totem; Virus at its defaults.
 | 5.9 | SPLASH | A clean player holding SPLASH (BONUS) shines a virus standing ~1 m from another virus | both go down; the shooter sees both "is DOWN! +2" |
 | 5.10 | Virus on virus | One virus shines another | the target goes down; the shooter sees "is DOWN! +1" |
 | 5.11 | Points | Infect a clean player; play until one clean player is left | infection "+5"; the last clean player sees "Still clean! +10"; the end screen and the winner follow points, then time stayed clean |
+| 5.13 | Respawn at BASE only | RespawnAt = BASE; one BASE and one BONUS totem; a down virus, wait over, stands at the BONUS, then at the BASE | tray "Go to a base"; nothing at the BONUS (no chaser); back at the BASE with its chaser |
+| 5.14 | BASE only, no BASE | RespawnAt = BASE, only a BONUS totem assigned | the virus is back on the spot when the time is up |
 | 5.12 | Clean bonus on time-out | Let the time run out with two players still clean | both see "Still clean! +10"; the viruses do not |
 
 Bring back: how far from the totem the touch is answered (gate −55 dBm),

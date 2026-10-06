@@ -17,10 +17,12 @@
 --
 -- A clean player's shine does nothing to another clean player (the
 -- shooter hears the friendly-fire cue), but it puts a virus DOWN: out of
--- play for virus_respawn_secs, then back at any totem — the virus walks up
+-- play for virus_respawn_secs, then back at a totem — the virus walks up
 -- to one and its device touches it (std.totem_touch): the totem plays its
--- arrival chaser and answers, and the answer is the respawn.  With no
--- totems in the match, the virus is back when the time is up.  A clean
+-- arrival chaser and answers, and the answer is the respawn.  Which totems
+-- count is the DM's choice (RespawnAt): ANY totem, or the BASE totems
+-- alone.  With none of those in the match, the virus is back when the
+-- time is up.  A clean
 -- SPLASH puts down the viruses standing near the one it hits.
 --
 -- A virus is back with 5 s of grace: no beam or area puts it down again,
@@ -95,7 +97,10 @@ local can_respawn      = false
 -- Touching is only asked for once the wait is over; a late answer to a
 -- touch sent while still waiting, or after respawning, must not count.
 local touching         = false
-local touch            = std.totem_touch{ rssi = TOTEM_RSSI, every = 1000 }
+-- Built per match: whether it is aimed at BASE totems is a menu choice.
+local touch            = nil
+local RESPAWN_ANY, RESPAWN_BASE = 0, 1
+local base_only        = false
 -- The two roles are two projectors.  A clean player holds the plain
 -- baseline, exactly as in every other game; everything special about the
 -- virus lives in the VIRUS projector, granted on infection and never given
@@ -190,6 +195,9 @@ return {
     { id = "virus_cooldown", name = "CoolMs",   min = 250, max = 3000, step = 250, default = 1000 },
     -- How long a virus a clean player put down stays out, at least.
     { id = "virus_respawn_secs", name = "Respawn", min = 10, max = 100, step = 10, default = 30 },
+    -- Where a down virus comes back: at any totem, or at a BASE only.
+    { id = "respawn_at", name = "RespawnAt", default = RESPAWN_ANY,
+      choices = { { RESPAWN_ANY, "ANY" }, { RESPAWN_BASE, "BASE" } } },
     { id = "game_time",      name = "Time",     min = 60,  max = 900,  step = 60,  default = 600  },
   },
 
@@ -254,6 +262,8 @@ return {
   },
 
   totem_slots = {
+    -- Teamless respawn points for down viruses (see RespawnAt).
+    { role = "BASE",  min = 0, max = 4 },
     { role = "BONUS", min = 0, max = 16, options = proj.bonus_options() },
     { role = "MALUS", min = 0, max = 16, options = std.malus_options() },
   },
@@ -276,8 +286,16 @@ return {
     safe_until       = 0
     can_respawn      = false
     touching         = false
-    touch.reset()
-    has_totems = la.totem_for_role("BONUS", 0) ~= 0 or la.totem_for_role("MALUS", 0) ~= 0
+    local bases = la.totem_for_role("BASE", 0) ~= 0
+    base_only = vars.respawn_at == RESPAWN_BASE
+    if base_only then
+      has_totems = bases
+      touch = std.totem_touch{ rssi = TOTEM_RSSI, every = 1000, role = la.totem_role.BASE }
+    else
+      has_totems = bases or la.totem_for_role("BONUS", 0) ~= 0
+                         or la.totem_for_role("MALUS", 0) ~= 0
+      touch = std.totem_touch{ rssi = TOTEM_RSSI, every = 1000 }
+    end
     proj.reset(vars)                -- CLEAN in hand, pool full, optics pushed
 
     -- Everybody knows patient zero: the DM drew it and sent it at Start.
@@ -404,7 +422,7 @@ return {
         la.background()             -- no viral pulse while out of play
         la.clear_tray()
         -- Two persistent lines for the wait, credit on top; the first
-        -- becomes "Go to a totem" once the wait is over (update below).
+        -- becomes "Go to a totem" (or "a base") once the wait is over.
         la.show("Wait to respawn", 0)
         la.show("LIT by " .. (downed_by or "?"), 0)
         la.ui("Down")
@@ -451,7 +469,7 @@ return {
       if not touching then
         touching = true
         la.clear_tray()
-        la.show("Go to a totem", 0)
+        la.show(base_only and "Go to a base" or "Go to a totem", 0)
         la.show("LIT by " .. (downed_by or "?"), 0)
       end
       touch.send()
@@ -459,6 +477,7 @@ return {
   },
 
   totems = {
+    BASE  = std.totems.base("any"),
     BONUS = std.totems.bonus(),
     MALUS = std.totems.malus(),
   },

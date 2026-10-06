@@ -10,6 +10,8 @@ la = {
           BASE_BEACON = 0x56, FLAG_BEACON = 0x58,
           BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60, TOTEM_TOUCH = 0xF4 },
   flag_event = { TAKEN = 1, DROPPED = 2, SCORED = 3 },
+  totem_role = { BASE_O = 1, BASE_X = 2, FLAG_O = 3, FLAG_X = 4, CP = 5,
+                 BONUS = 6, MALUS = 7, BASE = 8 },
   hit = { TAKEN = 1, SHONE = 2 },         -- HitReply in src/config.h
   -- Mirrors IconType in src/ui/player/display/LightAir_Display_Icons.h.
   -- A profile naming an icon that is not here fails the standard-catalogue
@@ -1834,6 +1836,12 @@ do
   check(t.send() == true and #out.radio == 2, "period", "the touch after the period did not go out")
   t.reset()
   check(t.send() == true and #out.radio == 3, "reset", "reset() did not let the next touch out")
+  local tb = S.totem_touch{ rssi = -55, role = la.totem_role.BASE }
+  out.radio = {}
+  tb.send()
+  m = out.radio[1]
+  check(m and m[3] == 55 and m[4] == 0 and m[5] == la.totem_role.BASE, "role",
+        "a touch aimed at BASE does not carry the role byte")
   print("OK   totem_touch   single-hop [gate, ACK], once per period, gate required")
 end
 
@@ -1916,11 +1924,12 @@ do
     for _, v in ipairs(list) do if v == x then return true end end
     return false
   end
-  local function fresh()
+  local function fresh(cfg)
     libcache = {}
     local g = dofile(ROOT .. "virus.lua")
     local v = {}
     for _, c in ipairs(g.config) do v[c.id] = c.default end
+    for k, x in pairs(cfg or {}) do v[k] = x end
     for _, x in ipairs(g.vars)   do v[x.id] = initial(x) end
     clock = 0
     out.radio, out.ui, out.shows = {}, {}, {}
@@ -1942,10 +1951,11 @@ do
     return mk_pkt{ sender = sender, area = area,
                    payload = { area and 2 or 1, area and 1 or 0, tag, 0, area and 1 or nil } }
   end
-  local function touches()
+  local function touches(role)
     local n = 0
     for _, m in ipairs(out.radio) do
-      if m[1] == "bcast" and m[2] == la.msg.TOTEM_TOUCH and m[3] == 55 and m[4] == 0 then n = n + 1 end
+      if m[1] == "bcast" and m[2] == la.msg.TOTEM_TOUCH and m[3] == 55 and m[4] == 0
+         and m[5] == role then n = n + 1 end
     end
     return n
   end
@@ -2104,6 +2114,45 @@ do
     check(touches() == 0 and rules(g4, v4, st4) and st4.state == S.VIRUS, "no totems",
           "with no totems the virus did not come back on time (or touched)")
   end
+  -- RespawnAt: ANY (default) touches every totem; BASE aims the touch at
+  -- BASE totems and counts only them as "totems in the match".
+  do
+    local g8 = dofile(ROOT .. "virus.lua")
+    local c, base_slot
+    for _, x in ipairs(g8.config) do if x.id == "respawn_at" then c = x end end
+    for _, t in ipairs(g8.totem_slots) do if t.role == "BASE" then base_slot = t end end
+    check(c and c.default == 0 and c.choices and c.choices[2][2] == "BASE", "respawn at",
+          "no RespawnAt choice (ANY default, BASE)")
+    check(base_slot and g8.totems.BASE, "respawn at", "Virus has no BASE totems")
+
+    local function downAndWait(cfg)
+      local g9, v9, st9 = fresh(cfg)
+      g9.on_message[S.CLEAN][MSG.LIT](v9, lit(1, 1)); rules(g9, v9, st9)
+      g9.on_message[S.VIRUS][MSG.LIT](v9, lit(3, 0)); rules(g9, v9, st9)
+      out.radio, out.shows = {}, {}
+      clock = clock + 30000; g9.update[S.DOWN](v9)
+      return g9, v9, st9
+    end
+    local _ = downAndWait({ respawn_at = 1 })
+    check(touches(la.totem_role.BASE) == 1 and has(out.shows, "Go to a base"), "respawn at",
+          "BASE mode: the touch is not aimed at BASE, or the tray says otherwise")
+    downAndWait({ respawn_at = 0 })
+    check(touches(nil) == 1 and has(out.shows, "Go to a totem"), "respawn at",
+          "ANY mode: the touch is not for every totem")
+
+    -- BASE mode with only pickups in the match: back on time, no touch.
+    local real = la.totem_for_role
+    la.totem_for_role = function(role, i) return (role ~= "BASE" and i == 0) and 254 or 0 end
+    local g10, v10, st10 = downAndWait({ respawn_at = 1 })
+    check(touches(la.totem_role.BASE) == 0 and rules(g10, v10, st10) and st10.state == S.VIRUS,
+          "respawn at", "BASE mode with no BASE totem did not respawn on time")
+    -- ANY mode with only a BASE: it is a totem, so the virus touches.
+    la.totem_for_role = function(role, i) return (role == "BASE" and i == 0) and 254 or 0 end
+    downAndWait({ respawn_at = 0 })
+    check(touches(nil) == 1, "respawn at", "ANY mode ignored a BASE totem")
+    la.totem_for_role = real
+  end
+
   print("OK   virus down    friendly fire; any beam or a clean area puts a virus down; back by a totem's answer (or on time without totems) with 5 s of grace; points 5/1/2, clean at the end +10; no shining in grace")
 end
 

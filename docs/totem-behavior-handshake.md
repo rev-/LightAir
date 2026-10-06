@@ -298,7 +298,10 @@ also frees the totem path's RAM.
 ## 4b. The touch — what a totem answers outside its program
 
 A player can tell the totems near it "I am here" with `MSG_TOTEM_TOUCH`
-(0xF4), a single-hop broadcast `[rssi gate, action]` (`config.h`).  An
+(0xF4), a single-hop broadcast `[rssi gate, action, role?]` (`config.h`).
+The optional third byte aims it at one role (a `TotemRoleId`, `la.totem_role`
+in Lua; 0 or absent = any): a totem of another role stays silent, chaser
+included.  An
 ACTIVE totem's driver answers it **before and outside the program**:
 
 - **The totem judges the distance**, on its own reading of the touch
@@ -317,7 +320,7 @@ ACTIVE totem's driver answers it **before and outside the program**:
   the additive opcode §5 describes.  Until then a totem ignores them: no
   chaser, no reply.
 
-Player side, `std.totem_touch{ rssi = …, every = … }` sends at most one
+Player side, `std.totem_touch{ rssi = …, every = …, role = … }` sends at most one
 touch per period; replies arrive in `on_reply[MSG.TOTEM_TOUCH][0]`, with
 `reply.sender` the totem and `reply:byte(2)` its role.  Silence means no
 totem is in reach.  Host-tested in `test/host/test_totemdriver.cpp`.

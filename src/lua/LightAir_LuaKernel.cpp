@@ -799,6 +799,15 @@ void LightAir_LuaGame::registerKernel() {
     }
     lua_setfield(L, -2, "icons");
 
+    // la.totem_role — role name -> TotemRoleId, e.g. to aim a touch at one
+    // role (std.totem_touch{ role = la.totem_role.BASE }).
+    lua_newtable(L);
+    for (uint8_t i = 0; i < kRoleCount; i++) {
+        lua_pushinteger(L, kRoles[i].val);
+        lua_setfield(L, -2, kRoles[i].name);
+    }
+    lua_setfield(L, -2, "totem_role");
+
     // la.flag_event
     lua_newtable(L);
     lua_pushinteger(L, FlagEvent::TAKEN);   lua_setfield(L, -2, "TAKEN");

@@ -15,7 +15,7 @@ as Lua (Virus, and the two festival-stand rulesets under `games/custom/`):
 | `games/kingofhill.lua` | per-player CP slots, teamless BASE |
 | `games/outflow.lua` | energy-only, passive drain, a projector that never recharges; powered projectors share the life pool (`shared_pool`) |
 | `games/upkeep.lua` | CP ownership, text monitor var ("myPts/enemyPts") |
-| `games/virus.lua` | new game: infection tag; uses a custom message id; any beam puts a virus down, and it comes back by touching a totem (`std.totem_touch`) with 5 s of grace; scored in points |
+| `games/virus.lua` | new game: infection tag; uses a custom message id; any beam puts a virus down, and it comes back by touching a totem — any, or BASE only, a menu choice (`std.totem_touch`) — with 5 s of grace; scored in points |
 | `games/custom/festasportsasso.lua` | stand ruleset, **not flashed**: a King of Hill that never ends — 500 s turns inside one endless match, restarted by an admin `<`+`>` chord |
 | `games/custom/tirobersaglio.lua` | stand ruleset, **not flashed**: a six-panel shooting gallery for children, same `<`+`>` hand-over |
 | `games/lib/std.lua` | pure-Lua standard library (see §"API layering") |
@@ -344,7 +344,8 @@ work at all.
 **Constant tables (data, not calls; pushed once at load)** — `la.msg.*`
 (RadioMsg registry), `la.hit.TAKEN` / `la.hit.SHONE` (the two LIT
 replies that mean a hit landed — the area service reads them, so a ruleset
-that takes hits answers with them), `la.flag_event.*`, `la.colors.team[0..7]`,
+that takes hits answers with them), `la.totem_role.*` (role name → id, e.g.
+to aim a totem touch), `la.flag_event.*`, `la.colors.team[0..7]`,
 `la.colors.player[0..16]` (each `{r,g,b}`), `la.rhythm[0..7]`
 (`{period, pulses}`).  Icon names and UI event names are strings validated
 at load time.

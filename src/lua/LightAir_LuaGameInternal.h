@@ -76,6 +76,9 @@ extern const uint8_t kIconCount;
 // unknown.  Shared by the loader (totem_slots / totems keys) and the
 // la.totem_for_role verb.
 int lookupTotemRole(const char* name);
+// The role names themselves, pushed whole as la.totem_role.
+extern const NamedU8 kRoles[];
+extern const uint8_t kRoleCount;
 
 // ---- Compiling a .lua file off LittleFS -------------------------
 //

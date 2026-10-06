@@ -139,6 +139,7 @@ void LightAir_TotemDriver::handleTouch(const RadioEvent& ev, LightAir_TotemOutpu
     const uint8_t gate   = t.payload[0];
     const uint8_t action = t.payload[1];
     if (action != TotemTouch::ACK) return;
+    if (t.payloadLen >= 3 && t.payload[2] != 0 && t.payload[2] != _roleId) return;
     if (gate > 0 && ev.rssi < -(int)gate) return;
 
     // The chaser yields to whatever the role is animating, and to another

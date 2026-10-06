@@ -45,13 +45,14 @@ const NamedU8 kIcons[] = {
 };
 const uint8_t kIconCount = sizeof(kIcons) / sizeof(*kIcons);
 
-static const NamedU8 kRoles[] = {
+const NamedU8 kRoles[] = {
     { "BASE_O", TotemRoleId::BASE_O }, { "BASE_X", TotemRoleId::BASE_X },
     { "FLAG_O", TotemRoleId::FLAG_O }, { "FLAG_X", TotemRoleId::FLAG_X },
     { "CP",     TotemRoleId::CP },     { "BONUS",  TotemRoleId::BONUS },
     { "MALUS",  TotemRoleId::MALUS },  { "BASE",   TotemRoleId::BASE },
 };
 
+const uint8_t kRoleCount = sizeof(kRoles) / sizeof(*kRoles);
 int lookupTotemRole(const char* name) { return LOOKUP(kRoles, name); }
 
 /* =========================================================
