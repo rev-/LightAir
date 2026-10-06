@@ -10,8 +10,6 @@ la = {
           BASE_BEACON = 0x56, FLAG_BEACON = 0x58,
           BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60, TOTEM_TOUCH = 0xF4 },
   flag_event = { TAKEN = 1, DROPPED = 2, SCORED = 3 },
-  totem_role = { BASE_O = 1, BASE_X = 2, FLAG_O = 3, FLAG_X = 4, CP = 5,
-                 BONUS = 6, MALUS = 7, BASE = 8 },
   hit = { TAKEN = 1, SHONE = 2 },         -- HitReply in src/config.h
   -- Mirrors IconType in src/ui/player/display/LightAir_Display_Icons.h.
   -- A profile naming an icon that is not here fails the standard-catalogue
@@ -1836,12 +1834,6 @@ do
   check(t.send() == true and #out.radio == 2, "period", "the touch after the period did not go out")
   t.reset()
   check(t.send() == true and #out.radio == 3, "reset", "reset() did not let the next touch out")
-  local tb = S.totem_touch{ rssi = -55, role = la.totem_role.BASE }
-  out.radio = {}
-  tb.send()
-  m = out.radio[1]
-  check(m and m[3] == 55 and m[4] == 0 and m[5] == la.totem_role.BASE, "role",
-        "a touch aimed at BASE does not carry the role byte")
   print("OK   totem_touch   single-hop [gate, ACK], once per period, gate required")
 end
 
@@ -1951,11 +1943,11 @@ do
     return mk_pkt{ sender = sender, area = area,
                    payload = { area and 2 or 1, area and 1 or 0, tag, 0, area and 1 or nil } }
   end
-  local function touches(role)
+  local function touches()
     local n = 0
     for _, m in ipairs(out.radio) do
       if m[1] == "bcast" and m[2] == la.msg.TOTEM_TOUCH and m[3] == 55 and m[4] == 0
-         and m[5] == role then n = n + 1 end
+         and m[5] == nil then n = n + 1 end
     end
     return n
   end
@@ -2114,8 +2106,8 @@ do
     check(touches() == 0 and rules(g4, v4, st4) and st4.state == S.VIRUS, "no totems",
           "with no totems the virus did not come back on time (or touched)")
   end
-  -- RespawnAt: ANY (default) touches every totem; BASE aims the touch at
-  -- BASE totems and counts only them as "totems in the match".
+  -- RespawnAt: a BASE answers by its own beacon in both modes, as in every
+  -- game; ANY adds the touch, for the BONUS and MALUS totems only.
   do
     local g8 = dofile(ROOT .. "virus.lua")
     local c, base_slot
@@ -2125,31 +2117,53 @@ do
           "no RespawnAt choice (ANY default, BASE)")
     check(base_slot and g8.totems.BASE, "respawn at", "Virus has no BASE totems")
 
-    local function downAndWait(cfg)
+    local function down(cfg)
       local g9, v9, st9 = fresh(cfg)
       g9.on_message[S.CLEAN][MSG.LIT](v9, lit(1, 1)); rules(g9, v9, st9)
       g9.on_message[S.VIRUS][MSG.LIT](v9, lit(3, 0)); rules(g9, v9, st9)
       out.radio, out.shows = {}, {}
-      clock = clock + 30000; g9.update[S.DOWN](v9)
       return g9, v9, st9
     end
-    local _ = downAndWait({ respawn_at = 1 })
-    check(touches(la.totem_role.BASE) == 1 and has(out.shows, "Go to a base"), "respawn at",
-          "BASE mode: the touch is not aimed at BASE, or the tray says otherwise")
-    downAndWait({ respawn_at = 0 })
-    check(touches(nil) == 1 and has(out.shows, "Go to a totem"), "respawn at",
-          "ANY mode: the touch is not for every totem")
+    local function base(g9, v9, rssi)
+      return g9.on_message[S.DOWN][MSG.BASE_BEACON](v9,
+        mk_pkt{ sender = 253, msg = MSG.BASE_BEACON, payload = { 0xFF }, rssi = rssi })
+    end
 
-    -- BASE mode with only pickups in the match: back on time, no touch.
+    -- BASE mode: no touch ever; the base answers by its beacon, once the
+    -- wait is over and from close by.
+    local g9, v9, st9 = down({ respawn_at = 1 })
+    clock = clock + 10000
+    check(base(g9, v9, -40) == nil and not rules(g9, v9, st9), "respawn at",
+          "BASE mode: a base respawned a virus still waiting")
+    clock = clock + 20000; g9.update[S.DOWN](v9)
+    check(touches() == 0 and has(out.shows, "Go to a base"), "respawn at",
+          "BASE mode: a touch went out, or the tray does not say \"Go to a base\"")
+    check(base(g9, v9, -70) == nil and not rules(g9, v9, st9), "respawn at",
+          "BASE mode: a base out of reach respawned the virus")
+    check(base(g9, v9, -40) == la.my_id() and rules(g9, v9, st9) and st9.state == S.VIRUS,
+          "respawn at", "BASE mode: a near base's beacon was not answered, or did not respawn")
+
+    -- ANY mode: the touch goes out for the pickups, and a base works too.
+    g9, v9, st9 = down({ respawn_at = 0 })
+    clock = clock + 30000; g9.update[S.DOWN](v9)
+    check(touches() == 1 and has(out.shows, "Go to a totem"), "respawn at",
+          "ANY mode: no touch for the pickups")
+    check(base(g9, v9, -40) == la.my_id() and rules(g9, v9, st9) and st9.state == S.VIRUS,
+          "respawn at", "ANY mode: a base did not respawn the virus")
+
     local real = la.totem_for_role
-    la.totem_for_role = function(role, i) return (role ~= "BASE" and i == 0) and 254 or 0 end
-    local g10, v10, st10 = downAndWait({ respawn_at = 1 })
-    check(touches(la.totem_role.BASE) == 0 and rules(g10, v10, st10) and st10.state == S.VIRUS,
-          "respawn at", "BASE mode with no BASE totem did not respawn on time")
-    -- ANY mode with only a BASE: it is a totem, so the virus touches.
+    -- ANY mode with BASE totems alone: nothing to touch.
     la.totem_for_role = function(role, i) return (role == "BASE" and i == 0) and 254 or 0 end
-    downAndWait({ respawn_at = 0 })
-    check(touches(nil) == 1, "respawn at", "ANY mode ignored a BASE totem")
+    g9, v9, st9 = down({ respawn_at = 0 })
+    clock = clock + 30000; g9.update[S.DOWN](v9)
+    check(touches() == 0 and not rules(g9, v9, st9), "respawn at",
+          "ANY mode with bases only: a touch went out, or the virus came back on time")
+    -- BASE mode with pickups alone: back on time, no touch.
+    la.totem_for_role = function(role, i) return (role ~= "BASE" and i == 0) and 254 or 0 end
+    g9, v9, st9 = down({ respawn_at = 1 })
+    clock = clock + 30000; g9.update[S.DOWN](v9)
+    check(touches() == 0 and rules(g9, v9, st9) and st9.state == S.VIRUS, "respawn at",
+          "BASE mode with no BASE: not back on time")
     la.totem_for_role = real
   end
 

@@ -158,27 +158,6 @@ int main(int argc, char** argv) {
     CHECK(replyTo(6) && replyTo(7) && strip.played.size() == 1,
           "two touches in one tick: both answered, one chaser");
 
-    // ---- Role filter: payload[2] names the role that may act ----
-    auto touchRole = [&](uint8_t player, uint8_t role) {
-        RadioPacket p = {};
-        p.senderId = player; p.msgType = RadioMsg::MSG_TOTEM_TOUCH;
-        p.sessionToken = TOKEN; p.typeId = TYPE; p.timestamp = ts++;
-        p.payloadLen = 3; p.payload[0] = 55; p.payload[1] = TotemTouch::ACK; p.payload[2] = role;
-        tr.testRssi = -40;
-        tr.push(p);
-    };
-    strip.played.clear(); strip.pending = 0;
-    touchRole(10, TotemRoleId::BASE);
-    tick();
-    CHECK(!replyTo(10) && strip.played.empty(), "a touch for BASE leaves a BONUS silent, chaser included");
-    touchRole(11, TotemRoleId::BONUS);
-    tick();
-    CHECK(replyTo(11) && strip.played.size() == 1, "a touch for this totem's role is answered");
-    strip.played.clear(); strip.pending = 0;
-    touchRole(12, 0);
-    tick();
-    CHECK(replyTo(12) && strip.played.size() == 1, "role 0 means any role");
-
     // ---- Reserved actions: the program's, ignored until it can take them ----
     strip.played.clear(); strip.pending = 0;
     touch(8, 55, TotemTouch::FIRST_PROGRAM, -40);

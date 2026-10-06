@@ -17,12 +17,15 @@
 --
 -- A clean player's shine does nothing to another clean player (the
 -- shooter hears the friendly-fire cue), but it puts a virus DOWN: out of
--- play for virus_respawn_secs, then back at a totem — the virus walks up
--- to one and its device touches it (std.totem_touch): the totem plays its
--- arrival chaser and answers, and the answer is the respawn.  Which totems
--- count is the DM's choice (RespawnAt): ANY totem, or the BASE totems
--- alone.  With none of those in the match, the virus is back when the
--- time is up.  A clean
+-- play for virus_respawn_secs, then back at a totem.  Which totems count
+-- is the DM's choice (RespawnAt): BASE totems alone, or ANY totem.  A BASE
+-- works as in every game: the virus answers its beacon from close by and
+-- the base plays its respawn animation.  A BONUS or MALUS would hand itself
+-- over to whoever answers it, so in ANY mode the virus's device touches
+-- them instead (std.totem_touch): the totem plays its arrival chaser and
+-- answers without being claimed, and the answer is the respawn.  With none
+-- of the counted totems in the match, the virus is back when the time is
+-- up.  A clean
 -- SPLASH puts down the viruses standing near the one it hits.
 --
 -- A virus is back with 5 s of grace: no beam or area puts it down again,
@@ -73,7 +76,7 @@ local GRACE_MS = 5000
 -- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
 -- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
 local PICKUP_RSSI = -55         -- ~2 m: BONUS/MALUS claim gate
-local TOTEM_RSSI  = -55         -- ~2 m: a down virus is "at" a totem
+local TOTEM_RSSI  = -55         -- ~2 m: a down virus is "at" a totem (BASE or touch)
 
 -- Continuous red pulse + soft vibration on the infected device.
 local virus_bg = {
@@ -97,10 +100,12 @@ local can_respawn      = false
 -- Touching is only asked for once the wait is over; a late answer to a
 -- touch sent while still waiting, or after respawning, must not count.
 local touching         = false
--- Built per match: whether it is aimed at BASE totems is a menu choice.
-local touch            = nil
+-- The touch reaches every totem in reach, a BASE included: a virus at a
+-- BASE in ANY mode may see the base's respawn animation and a chaser.
+local touch            = std.totem_touch{ rssi = TOTEM_RSSI, every = 1000 }
 local RESPAWN_ANY, RESPAWN_BASE = 0, 1
 local base_only        = false
+local touch_pickups    = false   -- ANY mode with a BONUS or MALUS to touch
 -- The two roles are two projectors.  A clean player holds the plain
 -- baseline, exactly as in every other game; everything special about the
 -- virus lives in the VIRUS projector, granted on infection and never given
@@ -286,16 +291,11 @@ return {
     safe_until       = 0
     can_respawn      = false
     touching         = false
-    local bases = la.totem_for_role("BASE", 0) ~= 0
-    base_only = vars.respawn_at == RESPAWN_BASE
-    if base_only then
-      has_totems = bases
-      touch = std.totem_touch{ rssi = TOTEM_RSSI, every = 1000, role = la.totem_role.BASE }
-    else
-      has_totems = bases or la.totem_for_role("BONUS", 0) ~= 0
-                         or la.totem_for_role("MALUS", 0) ~= 0
-      touch = std.totem_touch{ rssi = TOTEM_RSSI, every = 1000 }
-    end
+    touch.reset()
+    base_only     = vars.respawn_at == RESPAWN_BASE
+    touch_pickups = not base_only and (la.totem_for_role("BONUS", 0) ~= 0 or
+                                       la.totem_for_role("MALUS", 0) ~= 0)
+    has_totems    = la.totem_for_role("BASE", 0) ~= 0 or touch_pickups
     proj.reset(vars)                -- CLEAN in hand, pool full, optics pushed
 
     -- Everybody knows patient zero: the DM drew it and sent it at Start.
@@ -348,6 +348,15 @@ return {
     },
     [S.DOWN] = {
       [MSG.LIT] = function() return R.DOWN end,
+      -- A BASE, in either mode, as in every game: once the wait is over,
+      -- answering its beacon from close by is the respawn, and the answer
+      -- is what makes the base play its respawn animation.
+      [MSG.BASE_BEACON] = std.base_respawn{
+        when     = function() return la.now() >= respawn_at end,
+        teamless = true,
+        rssi     = TOTEM_RSSI,
+        on_ready = function() can_respawn = true end,
+      },
       [MSG_INFECTED] = function(vars, pkt)
         note_infected(vars, pkt.sender)
         la.show(la.player_short(pkt.sender) .. " is INFECTED", 3000)
@@ -461,8 +470,9 @@ return {
       proj.tick(vars)
     end,
     -- Down: no shining.  Once the wait is over, back on the spot with no
-    -- totem in the match; otherwise touch, once a second, until a totem
-    -- in reach answers.
+    -- counted totem in the match; otherwise to a totem — a BASE answers by
+    -- its beacon (on_message above), and in ANY mode a BONUS or MALUS by
+    -- the touch, sent once a second until one in reach answers.
     [S.DOWN] = function(vars)
       if la.now() < respawn_at then return end
       if not has_totems then can_respawn = true; return end
@@ -472,7 +482,7 @@ return {
         la.show(base_only and "Go to a base" or "Go to a totem", 0)
         la.show("LIT by " .. (downed_by or "?"), 0)
       end
-      touch.send()
+      if touch_pickups then touch.send() end
     end,
   },
 
