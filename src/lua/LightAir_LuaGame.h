@@ -49,6 +49,10 @@ public:
     // WITHOUT synthesizing a descriptor or claiming a trampoline slot.
     // Used by the store's boot scan; safe on a dedicated scratch
     // instance.  Leaves the instance unloaded.
+    // Reads api / type_id / name only.  The chunk still RUNS — that is how a
+    // game file states them — but la.lib() hands back an inert stand-in
+    // instead of the real library, so a peek never compiles games/lib/*.lua.
+    // See _manifestOnly.
     bool peekManifest(const char* path, char* nameOut, size_t nameCap,
                       uint16_t* typeIdOut);
 
@@ -56,6 +60,13 @@ public:
     const char*          name()       const { return _name; }
     uint16_t             typeId()     const { return _game.typeId; }
     bool                 loaded()     const { return _loaded; }
+
+    // Why the last load() failed, in the fewest words that still name the
+    // cause ("not enough memory", "library 'projector' not found", "too
+    // many vars (max 24)").  Games are user-editable files on flash, so
+    // this has to reach the player on the LCD, not only the serial log.
+    // Empty after a successful load.
+    const char*          loadError()  const { return _loadErr; }
 
     // ---- Fault accounting (policy: log, notify, continue) ----
     //
@@ -74,7 +85,7 @@ public:
     // "lua_faults") when the match ends.
     enum class FaultSite : uint8_t {
         Begin, RuleWhen, RuleAction, Update, Message, Reply, Timeout,
-        Score, End,
+        Score, End, Hold,
         Count
     };
     struct FaultStats {
@@ -112,8 +123,26 @@ private:
     // ================= instance data =================
     LightAir_LuaEngine _engine;
     bool               _loaded = false;
+    // Set only for the duration of a peekManifest chunk run.  A manifest is
+    // three literal fields, but the chunk that states them is a whole game
+    // file, and a game file pulls its libraries in at file scope.  Compiling
+    // ~60 KB of library per file — for every file in /games, into a state
+    // that is torn down straight afterwards — is what a peek must not do:
+    // it is slow, and on a device it is what runs the interpreter out of
+    // memory partway through the scan, so games vanish from the menu.
+    //
+    // While set, la.lib() returns an inert stand-in that answers any index
+    // or call with itself, so file-scope library use no-ops harmlessly.
+    // Manifest fields must therefore be literals, which they are.
+    bool               _manifestOnly = false;
     uint8_t            _slotIdx = 0xFF;      // index in the static registry
     char               _name[LuaDefaults::MAX_GAME_NAME] = {0};
+    char               _loadErr[64] = {0};   // reason the last load() failed
+
+    // Record why a load failed: keeps the tail of a Lua message (which
+    // leads with "path:line:" and ends with the interesting part) and
+    // clears the traceback that pcall appends.
+    void setLoadError(const char* msg);
 
     LightAir_Game _game = {};
     uint8_t       _state = 0;                // storage for _game.currentState
@@ -125,6 +154,13 @@ private:
     // Synthesized descriptor tables
     ConfigVar  _configVars[LuaDefaults::MAX_VARS];
     char       _cfgNames[LuaDefaults::MAX_VARS][LuaDefaults::MAX_CFG_NAME];
+    // Config choices, one pool shared by all of this game's config vars.
+    int        _choiceVals[LuaDefaults::MAX_CHOICE_POOL];
+    char       _choiceLabels[LuaDefaults::MAX_CHOICE_POOL][GameDefaults::CONFIG_CHOICE_LABEL_LEN];
+    uint8_t    _choiceCount = 0;
+    // Vars declared draw = "player": the DM fills them at Start.
+    int*       _drawnVars[GameDefaults::MAX_DRAWN_VARS];
+    uint8_t    _drawnCount = 0;
     MonitorVar _monitorVars[LuaDefaults::MAX_MONITOR];
     WinnerVar  _winnerVars[GameDefaults::MAX_WINNER_VARS];
     StateRule  _rules[LuaDefaults::MAX_RULES];
@@ -132,6 +168,12 @@ private:
     DirectRadioRule _directRules[LuaDefaults::MAX_MSG_RULES];
     ReplyRadioRule  _replyRules[2];
     LightAir_TotemRequirement _totReqs[TotemDefs::MAX_TOTEM_ROLES];
+    char    _optLabels[TotemDefs::MAX_OPTION_LABELS][TotemDefs::OPTION_LABEL_LEN];
+    uint8_t _optLabelCount = 0;
+
+    // Area-effect policies declared with la.area_policy (descriptor §7b).
+    AreaPolicy _areaPolicies[AreaDefaults::MAX_POLICIES];
+    uint8_t    _areaPolicyCount = 0;
     uint8_t _teamMap[PlayerDefs::MAX_PLAYER_ID];
 
     // Countdown vars (declarative per-second decrement)
@@ -149,6 +191,10 @@ private:
     int _beginRef  = LUA_NOREF;
     int _scoreRef  = LUA_NOREF;
     int _endRef    = LUA_NOREF;
+    int _holdEnterRef = LUA_NOREF;           // hold.on_enter
+    int _holdExitRef  = LUA_NOREF;           // hold.on_exit
+    uint8_t _holdAccept[LuaDefaults::MAX_HOLD_ACCEPT];
+    uint8_t _holdAcceptCount = 0;
     int _msgTabRef[LuaDefaults::MAX_STATES];
     int _updateRef[LuaDefaults::MAX_STATES];
     int _replyTabRef = LUA_NOREF;
@@ -184,6 +230,8 @@ private:
     void doTimeout(const RadioPacket& orig);
     void doScoreAnnounce(const ScoreTable& t);
     void doEnd();
+    void doClockTick();                      // held: countdowns only
+    void doHoldHook(int ref);                // hold.on_enter / hold.on_exit
     void tickCountdowns();
     void luaFault(FaultSite site);           // count + log + throttled notice
     void maybeEscalate(FaultSite site);      // future-policy hook (see .cpp)
@@ -203,6 +251,8 @@ private:
     static int l_pkt_index(lua_State* L);
     static int l_pkt_byte(lua_State* L);
     static int l_lib(lua_State* L);
+    static int l_area_policy(lua_State* L);
+    static int l_area_emit(lua_State* L);
     // (plain-context verbs are file-local in LightAir_LuaKernel.cpp)
 
     // ---- static trampoline plumbing ----

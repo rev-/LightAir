@@ -6,45 +6,11 @@
 #include "../input/LightAir_InputCtrl.h"
 #include "../radio/LightAir_Radio.h"
 #include "../config.h"
+#include "LightAir_ConfigBlob.h"
 
 class EnlightCalibRoutine;
 class EnlightTestMode;
 class GameFileServer;
-
-// ----------------------------------------------------------------
-// Config blob format (used by game_serialize_config / game_apply_config):
-//
-//   [uint16_t typeId]
-//   [int32_t configVar0] … [int32_t configVarN]
-//   [uint8_t teamMap0] … [uint8_t teamMap16]  ← MAX_PLAYER_ID bytes; only if game.teamCount > 0
-//                                                values: 0..teamCount-1 = team index, 0xFF = unassigned
-//   [uint8_t totemSlot0] … [uint8_t totemSlot15]  ← 16 entries (TotemRoleId per slot; 0 = unassigned)
-//   [uint8_t sessionToken]                   ← last byte; 0 = no session isolation
-//
-// Receivers call game_apply_config() to update in-place.
-// ----------------------------------------------------------------
-
-// Serialize all config data of a game into a byte buffer.
-// totemAssignment[slot] = roleId for each of the 16 totem slots (0 = unassigned).
-// teamMap[id] = team index 0..teamCount-1 (or 0xFF) for each player; only written when game.teamCount > 0.
-// sessionToken is appended as the final byte (0 = no session isolation).
-// Returns bytes written, or 0 if maxLen is insufficient.
-uint16_t game_serialize_config(const LightAir_Game& game,
-                                uint8_t* buf, uint16_t maxLen,
-                                const uint8_t totemAssignment[TotemDefs::MAX_TOTEMS] = nullptr,
-                                const uint8_t teamMap[PlayerDefs::MAX_PLAYER_ID] = nullptr,
-                                uint8_t sessionToken = 0);
-
-// Apply a received config blob.
-// Returns false if typeId doesn't match or blob is too short.
-// Values are clamped to [min, max].  Writes roleIds into totemAssignmentOut if non-null.
-// Writes per-player team indices into teamMapOut (size MAX_PLAYER_ID) if non-null.
-// If sessionTokenOut is non-null, the trailing session token byte is written there.
-bool game_apply_config(const LightAir_Game& game,
-                        const uint8_t* buf, uint16_t len,
-                        uint8_t totemAssignmentOut[TotemDefs::MAX_TOTEMS] = nullptr,
-                        uint8_t teamMapOut[PlayerDefs::MAX_PLAYER_ID] = nullptr,
-                        uint8_t* sessionTokenOut = nullptr);
 
 // ----------------------------------------------------------------
 // KeyEvent — returned by waitForKey() with both key and state info
@@ -65,7 +31,7 @@ struct MenuKeyEvent {
 //   S4    Setup sub-menu (Config / Teams / Totems)
 //   S4a   Config vars (3 visible; </> change, ^/V navigate, B back)
 //   S4b   Teams (3 visible; </> cycle team 0..N-1, ^/V navigate, B back)
-//   S4c   Totems (16 slots; </> cycle role, ^/V navigate, B back)
+//   S4c   Totems (16 slots; </> cycle role, O cycle option, ^/V navigate, B back)
 //   S5    Pre-start: share config → discovery → summary → confirm
 //
 // Non-DM devices go from Home → A:Play → passive wait for host config.
@@ -128,6 +94,10 @@ private:
     // Totem slot assignments: _totemAssignment[slot] = TotemRoleId constant.
     // 0 = TotemRoleId::NONE (unassigned).
     uint8_t _totemAssignment[TotemDefs::MAX_TOTEMS] = {};
+    // Per-slot option picked with O (1-based index into the role's
+    // declared options; 0 = none).  BASE/FLAG teams are not stored here:
+    // O on those rewrites _totemAssignment (BASE_O ↔ BASE_X ↔ BASE).
+    uint8_t _totemOption[TotemDefs::MAX_TOTEMS] = {};
 
     // Discovery state
     static constexpr uint8_t MAX_DISC = GameDefaults::MAX_PARTICIPANTS;
@@ -178,13 +148,21 @@ private:
     void     initTotemAssignment();
     uint8_t  nextTotemRole(uint8_t slot, int8_t dir) const;
     const char* totemRoleLabel(uint8_t roleId) const;   // label including "*" for required
+    const char* totemEntryLabel(uint8_t roleId) const;  // BASE/FLAG folded, "*" for required
+    const char* totemOptionLabel(uint8_t slot) const;   // "" when the slot has no option
     bool     isRoleAvailable(uint8_t slot, uint8_t roleId) const;
-    void     renderTotemEntry(uint8_t cursor);
+    bool     isRoleDeclared(uint8_t roleId) const;
+    const LightAir_TotemRequirement* requirementFor(uint8_t roleId) const;
+    uint8_t  firstAvailableInEntry(uint8_t slot, uint8_t roleId) const;
+    bool     cycleTotemOption(uint8_t slot);             // false = role has no options
+    void     setTotemRole(uint8_t slot, uint8_t roleId);
+    void     renderTotemEntry(uint8_t cursor, const char* legend = nullptr);
 
     // ---- S5 ----
     MenuResult runPreStart();
     void     recordSeen(uint8_t id);
     bool     wasSeen(uint8_t id) const;
+    uint8_t  drawPlayer() const;
     void     renderSummary(uint8_t vScroll);
     void     runCountdownSequence(uint8_t secs);
     void     commitToRunner();
@@ -196,6 +174,9 @@ private:
     void     resetKeyStates();  // Reset prevState to reflect current input reality
     void     showMessage2(const char* line0, const char* line1,
                           const char* line2, const char* line3);
+    // The refusal screen for a game the loader would not accept, carrying
+    // the loader's own reason rather than a bare "failed to load".
+    void     showLoadFailure();
     // Print text centered horizontally at pixel row y.
     void     printLegend(const char* text, uint8_t y);
 };

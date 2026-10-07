@@ -13,26 +13,28 @@
 -- rules — shine the others, hold the CP totems, respawn at a BASE.
 -- A turn walks through four phases:
 --
---   PRE_START  the welcome screen — "Welcome player <counter>" — while
+--   PRE_START  the welcome screen — "Benvenuto giocatore <counter>" — while
 --              the projector is handed over.  Nothing else works until
 --              a BASE totem respawns its holder, which is both the
 --              visitor's way in and how the staff starts the turn: the
 --              BASE plays its respawn animation, the King of Hill
 --              screen comes up and the turn clock starts at sub_time.
 --   ACTIVE     the King of Hill sub-game, turn clock running.
---   DOWN       shone: "SHONE by <player>" / "GO TO BASE" on the tray
+--   DOWN       shone: "Illuminato da <player>" / "VAI ALLA BASE" on the tray
 --              while the clock keeps running; a BASE brings you back
 --              after respawn_secs — exactly as in King of Hill.
 --   SUB_END    the clock ran out: a frozen stats screen leading with
---              "#<counter> POINTS: <score>" (score = 10 per CP totem
---              point plus 1 per player lit this turn).  The A+B chord
---              (deliberately NOT written on the screen — it is the
+--              "#<counter> PUNTI: <score>" (score = 10 per CP totem
+--              point plus 1 per player lit this turn).  The < + >
+--              chord (deliberately NOT written on the screen — it is the
 --              staff's key, not the visitor's) starts the next turn.
+--              A+B is not available: the firmware reserves it, in
+--              every game, for the in-game tools menu.
 --
 -- The player counter is the one number that survives a restart. It
 -- reads as "<visitors before this one><projector digit>": 2 = the
 -- first visitor on projector 2, 12 = the second one, 122 = the
--- thirteenth.  The A+B restart bumps the first part by one; the last
+-- thirteenth.  The < + > restart bumps the first part by one; the last
 -- digit is this device's player id and never changes, because the
 -- projector doesn't.  played_before seeds the first part, so a
 -- battery swap mid-festival can resume the count instead of
@@ -40,8 +42,7 @@
 --
 -- Two consequences of "never ends" worth knowing before editing:
 --   * no `scoring_state`  -> the runner never collects scores, never
---     floods MSG_END_GAME and never arms its own A+B reboot, which
---     is what leaves the chord free for the turn restart below;
+--     floods MSG_END_GAME and never offers its end-screen restart;
 --   * no `time_left_var`  -> the 0xF1 activation reply reports
 --     0xFFFF instead of the turn clock, so a totem activated at any
 --     point of the day never arms its self-revert watchdog.  Wiring
@@ -49,16 +50,81 @@
 --     first turn ended.
 -- ================================================================
 
-local std = la.lib("std")
+local std  = la.lib("std")
+local proj = la.lib("projector")
+
+-- The baseline profile reproduces what std.shiner did here: one
+-- energy per beam, a full refill after the configured idle, both
+-- read from this game's own config vars.
+-- TRIAL is the welcome screen's projector: free shots so a first-time
+-- visitor can learn to aim while the queue moves, and no accounting at
+-- all.  cost 0 means the pool is never touched and never runs out, and
+-- recharge "none" means there is nothing to wait for.  It is a separate
+-- profile rather than a flag because the projector already banks a pool
+-- per slot: switching to it leaves the turn's energy exactly where it
+-- was, and switching back restores it.
+local P_TRIAL = 20
+
+proj.define{
+  vars     = { energy = "energy", spent = "energy_spent",
+               reload = "reload", reload_ms = "reload_ms",
+               icon = "energy_icon" },
+  profiles = {
+    -- bonus = false: a practice projector is not a BONUS totem's to give.
+    { id = P_TRIAL, name = "TRIAL", bonus = false, cost = 0, max_energy = "start_energy",
+      recharge = "none", strength = 1, ready_ms = 0 },
+  },
+}
+
+-- This player's starting lives: what on_begin loads, what a respawn
+-- restores, and the S of a BONUS LIFE (lives += S, capped at 2*S).  One
+-- resolver for all three, so a future per-role value changes it here only.
+local function my_start_lives(vars) return vars.start_lives end
+
+-- Who put us down, for the tray: a player's short name, or "TOTEM" for
+-- a MALUS LIFE.  Declared before the pickup helper, whose hook sets it.
+local shone_by = nil
+
+-- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
+local pickup = std.pickup_effect{ proj = proj, lives = "lives",
+                                  start_lives = my_start_lives,
+                                  on_malus_life = function() shone_by = "TOTEM" end }
+
+-- Hand the welcome screen its practice projector.  proj.reset() rebuilds
+-- the inventory down to the baseline, so this runs after every reset that
+-- lands us on the welcome screen.
+local function arm_trial(vars)
+  proj.give(vars, P_TRIAL)
+  proj.select(vars, P_TRIAL)
+end
 
 local S   = { PRE_START = 0, ACTIVE = 1, DOWN = 2, SUB_END = 3 }
 local MSG = la.msg
-local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
+-- TAKEN and SHONE are the firmware's (la.hit): its area service reads them.
+local R   = { TAKEN = la.hit.TAKEN, SHONE = la.hit.SHONE, DOWN = 3, IMMUNE = 4 }
 
-local NEAR_CP_RSSI   = -65      -- ~3 m: CP presence gate
-local NEAR_BASE_RSSI = -57      -- ~2 m: BASE respawn gate
-local PICKUP_RSSI    = -57      -- ~2 m: BONUS/MALUS claim gate
-local CP_NONE        = 0xFF
+-- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
+-- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).  NEAR_CP_RSSI is
+-- deliberately set far tighter than that curve alone would need for a
+-- ~0.5 m join: a body stepping between totem and projector attenuates the
+-- link by roughly a constant number of dB, and on this curve's steep,
+-- close-in slope that same fixed dB loss maps to a much smaller change in
+-- effective distance than it would out at a "reasonable" join range — so
+-- pinning the join gate close in makes accidental capture-by-obstruction
+-- far less likely.
+local NEAR_CP_RSSI      = -45   -- ~0.5 m: CP presence gate, to join or capture
+-- Once counted as present, a CP is held (or contested) at this looser
+-- reach instead — earned, not given: reaching it the first time still
+-- needs NEAR_CP_RSSI.  Applies to anyone who was just present, not only
+-- the recorded owner, so a multi-way contest does not flicker apart on
+-- signal noise near the tight gate while it is still being fought over.
+local NEAR_CP_RSSI_HOLD = -66 -- ~6 m: keep scoring out to here once owned
+local NEAR_BASE_RSSI    = -55   -- ~2 m: BASE respawn gate
+local PICKUP_RSSI       = -55   -- ~2 m: BONUS/MALUS claim gate
+local CP_NONE           = 0xFF
+-- Reserved reply sub-type for "hold" (see std.totems.cp() for why 17 and
+-- not 0).  Conquest replies keep using the plain slot+1 encoding (1-16).
+local CP_HOLD           = 17
 
 -- ---- Private state ------------------------------------------------
 local my_slot     = 0           -- player id - 1; set in on_begin
@@ -66,10 +132,7 @@ local cp_ids      = {}          -- [i] = device id of the i-th CP totem
 local cp_owner    = {}          -- [i] = last announced owner slot or CP_NONE
 local respawn_at  = 0
 local can_respawn = false
-local shone_by    = nil         -- short name of whoever put us down
 local imm         = std.immunity(3000)
-local shiner      = std.shiner{ energy = "energy", spent = "energy_spent",
-                                max = "start_energy", recharge = "recharge_secs" }
 
 local function cp_index(sender)
   for i, id in ipairs(cp_ids) do
@@ -78,8 +141,18 @@ local function cp_index(sender)
   return nil
 end
 
--- CP beacon: track ownership changes (both playing states); declare
--- presence by returning slot+1 only when send_presence and close enough.
+-- CP beacon: track ownership changes (both playing states), and answer
+-- with exactly one of two reply kinds — never both — matching whichever
+-- role applies right now:
+--   * the recorded owner replies "hold" while within the (looser)
+--     NEAR_CP_RSSI_HOLD reach, at ANY distance inside it — standing right
+--     at the totem does not upgrade this to a conquest reply.  Easy
+--     stealing is deliberate: only combat (shining a challenger before
+--     they get a clean window) defends a held hill, not proximity.
+--   * anyone else replies "conquest" only within the tight NEAR_CP_RSSI
+--     reach.  No hysteresis, no memory of past presence: each beacon is
+--     answered fresh from the current RSSI alone, so there is nothing to
+--     reset between visitors or respawns.
 local function cp_beacon_handler(send_presence)
   return function(vars, pkt)
     local idx = cp_index(pkt.sender)
@@ -87,16 +160,24 @@ local function cp_beacon_handler(send_presence)
 
     local owner = pkt:byte(1)
     if owner ~= cp_owner[idx] then
+      local prev = cp_owner[idx]
       cp_owner[idx] = owner
-      if owner == CP_NONE then
-        la.show(string.format("CP %d neutral", idx), 3000)
-      else
-        la.show(string.format("CP %d -> P%d!", idx, owner + 1), 3000)
-        la.ui(owner == my_slot and "FlagReturn" or "FlagTaken")
+      -- Only the two players actually affected by the change learn
+      -- about it — the loser and the gainer — not the whole field.
+      if owner == my_slot then
+        la.show("Totem vinto!", 3000)
+        la.ui("FlagReturn")
+      elseif prev == my_slot then
+        la.show("Totem perso", 3000)
+        la.ui("FlagTaken")
       end
     end
 
-    if send_presence and pkt.rssi >= NEAR_CP_RSSI then
+    if not send_presence then return end
+
+    if owner == my_slot then
+      if pkt.rssi >= NEAR_CP_RSSI_HOLD then return CP_HOLD end
+    elseif pkt.rssi >= NEAR_CP_RSSI then
       return my_slot + 1
     end
   end
@@ -109,7 +190,7 @@ local function cp_score_handler(vars, pkt)
     vars.points = vars.points + 1
     -- A point is what the visitor is here for: cue it and name the hill
     -- that paid it, instead of letting the score cell tick by unnoticed.
-    la.show(string.format("CP %d +1", idx), 2000)
+    la.show("Totem: +1 punto", 2000)
     la.ui("ControlGain")
   end
 end
@@ -134,10 +215,11 @@ end
 -- "Down" cue is the moment feedback, so no transient line competes.
 local function go_down(vars)
   vars.shone_times = vars.shone_times + 1
-  respawn_at  = la.now() + vars.respawn_secs * 1000
+  respawn_at  = std.respawn_wait(vars, vars.respawn_secs)
   can_respawn = false
-  la.show("GO TO BASE", 0)
-  la.show("SHONE by " .. (shone_by or "?"), 0)
+  proj.strip(vars)                  -- going out loses powered projectors and DIM
+  la.show("VAI ALLA BASE", 0)
+  la.show("Illuminato da " .. (shone_by or "?"), 0)
   la.ui("Down")
 end
 
@@ -147,9 +229,9 @@ end
 local function sub_end(vars)
   vars.tally = string.format("%d/%d", vars.players_lit, vars.shone_times)
   la.clear_tray()
-  la.show(string.format("#%d POINTS: %d",
+  la.show(string.format("#%d PUNTI: %d",
                         vars.counter, 10 * vars.points + vars.players_lit), 0)
-  la.show("Time up!", 3000)
+  la.show("Tempo scaduto!", 3000)
   la.ui("EndGame")
 end
 
@@ -160,7 +242,7 @@ local function welcome(vars)
   -- The playing numbers are loaded here as well, so the welcome screen
   -- shows a fresh turn instead of the last visitor's leftovers; the
   -- ones that matter are loaded again, for real, in start_turn.
-  vars.lives        = vars.start_lives
+  vars.lives        = my_start_lives(vars)
   vars.energy       = vars.start_energy
   vars.time_left    = vars.sub_time
   vars.points       = 0
@@ -172,10 +254,11 @@ local function welcome(vars)
   can_respawn = false
   shone_by    = nil
   imm.reset()
-  shiner.reset()
+  proj.reset(vars)
+  arm_trial(vars)
   la.clear_tray()
-  la.show("Go to a BASE!", 0)
-  la.show(string.format("Welcome player %d", vars.counter), 0)
+  la.show("Vai a una BASE!", 0)
+  la.show(string.format("Benvenuto giocatore %d", vars.counter), 0)
 end
 
 -- A BASE let the visitor in: this is where the turn actually begins.
@@ -185,15 +268,15 @@ end
 -- itself: std.base_respawn replied with slot+1, which is what makes it
 -- play its respawn animation in this player's colour.
 local function start_turn(vars)
-  vars.lives     = vars.start_lives
+  vars.lives     = my_start_lives(vars)
   vars.energy    = vars.start_energy
   vars.time_left = vars.sub_time
   can_respawn = false
   shone_by    = nil
   imm.reset()
-  shiner.reset()
+  proj.reset(vars)
   la.clear_tray()
-  la.show("Play!", 2000)
+  la.show("Gioca!", 2000)
   la.ui("Up")
 end
 
@@ -208,8 +291,8 @@ return {
   config = {
     { id = "start_lives",   name = "Lives",     min = 1,  max = 5,   step = 1,  default = 3   },
     { id = "respawn_secs",  name = "Respawn",   min = 5,  max = 120, step = 5,  default = 30  },
-    { id = "start_energy",  name = "Energy",    min = 10, max = 100, step = 10, default = 50  },
-    { id = "recharge_secs", name = "Recharge",  min = 0,  max = 20,  step = 5,  default = 10  },
+    { id = "start_energy",  name = "Energy",    min = 10, max = 60,  step = 5,  default = 30  },
+    { id = "recharge_secs", name = "Recharge",  min = 5,  max = 20,  step = 5,  default = 10  },
     -- One visitor's turn, not the match: the match never ends.
     { id = "sub_time",      name = "SubTime",   min = 60, max = 900, step = 10, default = 500 },
     -- Visitors already served before this device booted (0 on the
@@ -220,10 +303,29 @@ return {
 
   vars = {
     { id = "lives",        default = 3   },
-    { id = "energy",       default = 50  },
+    { id = "energy",       default = 30  },
     { id = "time_left",    default = 500, countdown_in = { S.ACTIVE, S.DOWN } },
+    -- The respawn wait, for the DOWN loading bar: written by
+    -- std.respawn_wait() when the wait starts.
+    { id = "respawn_zero", default = 0 },
+    { id = "respawn_from", default = 0 },
+    { id = "respawn_ms",   default = 0 },
     { id = "points",       default = 0   },
     { id = "energy_spent", default = 0   },
+    -- The projector's reload clock, read by the energy cell's bar:
+    -- reload = millis the wait began (0 = not waiting), reload_ms =
+    -- how long it takes.  Both written by projector.lua.
+    { id = "reload",       default = 0 },
+    { id = "reload_ms",    default = 0 },
+    -- The icon of the projector in hand (an la.icons value), written by
+    -- projector.lua and read by the energy cell: FAST, LONG, … replace
+    -- the standard energy glyph while they are the one in use.
+    { id = "energy_icon",  default = la.icons.ENERGY },
+    -- Battery, read on the welcome screen: between turns is the only
+    -- moment anyone looks at a projector without playing it, so it is
+    -- where a flat one has to be caught.  Text, because "4.05V" reads and
+    -- "405" does not.
+    { id = "batt", text = true, len = 8, default = "--" },
     { id = "shone_times",  default = 0   },
     { id = "players_lit",  default = 0   },
     -- <visitors before this one><projector digit>, see the header.
@@ -236,10 +338,22 @@ return {
   monitor = {
     { var = "counter",      icon = "ROLE",   col = 0, row = 0,
       states = { S.PRE_START, S.DOWN, S.SUB_END } },
+    { var = "batt",         icon = "LIGHT",  col = 1, row = 0,
+      states = { S.PRE_START } },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1,
       states = { S.PRE_START, S.ACTIVE, S.DOWN } },
+    -- Out: a bar filling over the respawn time, from the instant the
+    -- wait began.
+    { var = "respawn_zero", icon = "DOWN",   col = 1, row = 0, states = { S.DOWN },
+      bar = true, bar_at = 0, fill_var = "respawn_ms", start_var = "respawn_from" },
     { var = "lives",        icon = "LIFE",   col = 0, row = 0, states = { S.ACTIVE } },
-    { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.ACTIVE } },
+    -- Energy, and — while the pool is empty — a bar filling over the
+    -- recharge.  The projector owns both the duration and the instant
+    -- the wait began, because a refill starts at the trigger's RELEASE,
+    -- not when the pool hit zero.
+    { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.ACTIVE },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload",
+      icon_var = "energy_icon" },
     { var = "points",       icon = "SCORE",  col = 1, row = 1,
       states = { S.ACTIVE, S.DOWN, S.SUB_END } },
     -- Stats screen: counter + lit/shone above, energy spent + points below.
@@ -258,8 +372,8 @@ return {
   totem_slots = {
     { role = "CP",    min = 1, max = 6 },      -- at least one hill
     { role = "BASE",  min = 1, max = 4 },      -- teamless: starts and respawns
-    { role = "BONUS", min = 0, max = 16 },
-    { role = "MALUS", min = 0, max = 16 },
+    { role = "BONUS", min = 0, max = 16, options = proj.bonus_options() },
+    { role = "MALUS", min = 0, max = 16, options = std.malus_options() },
   },
   teams = 0,
   -- time_left_var deliberately absent — see the header.
@@ -296,8 +410,8 @@ return {
     [S.ACTIVE] = {
       -- A pickup totem gives itself to whoever answers, so only answer
       -- from arm's length: the claim has to mean "I am standing at it".
-      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
-      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = std.lit_target{
         lives = "lives", immunity = imm,
         reply = { taken = R.TAKEN, shone = R.SHONE, immune = R.IMMUNE },
@@ -327,7 +441,7 @@ return {
   on_reply = {
     [MSG.LIT] = {
       [R.TAKEN]  = counted_lit("Taken"),
-      [R.SHONE]  = counted_lit("Lit", " SHONE!"),
+      [R.SHONE]  = counted_lit("Lit", " ILLUMINATO"),
       [R.DOWN]   = function() la.ui("AlreadyDown") end,
       [R.IMMUNE] = function() la.ui("Immune")      end,
     },
@@ -351,20 +465,21 @@ return {
     { from = S.DOWN, to = S.ACTIVE,
       when   = function() return can_respawn end,
       action = function(vars)
-        vars.lives  = vars.start_lives
+        vars.lives  = my_start_lives(vars)
         vars.energy = vars.start_energy
         can_respawn = false
         shone_by    = nil
         imm.reset()
         la.clear_tray()             -- drop the credit and the instruction
-        la.show("Back in game!", 1000)
+        la.show("Tornato in gioco!", 1000)
         la.ui("Up")
       end },
 
-    -- The staff's key: A+B together hands the projector to the next
-    -- visitor.  Not shown on the stats screen on purpose.
+    -- The staff's key: < and > together hand the projector to the next
+    -- visitor.  Not shown on the stats screen on purpose.  (Not A+B:
+    -- the firmware owns that chord for the in-game tools menu.)
     { from = S.SUB_END, to = S.PRE_START,
-      when   = function() return la.key_down("A") and la.key_down("B") end,
+      when   = function() return la.key_down("<") and la.key_down(">") end,
       action = function(vars)
         -- One more visitor served: bump the counter's first part and
         -- leave its last digit (this projector) alone.
@@ -375,16 +490,32 @@ return {
   },
 
   update = {
+    -- Welcome screen: aim practice, and the battery.
+    --
+    -- Nothing here reaches the radio.  A visitor learning to aim must not
+    -- be able to touch a turn already in progress, so a hit tells this
+    -- projector and nobody else: no MSG.LIT goes out, and the target
+    -- never learns it was lit.  The feedback is the beam's own UI burst
+    -- (proj.tick plays it on every accepted shot) plus the standard hit
+    -- cue when the beam actually finds a player-coloured target.
+    [S.PRE_START] = function(vars)
+      if proj.result(vars) then la.ui("Taken") end
+      proj.tick(vars)
+
+      local v = la.sensor(1)                      -- 1 = battery divider
+      vars.batt = v and string.format("%.2fV", v) or "--"
+    end,
+
     [S.ACTIVE] = function(vars)
       -- Everyone is a valid target: no team check needed.
-      local target = la.shine_lit()
-      if target then la.send(target, MSG.LIT) end
-      shiner.tick(vars)
+      local target = proj.result(vars)
+      if target then la.send(target, MSG.LIT, proj.payload(vars)) end
+      proj.tick(vars)
     end,
   },
 
   totems = {
-    CP    = std.totems.cp(),
+    CP    = std.totems.cp{ teamless = true },
     BASE  = std.totems.base("any"),
     BONUS = std.totems.bonus(),
     MALUS = std.totems.malus(),

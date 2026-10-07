@@ -3,8 +3,8 @@
 --
 -- Port of the retired native C++ ruleset (deleted in the Lua
 -- migration; the original is in git history).  Uses the standard library
--- (games/lib/std.lua) for the recurring idioms; compare with
--- games/freeforall.lua, which spells everything out.
+-- (games/lib/std.lua) for the recurring idioms, like every game;
+-- games/freeforall.lua is the simplest of them, commented throughout.
 --
 -- Eliminating an opponent scores 1 point and broadcasts a point
 -- report so teammates track the aggregate.  Respawn requires the
@@ -12,24 +12,46 @@
 -- Team with most aggregate points wins; tie-break: fewest shone.
 -- ================================================================
 
-local std = la.lib("std")
+local std  = la.lib("std")
+local proj = la.lib("projector")
+
+-- The baseline profile reproduces what std.shiner did here: one
+-- energy per beam, a full refill after the configured idle, both
+-- read from this game's own config vars.
+proj.define{ vars = { energy = "energy", spent = "energy_spent",
+                      reload = "reload", reload_ms = "reload_ms",
+                      icon = "energy_icon" } }
+
+-- This player's starting lives: what on_begin loads, what a respawn
+-- restores, and the S of a BONUS LIFE (lives += S, capped at 2*S).  One
+-- resolver for all three, so a future per-role value changes it here only.
+local function my_start_lives(vars) return vars.start_lives end
+
+-- Who put us down, for the tray: a player's short name, or "TOTEM" for
+-- a MALUS LIFE.  Declared before the pickup helper, whose hook sets it.
+local shone_by = nil
+
+-- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
+local pickup = std.pickup_effect{ proj = proj, lives = "lives",
+                                  start_lives = my_start_lives,
+                                  on_malus_life = function() shone_by = "TOTEM" end }
 
 local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
-local R   = { TAKEN = 1, SHONE = 2, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
+-- TAKEN and SHONE are the firmware's (la.hit): its area service reads them.
+local R   = { TAKEN = la.hit.TAKEN, SHONE = la.hit.SHONE, DOWN = 3, FRIEND = 4, IMMUNE = 5 }
 
-local NEAR_BASE_RSSI = -57      -- ~2 m: BASE respawn gate
-local PICKUP_RSSI    = -57      -- ~2 m: BONUS/MALUS claim gate
+-- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
+-- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
+local NEAR_BASE_RSSI = -55      -- ~2 m: BASE respawn gate
+local PICKUP_RSSI    = -55      -- ~2 m: BONUS/MALUS claim gate
 
 -- ---- Private state ------------------------------------------------
 local my_team      = 0          -- read from the runner in on_begin
 local team_points  = 0          -- aggregate team points known locally
 local respawn_at   = 0          -- la.now() before which BASE beacons are ignored
 local can_respawn  = false
-local shone_by     = nil        -- short name of whoever put us down
 local imm          = std.immunity(3000)
-local shiner       = std.shiner{ energy = "energy", spent = "energy_spent",
-                                 max = "start_energy", recharge = "recharge_secs" }
 
 local function is_opponent(id)  return la.team_of(id) ~= my_team end
 
@@ -50,26 +72,51 @@ return {
   config = {
     { id = "start_lives",   name = "Lives",        min = 1,  max = 5,   step = 1,  default = 3   },
     { id = "respawn_secs",  name = "Respawn",      min = 5,  max = 120, step = 5,  default = 30  },
-    { id = "start_energy",  name = "Energy",       min = 10, max = 100, step = 10, default = 50  },
-    { id = "recharge_secs", name = "Recharge",     min = 0,  max = 20,  step = 5,  default = 10  },
+    { id = "start_energy",  name = "Energy",       min = 10, max = 60,  step = 5,  default = 30  },
+    { id = "recharge_secs", name = "Recharge",     min = 5,  max = 20,  step = 5,  default = 10  },
     { id = "game_time",     name = "Time",         min = 60, max = 900, step = 60, default = 900 },
-    { id = "friendly_fire", name = "FriendlyFire", min = 0,  max = 1,   step = 1,  default = 0   },
+    { id = "friendly_fire", name = "FriendlyFire", default = 0,
+      choices = { { 0, "OFF" }, { 1, "ON" } } },
     { id = "end_points",    name = "EndPoints",    min = 0,  max = 50,  step = 5,  default = 0   },
   },
 
   vars = {
     { id = "lives",        default = 3  },
-    { id = "energy",       default = 50 },
+    { id = "energy",       default = 30 },
     { id = "time_left",    default = 900, countdown_in = { S.IN_GAME, S.OUT_GAME } },
+    -- The respawn wait, for the OUT_GAME loading bar: written by
+    -- std.respawn_wait() when the wait starts.
+    { id = "respawn_zero", default = 0 },
+    { id = "respawn_from", default = 0 },
+    { id = "respawn_ms",   default = 0 },
     { id = "points",       default = 0  },
     { id = "energy_spent", default = 0  },
+    -- The projector's reload clock, read by the energy cell's bar:
+    -- reload = millis the wait began (0 = not waiting), reload_ms =
+    -- how long it takes.  Both written by projector.lua.
+    { id = "reload",       default = 0 },
+    { id = "reload_ms",    default = 0 },
+    -- The icon of the projector in hand (an la.icons value), written by
+    -- projector.lua and read by the energy cell: FAST, LONG, … replace
+    -- the standard energy glyph while they are the one in use.
+    { id = "energy_icon",  default = la.icons.ENERGY },
     { id = "shone_times",  default = 0  },
   },
 
   monitor = {
     { var = "lives",        icon = "LIFE",   col = 0, row = 0, states = { S.IN_GAME } },
-    { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME } },
+    -- Energy, and — while the pool is empty — a bar filling over the
+    -- recharge.  The projector owns both the duration and the instant
+    -- the wait began, because a refill starts at the trigger's RELEASE,
+    -- not when the pool hit zero.
+    { var = "energy",       icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload",
+      icon_var = "energy_icon" },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
+    -- Out: a bar filling over the respawn time, from the instant the
+    -- wait began.
+    { var = "respawn_zero", icon = "DOWN",   col = 1, row = 0, states = { S.OUT_GAME },
+      bar = true, bar_at = 0, fill_var = "respawn_ms", start_var = "respawn_from" },
     { var = "points",       icon = "SCORE",  col = 1, row = 1, states = { S.IN_GAME } },
     { var = "game_time",    icon = "TIME",   col = 0, row = 0, states = { S.GAME_END } },
     { var = "points",       icon = "SCORE",  col = 1, row = 0, states = { S.GAME_END } },
@@ -89,14 +136,14 @@ return {
     { role = "BASE_O", min = 0, max = 4 },
     { role = "BASE_X", min = 0, max = 4 },
     { role = "BASE",   min = 0, max = 4 },
-    { role = "BONUS",  min = 0, max = 16 },
-    { role = "MALUS",  min = 0, max = 16 },
+    { role = "BONUS",  min = 0, max = 16, options = proj.bonus_options() },
+    { role = "MALUS",  min = 0, max = 16, options = std.malus_options() },
   },
   teams = 2,
   time_left_var = "time_left",
 
   on_begin = function(vars)
-    vars.lives     = vars.start_lives
+    vars.lives     = my_start_lives(vars)
     vars.energy    = vars.start_energy
     vars.time_left = vars.game_time
     vars.points       = 0
@@ -108,7 +155,7 @@ return {
     can_respawn  = false
     shone_by     = nil
     imm.reset()
-    shiner.reset()
+    proj.reset(vars)
     la.ui("GameStart")
   end,
 
@@ -116,8 +163,8 @@ return {
     [S.IN_GAME] = {
       -- A pickup totem gives itself to whoever answers, so only answer
       -- from arm's length: the claim has to mean "I am standing at it".
-      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
-      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = std.lit_target{
         lives = "lives", immunity = imm, friendly = friendly,
         reply = { taken = R.TAKEN, shone = R.SHONE,
@@ -173,13 +220,14 @@ return {
       when   = function(vars) return vars.lives <= 0 end,
       action = function(vars)
         vars.shone_times = vars.shone_times + 1
-        respawn_at  = la.now() + vars.respawn_secs * 1000
+        respawn_at  = std.respawn_wait(vars, vars.respawn_secs)
         can_respawn = false
         -- Two persistent lines for the whole wait, credit on top: who put
         -- us down, and what to do about it.  The "Down" cue is the moment
         -- feedback, so no transient line competes for the tray.
         la.show("Go to base", 0)
         la.show("LIT by " .. (shone_by or "?"), 0)
+        proj.strip(vars)            -- going out loses powered projectors and DIM
         la.ui("Down")
       end },
     { from = S.OUT_GAME, to = S.GAME_END,
@@ -191,7 +239,7 @@ return {
     { from = S.OUT_GAME, to = S.IN_GAME,
       when   = function() return can_respawn end,
       action = function(vars)
-        vars.lives  = vars.start_lives
+        vars.lives  = my_start_lives(vars)
         vars.energy = vars.start_energy
         can_respawn = false
         shone_by    = nil
@@ -204,11 +252,11 @@ return {
 
   update = {
     [S.IN_GAME] = function(vars)
-      local target = la.shine_lit()
+      local target = proj.result(vars)
       if target and (is_opponent(target) or vars.friendly_fire == 1) then
-        la.send(target, MSG.LIT)
+        la.send(target, MSG.LIT, proj.payload(vars))
       end
-      shiner.tick(vars)
+      proj.tick(vars)
     end,
     -- OUT_GAME: respawn gating happens in on_message[BASE_BEACON];
     -- the countdown is declarative.  Nothing to do per tick.

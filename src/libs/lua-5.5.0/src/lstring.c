@@ -228,7 +228,11 @@ static TString *internshrstr (lua_State *L, const char *str, size_t l) {
     }
   }
   /* else must create a new string */
-  if (tb->nuse >= tb->size) {  /* need to grow string table? */
+  /* LightAir: grow at two strings per bucket, not one.  A loaded ruleset
+  ** holds ~600 strings, which at one per bucket doubles the bucket array
+  ** to 1024 pointers (4 KB) on a board with no PSRAM; chains of two cost
+  ** nothing measurable.  checkSizes (lgc.c) still shrinks below 1/4. */
+  if (tb->nuse / 2 >= tb->size) {  /* need to grow string table? */
     growstrtab(L, tb);
     list = &tb->hash[lmod(h, tb->size)];  /* rehash with new size */
   }

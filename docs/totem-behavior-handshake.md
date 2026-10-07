@@ -18,7 +18,7 @@ Measured encoded sizes of the five standard roles (reference encoder):
 | Role | bytes | | Role | bytes |
 |---|---|---|---|---|
 | BASE (any team) | 41 | | FLAG | 91 |
-| BONUS / MALUS | 53 | | CP (the worst case) | 191 |
+| BONUS / MALUS | 53 | | CP (the worst case) | 213 |
 
 Budget: 225 bytes of program in the 237-byte 0xF1 payload.  Programs are
 data, so the projector validates (and can even simulate) them at
@@ -91,9 +91,13 @@ actions*:
    existing `TotemUIEvent` set by id, with a color *source* (constant RGB,
    team-of-value, player-of-sender, team-of-sender, or raw args) and an
    optional team rhythm.  New visuals need firmware (they are hardware
-   anyway); new behaviours never do.  One renderer addition: the `Control`
-   effect gains a slot-based arg form (`0xFE, slot`) that does the
-   team-vs-player color mapping internally, so the VM needs no arithmetic.
+   anyway); new behaviours never do.  Two renderer additions: the `Control`
+   effect gains a slot-based arg form (`0xFE, slot`, for team CP games) and
+   a second one (`0xFD, slot`, for teamless CP games — see
+   `std.totems.cp()`'s `opts.teamless`) that both do the team-vs-player
+   color mapping internally, so the VM needs no arithmetic; and
+   `ControlScore`, a one-shot sparkle burst using the same arg forms, for
+   "this CP just paid a point" distinct from `Control`'s steady hold fill.
 
 Value operands anywhere a value is accepted: literal, `R n`,
 `PAYLOAD[i]` (1-based, like `pkt:byte(i)` in game files), `ACC.LOW`,
@@ -137,17 +141,62 @@ totems = {
 
 `games/lib/std.lua` provides factories that build these tables —
 `std.totems.base(team)`, `.bonus()`, `.malus()`, `.flag(team)`, `.cp()` —
-so most games write one-liners; `games/freeforall.lua` spells the tables
-out in full as the tutorial.  The CP program in `std.lua` is the acid test:
-the hardest existing role is eight rules / 191 bytes, using ordered `cont`
-rules over one 2 s window (collect presence → attach/score/settle/contest/
-idle → epilogue: clear ACC, beacon owner).  Attaching pays a point
-immediately and starts the emission period, so a capture is felt at once
-and each further period of unchallenged control pays another.  The
-"settle" rule exists because strip backgrounds are sticky: a contest that
-ends without changing the owner is not an event the ring would otherwise
-hear about, so R1 remembers that the contest pattern is up and the rule
-puts the owner's colour back.
+so every game writes one-liners; `pickup()` in `std.lua` (BONUS / MALUS)
+is the simplest complete table to read first.  The CP program in `std.lua` is the acid test:
+the hardest existing role is nine rules / 199 bytes (26 of the 225-byte
+budget free), using ordered `cont` rules over one 2 s window.
+
+CP owners are conquered, not merely occupied: the one payload byte a
+presence reply carries is one of two disjoint kinds, decided entirely
+player-side (RSSI stays player-side by doctrine, §0 point 4) —
+- **"conquest"** (sub-type 1..16, the replying player's own slot): I am
+  within the *tight* ring, trying to take this hill.  Feeds `ACC` via
+  `accbit` exactly as any other role's presence collection.  Exactly one
+  distinct conquest sender each window takes (or keeps) the hill,
+  regardless of who else is holding it — an owner merely holding never
+  blocks a lone challenger, who has to physically reach the tight ring.
+  Two or more distinct conquest senders contest it instead: no owner
+  change, no point paid.
+- **"hold"** (the reserved sub-type 17, never 0 — see the note below):
+  I *am* the recorded owner, within the looser hold ring, at any
+  distance inside it — standing right at the totem does not upgrade
+  this to a conquest reply.  Never touches `ACC`; it only proves the
+  owner is still around, via a dedicated register, so an uncontested
+  owner keeps scoring without needing to win a tight-range contest
+  every period.  Not validated against the sender's identity or team:
+  a stray hold from a just-deposed owner can't corrupt a capture
+  (capture only ever reads `ACC`) and self-corrects within one
+  broadcast cycle.
+
+17 rather than 0: `RadioOutput::reply()` (`src/game/LightAir_RadioOutput.h`)
+treats `subType == 0` as "send no payload at all", which the totem would
+then read back as -1 (`V_PAYLOAD`'s own bounds check) — 0 cannot
+silently carry a real value on this wire, so the reserved marker has to
+be non-zero.
+
+Collection needs no length or range guard on either rule: `accbit`'s own
+runtime already rejects anything outside 1..16
+(`LightAir_TotemVM.cpp`), and a missing payload byte reads as -1 from
+the VM's own bounds check, which fails every comparison on its own — a
+guard here would only repeat a check the action, or the next rule's
+guard, already makes.
+
+Release — an owned CP that gets a fully empty window (no conquest, no
+hold) — releases to neutral rather than going on broadcasting an owner
+who is not there.  It is **not** gated on the contest flag: with no
+dedicated "settle" rule, nothing else is guaranteed to clear a leftover
+contest flag when a hill goes fully silent (no conqueror to trigger
+capture, no holder to trigger the hold-sustain tick), so gating release
+on it would leave a CP that was contested and then abandoned stuck
+forever.  Release's own action still falls through into the "empty and
+unowned" rule within the same tick (clearing the contest flag as a side
+effect, same trick as before), so a genuinely abandoned hill needs no
+grace window — there is nobody left to show one to.  A CP that stays
+*held* through a contest is unaffected: release is separately gated on
+"no hold reply this window", so it never fires while the owner keeps
+holding, contest or not; the leftover contest flag then clears itself
+whenever the hold-sustain tick next comes due, at most one scoring
+period later.
 
 Rule shape (authoring):
 
@@ -246,6 +295,35 @@ also frees the totem path's RAM.
 
 ---
 
+## 4b. The touch — what a totem answers outside its program
+
+A player can tell the totems near it "I am here" with `MSG_TOTEM_TOUCH`
+(0xF4), a single-hop broadcast `[rssi gate, action]` (`config.h`).  An
+ACTIVE totem's driver answers it **before and outside the program**:
+
+- **The totem judges the distance**, on its own reading of the touch
+  against the gate the player sent.  So it works for every role in every
+  state — a BONUS in its cooldown beacons nothing, but it still hears.
+- **Action 0, acknowledge** (`TotemTouch::ACK`): the arrival chaser
+  (`TotemUIEvent::Respawn`, one dot around the strip in the toucher's
+  colour) and a reply 0xF5 `[action, roleId]`.  The chaser plays only while
+  the strip shows no other one-shot, and at most one per tick: a touch never
+  delays what the role animates.  The reply goes out regardless.
+- **The program never sees a touch**, so a touch cannot claim a pickup,
+  start a cooldown or move a score.
+- **Actions from 1 up are reserved for the program** (`TotemTouch::
+  FIRST_PROGRAM`).  A touch that changes a cooldown or forces a state acts
+  on state the role owns, so it belongs in TotemVM — a `touch` trigger is
+  the additive opcode §5 describes.  Until then a totem ignores them: no
+  chaser, no reply.
+
+Player side, `std.totem_touch{ rssi = …, every = … }` sends at most one
+touch per period; replies arrive in `on_reply[MSG.TOTEM_TOUCH][0]`, with
+`reply.sender` the totem and `reply:byte(2)` its role.  Silence means no
+totem is in reach.  Host-tested in `test/host/test_totemdriver.cpp`.
+
+---
+
 ## 5. When a future role doesn't fit the VM
 
 In order of preference:
@@ -271,5 +349,5 @@ In order of preference:
 | `src/lua/LightAir_TotemEncoder.cpp` (serializer) | walks a role's data table → program bytes; validates limits at load; `{"cfg"}` sites recorded and patched with the live config value when the program is fetched at reply time |
 | `LightAir_GameRunner::replyToTotemBeacon` | sends the 0xF1 reply `[role][session][timeLeft][vmVersion][progLen][program]` when `game->totemProgram` provides a program for the role; sends **no reply** otherwise (there is no short form — a role without a program leaves the totem IDLE) |
 | `LightAir_TotemDriver` | accepts VM-form 0xF1 only (native runners and the role manager are deleted); routes packets to the VM RSSI-aware (`onPacket`) |
-| `LightAir_TotemUICtrl` | `Control` effect: slot-based arg form (`0xFE, slot`) |
+| `LightAir_TotemUICtrl` | `Control`/`ControlScore` effects: slot-based arg forms (`0xFE, slot` for team CP games; `0xFD, slot` for teamless ones, since 0xFE's slots 0/1 collide with player ids 1/2 there) |
 | 0xF0 beacon | carries `[fw api, vmVersion]`; the S4c menu compatibility check is still TODO |

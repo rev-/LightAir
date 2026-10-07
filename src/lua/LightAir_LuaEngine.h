@@ -23,8 +23,11 @@ extern "C" {
 //   frozen device.
 //
 // One engine per loaded game file (each game keeps its own globals
-// and library cache); memory lives in PSRAM so several loaded games
-// are cheap.
+// and library cache).  Memory comes from PSRAM where the board has
+// it, and from internal RAM where it does not — which is the case on
+// the N4 projectors, so treat a loaded ruleset as expensive: exactly
+// one is realized at a time, and its whole cost is the ~50 KB of
+// prototypes and tables reported by the load log.
 // ----------------------------------------------------------------
 class LightAir_LuaEngine {
 public:
@@ -47,6 +50,17 @@ public:
     // One incremental GC step; call in the game loop's slack window.
     void gcStep();
 
+    // Full collection.  Loading a ruleset parses it and both its
+    // libraries, which leaves far more garbage than the incremental
+    // collector will have reached — and does it at the one moment
+    // nothing is timing-critical, before the match starts.
+    void gcFullCollect();
+
+    // Lua's own heap, in KB.  Logged after a load: the ruleset files are
+    // user-editable, so "how much of the device did this one cost" is a
+    // question the serial log has to be able to answer.
+    unsigned heapKB() const;
+
     // Last pcall error message (truncated); empty string if none.
     const char* lastError() const { return _err; }
 
@@ -59,6 +73,11 @@ private:
     char       _err[120] = {0};
 
     static void* alloc(void* ud, void* ptr, size_t osize, size_t nsize);
+#ifdef ESP32
+    // Whether this board has PSRAM at all — probed once and remembered,
+    // because alloc() runs hundreds of thousands of times per load.
+    static bool  psramPresent();
+#endif
     static int   traceback(lua_State* L);
     static void  budgetHook(lua_State* L, lua_Debug* ar);
 };

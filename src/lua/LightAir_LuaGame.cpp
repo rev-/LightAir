@@ -36,12 +36,14 @@ int lookupName(const NamedU8* tab, uint8_t n, const char* name) {
     return -1;
 }
 
-static const NamedU8 kIcons[] = {
+const NamedU8 kIcons[] = {
     { "LIGHT", ICON_LIGHT }, { "LIFE", ICON_LIFE }, { "FLAG", ICON_FLAG },
     { "HOURGLASS", ICON_HOURGLASS }, { "SCORE", ICON_SCORE },
     { "ROLE", ICON_ROLE }, { "ENERGY", ICON_ENERGY }, { "DOWN", ICON_DOWN },
-    { "TIME", ICON_TIME },
+    { "SPLASH", ICON_SPLASH }, { "FAST", ICON_FAST },
+    { "LONG", ICON_LONG }, { "STRONG", ICON_STRONG }, { "TIME", ICON_TIME },
 };
+const uint8_t kIconCount = sizeof(kIcons) / sizeof(*kIcons);
 
 static const NamedU8 kRoles[] = {
     { "BASE_O", TotemRoleId::BASE_O }, { "BASE_X", TotemRoleId::BASE_X },
@@ -147,6 +149,21 @@ struct LuaGameTramps {
         g_luaCtx.out  = nullptr;
         if (g_luaCtx.active) g_luaCtx.active->doEnd();
     }
+    static void clockTick() {
+        if (g_luaCtx.active) g_luaCtx.active->doClockTick();
+    }
+    static void holdEnter(LightAir_DisplayCtrl& d, GameOutput& out) {
+        g_luaCtx.disp   = &d;
+        g_luaCtx.out    = &out;
+        g_luaCtx.inputs = nullptr;           // the keys belong to the tool
+        if (g_luaCtx.active) g_luaCtx.active->doHoldHook(g_luaCtx.active->_holdEnterRef);
+    }
+    static void holdExit(LightAir_DisplayCtrl& d, GameOutput& out) {
+        g_luaCtx.disp   = &d;
+        g_luaCtx.out    = &out;
+        g_luaCtx.inputs = nullptr;
+        if (g_luaCtx.active) g_luaCtx.active->doHoldHook(g_luaCtx.active->_holdExitRef);
+    }
 };
 
 typedef void (*BeginFn)(LightAir_DisplayCtrl&, LightAir_Radio&,
@@ -193,7 +210,7 @@ const TotemProgramEntry* LightAir_LuaGame::progTramp(uint8_t roleId) {
 // per-site circuit breaker — only has to be added in maybeEscalate().
 static const char* const kFaultSiteNames[] = {
     "on_begin", "rule.when", "rule.action", "update", "on_message",
-    "on_reply", "on_reply.timeout", "on_score_announce", "on_end",
+    "on_reply", "on_reply.timeout", "on_score_announce", "on_end", "hold",
 };
 
 static constexpr uint32_t kFaultNoticeCooldownMs = 10000;
@@ -296,6 +313,20 @@ void LightAir_LuaGame::tickCountdowns() {
             if (s.val > 0) s.val--;
         }
     }
+}
+
+// Held (see LightAir_GameHold.h): the clocks run, the update body does not.
+void LightAir_LuaGame::doClockTick() {
+    tickCountdowns();
+    _engine.gcStep();
+}
+
+void LightAir_LuaGame::doHoldHook(int ref) {
+    if (ref == LUA_NOREF) return;
+    lua_State* L = _engine.L();
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+    pushVarsProxy();
+    if (!_engine.pcall(1, 0)) luaFault(FaultSite::Hold);
 }
 
 void LightAir_LuaGame::doBehavior() {
@@ -534,11 +565,76 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
             fieldStr(L, e, "name", _cfgNames[configCount],
                      LuaDefaults::MAX_CFG_NAME, true);
             _slots[slot].val = (int)fieldInt(L, e, "default", 0, false);
-            _configVars[configCount].name  = _cfgNames[configCount];
-            _configVars[configCount].value = &_slots[slot].val;
-            _configVars[configCount].min   = (int)fieldInt(L, e, "min", 0, true);
-            _configVars[configCount].max   = (int)fieldInt(L, e, "max", 0, true);
-            _configVars[configCount].step  = (int)fieldInt(L, e, "step", 1, false);
+            ConfigVar& cv = _configVars[configCount];
+            cv.name         = _cfgNames[configCount];
+            cv.value        = &_slots[slot].val;
+            cv.choiceCount  = 0;
+            cv.choiceValues = nullptr;
+            cv.choiceLabels = nullptr;
+
+            lua_getfield(L, e, "choices");
+            if (lua_isnil(L, -1)) {
+                lua_pop(L, 1);
+                cv.min  = (int)fieldInt(L, e, "min", 0, true);
+                cv.max  = (int)fieldInt(L, e, "max", 0, true);
+                cv.step = (int)fieldInt(L, e, "step", 1, false);
+            } else {
+                // choices = { { value, "LABEL" }, ... }: a fixed list, in the
+                // order the menu steps through it.  It replaces min/max/step,
+                // so naming both is a contradiction, not a refinement.
+                if (!lua_istable(L, -1))
+                    luaL_error(L, "config '%s': choices must be a list", id);
+                int ct = lua_absindex(L, -1);
+                lua_getfield(L, e, "min");
+                lua_getfield(L, e, "max");
+                lua_getfield(L, e, "step");
+                const bool ranged = !lua_isnil(L, -3) || !lua_isnil(L, -2) || !lua_isnil(L, -1);
+                lua_pop(L, 3);
+                if (ranged)
+                    luaL_error(L, "config '%s': choices replace min/max/step", id);
+                int nc = (int)lua_rawlen(L, ct);
+                if (nc < 1 || nc > GameDefaults::MAX_CONFIG_CHOICES)
+                    luaL_error(L, "config '%s': %d choices (1..%d)", id, nc,
+                               (int)GameDefaults::MAX_CONFIG_CHOICES);
+                if (_choiceCount + nc > LuaDefaults::MAX_CHOICE_POOL)
+                    luaL_error(L, "too many config choices");
+                const uint8_t first = _choiceCount;
+                for (int k = 1; k <= nc; k++) {
+                    lua_rawgeti(L, ct, k);
+                    if (!lua_istable(L, -1))
+                        luaL_error(L, "config '%s': choice %d must be { value, label }", id, k);
+                    lua_rawgeti(L, -1, 1);
+                    lua_rawgeti(L, -2, 2);
+                    if (!lua_isinteger(L, -2) || !lua_isstring(L, -1))
+                        luaL_error(L, "config '%s': choice %d must be { value, label }", id, k);
+                    const int   v   = (int)lua_tointeger(L, -2);
+                    const char* lbl = lua_tostring(L, -1);
+                    if (strlen(lbl) == 0 || strlen(lbl) >= GameDefaults::CONFIG_CHOICE_LABEL_LEN)
+                        luaL_error(L, "config '%s': label '%s' must be 1..%d chars", id, lbl,
+                                   (int)GameDefaults::CONFIG_CHOICE_LABEL_LEN - 1);
+                    for (uint8_t j = first; j < _choiceCount; j++)
+                        if (_choiceVals[j] == v)
+                            luaL_error(L, "config '%s': value %d listed twice", id, v);
+                    _choiceVals[_choiceCount] = v;
+                    strcpy(_choiceLabels[_choiceCount], lbl);
+                    _choiceCount++;
+                    lua_pop(L, 3);
+                }
+                lua_pop(L, 1);                             // choices
+                cv.choiceCount  = (uint8_t)nc;
+                cv.choiceValues = &_choiceVals[first];
+                cv.choiceLabels = &_choiceLabels[first];
+                cv.min = cv.max = _choiceVals[first];
+                for (int k = 1; k < nc; k++) {
+                    const int v = _choiceVals[first + k];
+                    if (v < cv.min) cv.min = v;
+                    if (v > cv.max) cv.max = v;
+                }
+                cv.step = 1;
+                if (configChoiceIndex(cv, *cv.value) < 0)
+                    luaL_error(L, "config '%s': default %d is not one of its choices",
+                               id, *cv.value);
+            }
             configCount++;
             lua_pop(L, 1);
         }
@@ -568,6 +664,18 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
                 lua_pop(L, 1);
             } else {
                 _slots[slot].val = (int)fieldInt(L, e, "default", 0, false);
+            }
+            // draw = "player": the DM puts a random joined player's ID here
+            // when it starts the match (see LightAir_Game::drawnPlayerVars).
+            char draw[12];
+            fieldStr(L, e, "draw", draw, sizeof(draw), false);
+            if (draw[0]) {
+                if (strcmp(draw, "player") != 0)
+                    luaL_error(L, "var '%s': unknown draw '%s'", id, draw);
+                if (isText) luaL_error(L, "var '%s': a drawn var cannot be text", id);
+                if (_drawnCount >= GameDefaults::MAX_DRAWN_VARS)
+                    luaL_error(L, "too many drawn vars");
+                _drawnVars[_drawnCount++] = &_slots[slot].val;
             }
             // countdown_in = { states... }
             lua_getfield(L, e, "countdown_in");
@@ -610,10 +718,27 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
             if (slot < 0) luaL_error(L, "monitor var '%s' not declared", id);
             char iconName[12];
             fieldStr(L, e, "icon", iconName, sizeof(iconName), true);
-            int icon = LOOKUP(kIcons, iconName);
+            int icon = lookupName(kIcons, kIconCount, iconName);
             if (icon < 0) luaL_error(L, "unknown icon '%s'", iconName);
             uint8_t col = (uint8_t)fieldInt(L, e, "col", 0, true);
             uint8_t row = (uint8_t)fieldInt(L, e, "row", 0, true);
+
+            // icon_var names a var holding an la.icons value, read on every
+            // render so the cell can follow runtime state: the energy cell
+            // shows whichever projector is in hand.  Optional.
+            const int* iconVarPtr = nullptr;
+            lua_getfield(L, e, "icon_var");
+            if (lua_isstring(L, -1)) {
+                char ivId[LuaDefaults::MAX_VAR_ID];
+                lua_pop(L, 1);
+                fieldStr(L, e, "icon_var", ivId, sizeof(ivId), true);
+                int iv = findSlot(ivId);
+                if (iv < 0 || _slots[iv].isText)
+                    luaL_error(L, "monitor icon_var '%s' invalid", ivId);
+                iconVarPtr = &_slots[iv].val;
+            } else {
+                lua_pop(L, 1);
+            }
             uint32_t mask = 0;
             lua_getfield(L, e, "states");
             luaL_checktype(L, -1, LUA_TTABLE);
@@ -626,12 +751,55 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
                 lua_pop(L, 1);
             }
             lua_pop(L, 1);                                 // states
-            if (_slots[slot].isText)
+
+            // A `bar` row shows its number until the value reaches `bar_at`,
+            // and a filling bar while it sits there.  Both the duration and
+            // the instant the wait began come from other game vars, because
+            // the timing belongs to whoever owns the wait — for energy that
+            // is the projector, whose recharge starts on the trigger's
+            // release rather than when the pool hit zero.
+            lua_getfield(L, e, "bar");
+            const bool isBar = lua_toboolean(L, -1);
+            lua_pop(L, 1);
+
+            if (isBar) {
+                if (_slots[slot].isText)
+                    luaL_error(L, "monitor bar '%s' is a text var", id);
+                char fillId[LuaDefaults::MAX_VAR_ID];
+                fieldStr(L, e, "fill_var", fillId, sizeof(fillId), true);
+                int fillSlot = findSlot(fillId);
+                if (fillSlot < 0 || _slots[fillSlot].isText)
+                    luaL_error(L, "monitor bar fill_var '%s' invalid", fillId);
+
+                // start_var is optional: without one the display self-starts
+                // its clock when the value arrives at the trigger.
+                const int* startPtr = nullptr;
+                char startId[LuaDefaults::MAX_VAR_ID];
+                lua_getfield(L, e, "start_var");
+                if (lua_isstring(L, -1)) {
+                    lua_pop(L, 1);
+                    fieldStr(L, e, "start_var", startId, sizeof(startId), true);
+                    int ss = findSlot(startId);
+                    if (ss < 0 || _slots[ss].isText)
+                        luaL_error(L, "monitor bar start_var '%s' invalid", startId);
+                    startPtr = &_slots[ss].val;
+                } else {
+                    lua_pop(L, 1);
+                }
+
+                _monitorVars[monitorCount] = MonitorVar::Bar(
+                    _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row,
+                    (int)fieldInt(L, e, "bar_at", 0, false),
+                    &_slots[fillSlot].val, startPtr,
+                    (uint8_t)fieldInt(L, e, "width", 0, false), iconVarPtr);
+            } else if (_slots[slot].isText) {
                 _monitorVars[monitorCount] = MonitorVar::Str(
                     _slots[slot].id, _slots[slot].text, mask, (IconType)icon, col, row);
-            else
+            } else {
                 _monitorVars[monitorCount] = MonitorVar::Int(
-                    _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row);
+                    _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row,
+                    iconVarPtr);
+            }
             monitorCount++;
             lua_pop(L, 1);                                 // entry
         }
@@ -700,6 +868,32 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
                 _totReqs[totReqCount].configSecs = &_slots[slot].val;
                 roleCfgSlot[totReqCount] = (int8_t)slot;
             }
+            // Optional per-totem choices (Totems submenu, O key).  Labels
+            // are copied into one pool shared by all of this game's roles.
+            _totReqs[totReqCount].optionCount  = 0;
+            _totReqs[totReqCount].optionLabels = nullptr;
+            lua_getfield(L, e, "options");
+            if (lua_istable(L, -1)) {
+                int ot = lua_absindex(L, -1);
+                int no = (int)lua_rawlen(L, ot);
+                if (no > TotemDefs::MAX_ROLE_OPTIONS)
+                    luaL_error(L, "totem role '%s': too many options", roleName);
+                if (_optLabelCount + no > TotemDefs::MAX_OPTION_LABELS)
+                    luaL_error(L, "too many totem option labels");
+                _totReqs[totReqCount].optionLabels = &_optLabels[_optLabelCount];
+                for (int k = 1; k <= no; k++) {
+                    lua_rawgeti(L, ot, k);
+                    const char* lbl = luaL_checkstring(L, -1);
+                    if (strlen(lbl) >= TotemDefs::OPTION_LABEL_LEN)
+                        luaL_error(L, "totem option '%s' too long", lbl);
+                    strcpy(_optLabels[_optLabelCount++], lbl);
+                    lua_pop(L, 1);
+                }
+                _totReqs[totReqCount].optionCount = (uint8_t)no;
+            } else if (!lua_isnil(L, -1)) {
+                luaL_error(L, "totem role '%s': options must be a list", roleName);
+            }
+            lua_pop(L, 1);
             totReqCount++;
             lua_pop(L, 1);
         }
@@ -722,6 +916,41 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
     _beginRef = fieldFnRef(L, tbl, "on_begin");
     _scoreRef = fieldFnRef(L, tbl, "on_score_announce");
     _endRef   = fieldFnRef(L, tbl, "on_end");
+
+    // ---- hold: what a player busy in an in-game tool still receives ----
+    //   hold = { accept   = { la.msg.LIT, ... },   -- optional, narrows only
+    //            on_enter = function(vars) end,     -- optional
+    //            on_exit  = function(vars) end }    -- optional
+    _holdEnterRef = _holdExitRef = LUA_NOREF;
+    _holdAcceptCount = 0;
+    bool holdAcceptGiven = false;
+    lua_getfield(L, tbl, "hold");
+    if (lua_istable(L, -1)) {
+        int ht = lua_absindex(L, -1);
+        _holdEnterRef = fieldFnRef(L, ht, "on_enter");
+        _holdExitRef  = fieldFnRef(L, ht, "on_exit");
+        lua_getfield(L, ht, "accept");
+        if (lua_istable(L, -1)) {
+            holdAcceptGiven = true;
+            int at = lua_absindex(L, -1);
+            int n  = (int)lua_rawlen(L, at);
+            if (n > LuaDefaults::MAX_HOLD_ACCEPT)
+                luaL_error(L, "hold.accept: at most %d msgTypes", LuaDefaults::MAX_HOLD_ACCEPT);
+            for (int k = 1; k <= n; k++) {
+                lua_rawgeti(L, at, k);
+                lua_Integer m = luaL_checkinteger(L, -1);
+                if (m < 0 || m > 0xFF) luaL_error(L, "hold.accept: bad msgType %d", (int)m);
+                _holdAccept[_holdAcceptCount++] = (uint8_t)m;
+                lua_pop(L, 1);
+            }
+        } else if (!lua_isnil(L, -1)) {
+            luaL_error(L, "hold.accept must be a list of msgTypes");
+        }
+        lua_pop(L, 1);                                     // accept
+    } else if (!lua_isnil(L, -1)) {
+        luaL_error(L, "hold must be a table");
+    }
+    lua_pop(L, 1);                                         // hold
 
     // ---- on_message: per-state handler tables + DirectRadioRule rows ----
     uint8_t directCount = 0;
@@ -852,6 +1081,11 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
     // ---- assemble the descriptor ----
     _game.configVars           = _configVars;
     _game.configCount          = configCount;
+    _game.drawnPlayerVars      = _drawnVars;
+    _game.drawnPlayerCount     = _drawnCount;
+    // Declared while the file and its libraries ran (la.area_policy).
+    _game.areaPolicies         = _areaPolicyCount ? _areaPolicies : nullptr;
+    _game.areaPolicyCount      = _areaPolicyCount;
     _game.monitorVars          = _monitorVars;
     _game.monitorCount         = monitorCount;
     _game.directRadioRules     = directCount ? _directRules : nullptr;
@@ -872,6 +1106,13 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
     _game.teamCount            = teams;
     _game.teamMap              = teams ? _teamMap : nullptr;
     _game.onEnd                = (_endRef != LUA_NOREF) ? &LuaGameTramps::end : nullptr;
+    _game.onClockTick          = &LuaGameTramps::clockTick;
+    // An empty accept list is a valid answer ("nothing while held"), so the
+    // pointer is set whenever the list was given — only nullptr means "all".
+    _game.holdAccept           = holdAcceptGiven ? _holdAccept : nullptr;
+    _game.holdAcceptCount      = _holdAcceptCount;
+    _game.onHoldEnter          = (_holdEnterRef != LUA_NOREF) ? &LuaGameTramps::holdEnter : nullptr;
+    _game.onHoldExit           = (_holdExitRef  != LUA_NOREF) ? &LuaGameTramps::holdExit  : nullptr;
     _game.totemProgram         = _progCount ? &LightAir_LuaGame::progTramp : nullptr;
 }
 
@@ -880,56 +1121,101 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
  * ========================================================= */
 
 // ----------------------------------------------------------------
-// loadChunk — compile the file at `path` into a chunk left on the
-// Lua stack.  Returns LUA_OK, or an error code with the message on
-// the stack (same contract as luaL_loadfile).
+// loadLuaFile — compile the file at `path` into a chunk left on the
+// Lua stack.  Declared in LightAir_LuaGameInternal.h, where the note
+// on streaming and chunk names lives; la.lib() uses it too.
 //
 // On the device this must NOT go through luaL_loadfile: that calls
 // plain fopen(), which resolves against the ESP-IDF VFS, while the
 // Arduino core mounts LittleFS under its own base path.  A LittleFS
 // path such as "/games/flag.lua" is invisible to fopen(), so every
 // game file failed to open and no game ever reached the menu.  Read
-// through the LittleFS object instead — exactly what la.lib() already
-// does for library modules — and compile from the buffer.
+// through the LittleFS object instead.
 // ----------------------------------------------------------------
 #ifdef ESP32
-static int loadChunk(lua_State* L, const char* path) {
-    File f = LittleFS.open(path, "r");
-    if (!f) {
+namespace {
+// One block of source at a time — see loadLuaFile's note in
+// LightAir_LuaGameInternal.h for why this must not be a whole-file buffer.
+struct FileChunkReader {
+    File   f;
+    size_t got = 0;                      // bytes handed to the parser
+    char   buf[256];
+
+    static const char* read(lua_State*, void* ud, size_t* size) {
+        FileChunkReader* r = (FileChunkReader*)ud;
+        // fs::File::read reports a failure as 0, indistinguishable from
+        // EOF here; loadLuaFile catches it afterwards by the byte count.
+        size_t n = r->f.read((uint8_t*)r->buf, sizeof(r->buf));
+        if (n == 0) { *size = 0; return nullptr; }
+        r->got += n;
+        *size   = n;
+        return r->buf;
+    }
+};
+}  // namespace
+
+int loadLuaFile(lua_State* L, const char* path) {
+    FileChunkReader r;
+    r.f = LittleFS.open(path, "r");
+    if (!r.f) {
         lua_pushfstring(L, "cannot open %s", path);
         return LUA_ERRFILE;
     }
-    size_t size = f.size();
-    // Scratch buffer as a userdatum: GC-managed, so a load error cannot
-    // leak it, and it needs no heap fragmentation-prone malloc/free pair.
-    char*  buf  = (char*)lua_newuserdatauv(L, size ? size : 1, 0);
-    size_t got  = f.read((uint8_t*)buf, size);
-    f.close();
-    if (got != size) {
-        lua_pop(L, 1);                       // drop scratch buffer
+    const size_t want = r.f.size();
+    // '@' marks a file source, so errors read "path:line:" — the shape the
+    // menu's failure screen trims to a basename.
+    char name[64];
+    snprintf(name, sizeof(name), "@%s", path);
+    int rc = lua_load(L, FileChunkReader::read, &r, name, "t");
+    r.f.close();
+    // A short read looks like an early EOF to the parser, and a file cut
+    // after a complete statement then compiles clean — half a ruleset that
+    // reports no error at all.  Compare the byte count on success; on a
+    // failure the parse stopped early by design and the count means
+    // nothing.
+    if (rc == LUA_OK && r.got != want) {
+        lua_pop(L, 1);                   // drop the chunk lua_load pushed
         lua_pushfstring(L, "read error on %s (%d/%d bytes)",
-                        path, (int)got, (int)size);
+                        path, (int)r.got, (int)want);
         return LUA_ERRFILE;
     }
-    int rc = luaL_loadbuffer(L, buf, size, path);
-    lua_remove(L, -2);                       // drop scratch buffer, keep result
     return rc;
 }
 #else
-// Host builds (tests) read real files from the working directory.
-static int loadChunk(lua_State* L, const char* path) {
-    return luaL_loadfile(L, path);
+// Host builds (tests) read real files from the working directory.  Same
+// text-only mode, and luaL_loadfile already marks the source with '@'.
+int loadLuaFile(lua_State* L, const char* path) {
+    return luaL_loadfilex(L, path, "t");
 }
 #endif
 
+void LightAir_LuaGame::setLoadError(const char* msg) {
+    if (!msg || !*msg) { _loadErr[0] = 0; return; }
+    // pcall appends a traceback; only the first line names the cause.
+    const char* nl  = strchr(msg, '\n');
+    size_t      len = nl ? (size_t)(nl - msg) : strlen(msg);
+    // Lua prefixes "<chunkname>:<line>: ".  Keep the basename — the line
+    // number is worth the characters — but lose the directory.
+    const char* start = msg;
+    const char* colon = (const char*)memchr(msg, ':', len);
+    if (colon)
+        for (const char* p = msg; p < colon; p++) if (*p == '/') start = p + 1;
+    len -= (size_t)(start - msg);
+    if (len >= sizeof(_loadErr)) len = sizeof(_loadErr) - 1;
+    memcpy(_loadErr, start, len);
+    _loadErr[len] = 0;
+}
+
 bool LightAir_LuaGame::load(const char* path) {
     unload();
+    _loadErr[0] = 0;
 
     // Claim a trampoline slot once; reloads keep it (the menu realizes
     // different games on the same instance as the user browses).
     if (_slotIdx == 0xFF) {
         if (s_instanceCount >= LuaDefaults::MAX_LUA_GAMES) {
             Log.errorln("LuaGame: instance pool full");
+            setLoadError("instance pool full");
             return false;
         }
         _slotIdx = s_instanceCount;
@@ -937,6 +1223,7 @@ bool LightAir_LuaGame::load(const char* path) {
     }
     if (!_engine.begin()) {
         Log.errorln("LuaGame: lua_State allocation failed");
+        setLoadError("no memory for interpreter");
         return false;
     }
 
@@ -955,19 +1242,23 @@ bool LightAir_LuaGame::load(const char* path) {
     lua_State* L = _engine.L();
 
     // Compile + run the chunk (its top-level code executes here).
-    if (loadChunk(L, path) != LUA_OK) {
-        Log.errorln("LuaGame: %s: %s", path, lua_tostring(L, -1));
+    if (loadLuaFile(L, path) != LUA_OK) {
+        const char* msg = lua_tostring(L, -1);
+        Log.errorln("LuaGame: %s: %s", path, msg ? msg : "(no message)");
+        setLoadError(msg);
         lua_pop(L, 1);
         _engine.end();
         return false;
     }
     if (!_engine.pcall(0, 1)) {
-        Log.errorln("LuaGame: %s failed to run", path);
+        Log.errorln("LuaGame: %s failed to run: %s", path, _engine.lastError());
+        setLoadError(_engine.lastError());
         _engine.end();
         return false;
     }
     if (!lua_istable(L, -1)) {
         Log.errorln("LuaGame: %s did not return a table", path);
+        setLoadError("no game table returned");
         lua_settop(L, 0);
         _engine.end();
         return false;
@@ -980,6 +1271,7 @@ bool LightAir_LuaGame::load(const char* path) {
     lua_pushvalue(L, -3);                                  // the game table
     if (!_engine.pcall(2, 0)) {
         Log.errorln("LuaGame: %s rejected: %s", path, _engine.lastError());
+        setLoadError(_engine.lastError());
         lua_settop(L, 0);
         _engine.end();
         return false;
@@ -987,7 +1279,13 @@ bool LightAir_LuaGame::load(const char* path) {
 
     _gameRef = luaL_ref(L, LUA_REGISTRYINDEX);             // keep the table alive
     _loaded = true;
-    Log.infoln("LuaGame: loaded '%s' (typeId 0x%x) from %s", _name, _game.typeId, path);
+    // Parsing the ruleset and its two libraries leaves more garbage than
+    // the incremental collector has reached, and nothing is timing-critical
+    // until the match starts — so pay for it here, and report what the
+    // ruleset actually costs.
+    _engine.gcFullCollect();
+    Log.infoln("LuaGame: loaded '%s' (typeId 0x%x, %d KB of Lua) from %s",
+               _name, _game.typeId, (int)_engine.heapKB(), path);
     return true;
 }
 
@@ -998,6 +1296,11 @@ bool LightAir_LuaGame::peekManifest(const char* path, char* nameOut,
     for (uint8_t i = 0; i < 3; i++) _pktUdRef[i] = LUA_NOREF;
     registerKernel();                       // chunks index `la` at top level
 
+    // From here until the chunk has run, la.lib() hands back an inert
+    // stand-in: a manifest is three literals, and compiling every game's
+    // libraries to read them is what emptied the menu once already.
+    _manifestOnly = true;
+
     lua_State* L = _engine.L();
     bool ok = false;
 
@@ -1005,7 +1308,7 @@ bool LightAir_LuaGame::peekManifest(const char* path, char* nameOut,
     // a missing file, a syntax error and a bad return value need different
     // fixes, and only the first two leave a message on the Lua stack
     // (pcall() pops its own error into lastError()).
-    int rc = loadChunk(L, path);
+    int rc = loadLuaFile(L, path);
     if (rc != LUA_OK) {
         const char* err = lua_tostring(L, -1);
         Log.errorln("LuaGame: cannot load %s: %s", path, err ? err : "(no message)");
@@ -1036,6 +1339,7 @@ bool LightAir_LuaGame::peekManifest(const char* path, char* nameOut,
         if (!ok)
             Log.errorln("LuaGame: %s has a bad manifest (api/type_id/name)", path);
     }
+    _manifestOnly = false;
     _engine.end();
     return ok;
 }
@@ -1050,6 +1354,10 @@ void LightAir_LuaGame::unload() {
     _slotCount = 0;
     _countdownCount = 0;
     _progCount = 0;
+    _optLabelCount = 0;
+    _areaPolicyCount = 0;
+    _choiceCount = 0;
+    _drawnCount = 0;
     _stateMax = 0;
     memset(&_game, 0, sizeof(_game));
 }

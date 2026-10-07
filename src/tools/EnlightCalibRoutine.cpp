@@ -1,5 +1,4 @@
 #include "EnlightCalibRoutine.h"
-#include "esp_system.h"
 #include "../nvs_config.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,11 +18,59 @@ EnlightCalibRoutine::EnlightCalibRoutine(Enlight&            e,
  *   Public entry point
  * ============================================================ */
 
-void EnlightCalibRoutine::run() {
-    step1();
-    step2();
-    step3();
-    step4();
+bool EnlightCalibRoutine::run() {
+    return session();
+}
+
+void EnlightCalibRoutine::runHeld(LightAir_HoldHost& host) {
+    _host = &host;
+    session();
+    _host = nullptr;
+}
+
+bool EnlightCalibRoutine::session() {
+    _aborted = false;
+    _bDownAt = 0;
+    _rep     = nullptr;
+
+    // Borrow the optics: remember what the device was set to, and bring it
+    // to rest.  With the cooldown at 0 every run() below is accepted as
+    // soon as the previous one has been polled.
+    const uint32_t savedReps = _e.repetitions();
+    const int64_t  savedCool = _e.cooldownMs();
+    _e.settle(&settleIdle, this);
+
+    _orig    = _e.calib();
+    _work    = _orig;
+    _step1_n = 0;
+
+    const bool save = step1() && step2() && step3() && step4();
+
+    _e.settle(&settleIdle, this);   // nothing of ours left in flight
+    if (save) {
+        const bool stored = enlight_calib_save(_work);
+        _e.applyCalib(_work);
+        if (!stored) {
+            // Live for this session, lost at the next boot.  Worth a look
+            // rather than a silent success.
+            showLines("NVS save FAILED.", "Calibration is in",
+                      "use until power", "off only.");
+            pause(3000);
+        }
+    } else {
+        _e.applyCalib(_orig);       // step 1 may have moved the phase
+    }
+    _e.setRepetitions(savedReps);
+    _e.setCooldown(savedCool);
+
+    if (_aborted) {
+        showLines("Calibration", "aborted.", "Nothing saved.", "", "Release B.");
+        // B is still down: let it go before handing back, or the key would
+        // land on the next screen as a fresh press.  _aborted stays set, so
+        // tick() is only used for its input poll and idle() here.
+        do { tick(); delay(10); } while (keyDown('B'));
+    }
+    return save;
 }
 
 /* ============================================================
@@ -36,29 +83,48 @@ static int cmp_u32(const void* a, const void* b) {
     return (x > y) - (x < y);
 }
 
-void EnlightCalibRoutine::step1() {
+bool EnlightCalibRoutine::step1() {
+    // The distance matters now: these same shots become the reference return
+    // that fixes the 1/x^n curve (step 2 turns them into cal.refFar*), which is
+    // what lets classify() report an estimated distance in metres.
+    //
+    // NOTE — known flaw, deferred: these shots are correlated through the
+    // phase in use BEFORE calibration (the new one is only known once they
+    // are all in).  On a device whose phase drifted, the reference return
+    // step 2 derives from them is low and the distance estimate biased.  See
+    // the header of EnlightCalibRoutine.h.
+    char distLine[24];
+    snprintf(distLine, sizeof(distLine), "at %u m exactly.",
+             (unsigned)EnlightDefaults::CAL_REF_DIST_M);
     showLines("Step 1: Phase",
               "Clear target in",
-              "view.",
-              "TRIG1 per shot.");
+              "view,",
+              distLine,
+              "TRIG1 per shot.",
+              "Hold B: abort");
 
     uint32_t  phases[N_RUNS];
     long long sumR = 0, sumG = 0, sumB = 0;
     long long ssR  = 0, ssG  = 0, ssB  = 0;
     uint32_t  n = 0;
 
+    char targetLine[24];
+    snprintf(targetLine, sizeof(targetLine), "Clear target @%um",
+             (unsigned)EnlightDefaults::CAL_REF_DIST_M);
+
     while (n < N_RUNS) {
         char prompt[24];
         snprintf(prompt, sizeof(prompt), "Shot %lu/%lu - TRIG1",
                  (unsigned long)(n + 1), (unsigned long)N_RUNS);
-        showLines("Clear target", prompt);
-        waitTrig(TRIG_1_ID);
+        showLines(targetLine, prompt, nullptr, nullptr, nullptr, "Hold B: abort");
+        if (!waitTrig(TRIG_1_ID)) return false;
 
         EnlightRawMeasure m;
         if (!runOne(m)) {
+            if (_aborted) return false;
             // Severe saturation — inform user and don't count this shot.
             showLines("Saturated!", "Try again.", "TRIG1 to retry.");
-            delay(500);
+            if (!pause(500)) return false;
             continue;
         }
 
@@ -82,12 +148,10 @@ void EnlightCalibRoutine::step1() {
     // Store the number of runs for step2 processing.
     _step1_n = n;
 
-    // Persist and immediately apply the optimal phase offset.
-    EnlightCalib cal;
-    enlight_calib_load(cal);
-    cal.phaseOff = bestPhase;
-    enlight_calib_save(cal);
-    _e.buildGoertzTab(bestPhase);
+    // Apply the optimal phase offset live — steps 2 and 3 must be measured
+    // through it — but only stage it: NVS is written once, from step 4.
+    _work.phaseOff = bestPhase;
+    _e.applyCalib(_work);
 
     // Show results.
     const long long avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
@@ -102,7 +166,7 @@ void EnlightCalibRoutine::step1() {
     snprintf(l3, sizeof(l3), "sB:%.0f", (double)sdB);
     snprintf(l4, sizeof(l4), "Phase: %lu", (unsigned long)bestPhase);
     showLines(l0, l1, l2, l3, l4, "TRIG2: next");
-    waitTrig(TRIG_2_ID);
+    return waitTrig(TRIG_2_ID);
 }
 
 /* ============================================================
@@ -121,12 +185,23 @@ static int cmp_f(const void* a, const void* b) {
     return (x > y) - (x < y);
 }
 
-void EnlightCalibRoutine::step2() {
+// Sort in place and return the median, rounded, as a uint32.  0 for an empty
+// sample, which is also the "not calibrated" sentinel for the ref values.
+static uint32_t medianU32(float* arr, uint32_t count) {
+    if (count == 0) return 0;
+    qsort(arr, count, sizeof(float), cmp_f);
+    const float m = arr[count / 2];
+    return (m > 0.0f) ? (uint32_t)(m + 0.5f) : 0u;
+}
+
+bool EnlightCalibRoutine::step2() {
     showLines("Step 2: Baseline",
               "No target (void).",
               "Keep clear.",
-              "TRIG1 to start.");
-    waitTrig(TRIG_1_ID);
+              "TRIG1 to start.",
+              nullptr,
+              "Hold B: abort");
+    if (!waitTrig(TRIG_1_ID)) return false;
 
     long long sRF[N_RUNS], sGF[N_RUNS], sBF[N_RUNS];
     long long sRN[N_RUNS], sGN[N_RUNS], sBN[N_RUNS];
@@ -142,11 +217,12 @@ void EnlightCalibRoutine::step2() {
     while (n < N_RUNS) {
         char rem[20];
         snprintf(rem, sizeof(rem), "Rem: %lu", (unsigned long)(N_RUNS - n));
-        showLines("Void", rem);
-        delay(DELAY_MS);
+        showLines("Void", rem, nullptr, nullptr, nullptr, "Hold B: abort");
+        if (!pause(DELAY_MS)) return false;
 
         EnlightRawMeasure m;
         runOne(m);  // no saturation rejection in step 2
+        if (_aborted) return false;
 
         sRF[n] = m.rout;  sGF[n] = m.gout;  sBF[n] = m.bout;
         sRN[n] = m.rnear; sGN[n] = m.gnear; sBN[n] = m.bnear;
@@ -173,9 +249,8 @@ void EnlightCalibRoutine::step2() {
 
     const uint32_t mid = n / 2;
 
-    // Persist medians as per-cycle baselines (normalized by REPS, negative values clamped to 0).
-    EnlightCalib cal;
-    enlight_calib_load(cal);
+    // Stage medians as per-cycle baselines (normalized by REPS, negative values clamped to 0).
+    EnlightCalib& cal = _work;
     cal.rcal     = (uint32_t)(sRF[mid] > 0 ? sRF[mid] / REPS : 0);
     cal.gcal     = (uint32_t)(sGF[mid] > 0 ? sGF[mid] / REPS : 0);
     cal.bcal     = (uint32_t)(sBF[mid] > 0 ? sBF[mid] / REPS : 0);
@@ -185,6 +260,11 @@ void EnlightCalibRoutine::step2() {
 
     // Compute white-balance factors from step1 clear-target measurements.
     // _step1_r/g/b[i] accumulated over REPS cycles; subtract REPS cycles of baseline.
+    //
+    // The same baseline-subtracted values, divided by REPS, are the per-cycle
+    // reference return at CAL_REF_DIST_M metres — the anchor of the 1/x^n range
+    // model.  They can only be computed here, because step 1 does not yet know
+    // the baselines it has to subtract.
     float rfact_arr[N_RUNS], bfact_arr[N_RUNS];
     uint32_t rfact_count = 0, bfact_count = 0;
     for (uint32_t i = 0; i < _step1_n; i++) {
@@ -197,6 +277,40 @@ void EnlightCalibRoutine::step2() {
         if (b > 0) {
             bfact_arr[bfact_count++] = (float)g / (float)b;
         }
+    }
+
+    // Reference return, per channel: the same baseline-subtracted step-1 values
+    // divided by REPS.
+    //
+    // NOTE — known flaw, deferred: the step-1 values were correlated through
+    // the pre-calibration phase, not the one step 1 just found, so on a
+    // drifted device this reference comes out low and every distance
+    // estimate is biased (see EnlightCalibRoutine.h).  Medians for the same reason the white-balance factors
+    // use them — one stray shot (a glancing target, a passing reflection) must
+    // not move the anchor every distance estimate is measured against.
+    //
+    // One reusable buffer, filled and reduced per channel: step2's frame
+    // already carries six long long[N_RUNS], and three more arrays here would
+    // add another 600 bytes to a stack that has no reason to grow.
+    {
+        float    tmp[N_RUNS];
+        uint32_t cnt;
+        const long long* src[3] = { _step1_r, _step1_g, _step1_b };
+        const uint32_t   base[3] = { cal.rcal, cal.gcal, cal.bcal };
+        uint32_t         ref[3]  = { 0, 0, 0 };
+        for (int ch = 0; ch < 3; ch++) {
+            cnt = 0;
+            for (uint32_t i = 0; i < _step1_n; i++) {
+                const long long v = src[ch][i] - (long long)REPS * (long long)base[ch];
+                if (v > 0) tmp[cnt++] = (float)v / (float)REPS;
+            }
+            ref[ch] = medianU32(tmp, cnt);
+        }
+        cal.refFarR = ref[0];
+        cal.refFarG = ref[1];
+        cal.refFarB = ref[2];
+        cal.refDistM = (cal.refFarR || cal.refFarG || cal.refFarB)
+                     ? EnlightDefaults::CAL_REF_DIST_M : 0;
     }
 
     // Sort and find medians of rfact and bfact.
@@ -213,8 +327,6 @@ void EnlightCalibRoutine::step2() {
     } else {
         cal.bfact = 1.0f;
     }
-
-    enlight_calib_save(cal);
 
     // Compute averages and stdevs for display.
     const float aRF = sumRF / n, aGF = sumGF / n, aBF = sumBF / n;
@@ -239,19 +351,21 @@ void EnlightCalibRoutine::step2() {
     snprintf(l4, sizeof(l4), "sF:%.0f %.0f %.0f", (double)sdRF, (double)sdGF, (double)sdBF);
     snprintf(l5, sizeof(l5), "sN:%.0f %.0f next", (double)sdRN, (double)sdGN);
     showLines(l0, l1, l2, l3, l4, l5);
-    waitTrig(TRIG_2_ID);
+    return waitTrig(TRIG_2_ID);
 }
 
 /* ============================================================
  *   Step 3 — white diffusing surface (contact … ~5 m)
  * ============================================================ */
 
-void EnlightCalibRoutine::step3() {
+bool EnlightCalibRoutine::step3() {
     showLines("Step 3: White",
               "Enlight white wall",
               "contact to ~5m.",
-              "TRIG1 to start.");
-    waitTrig(TRIG_1_ID);
+              "TRIG1 to start.",
+              nullptr,
+              "Hold B: abort");
+    if (!waitTrig(TRIG_1_ID)) return false;
 
     uint32_t maxNear_r = 0, maxNear_g = 0, maxNear_b = 0;
     uint32_t maxFar_r = 0, maxFar_g = 0, maxFar_b = 0;
@@ -260,11 +374,12 @@ void EnlightCalibRoutine::step3() {
     while (n < N_RUNS) {
         char rem[20];
         snprintf(rem, sizeof(rem), "Rem: %lu", (unsigned long)(N_RUNS - n));
-        showLines("White wall", rem);
-        delay(DELAY_MS);
+        showLines("White wall", rem, nullptr, nullptr, nullptr, "Hold B: abort");
+        if (!pause(DELAY_MS)) return false;
 
         EnlightRawMeasure m;
         runOne(m);  // no saturation rejection
+        if (_aborted) return false;
 
         if(m.rnear > maxNear_r) maxNear_r = m.rnear;
         if(m.gnear > maxNear_g) maxNear_g = m.gnear;
@@ -275,38 +390,35 @@ void EnlightCalibRoutine::step3() {
         n++;
     }
 
-    // Persist Max Near White and Max Far White.
-    EnlightCalib cal;
-    enlight_calib_load(cal);
+    // Stage Max Near White and Max Far White.
+    EnlightCalib& cal = _work;
     cal.thresh_near_r = (uint32_t)((maxNear_r*1.0)/(REPS)); // Normalize by REPS since these are per-cycle sums.
     cal.thresh_near_g = (uint32_t)((maxNear_g*1.0)/(REPS));
     cal.thresh_near_b = (uint32_t)((maxNear_b*1.0)/(REPS));
     cal.thresh_far_r  = (uint32_t)((maxFar_r*1.0)/(REPS));
     cal.thresh_far_g  = (uint32_t)((maxFar_g*1.0)/(REPS));
     cal.thresh_far_b  = (uint32_t)((maxFar_b*1.0)/(REPS));
-    enlight_calib_save(cal);
 
     // Show results.
     char l0[24], l1[24];
     snprintf(l0, sizeof(l0), "NrMax R:%lu G:%lu", (unsigned long)maxNear_r, (unsigned long)maxNear_g);
     snprintf(l1, sizeof(l1), "FrMax R:%lu G:%lu", (unsigned long)maxFar_r,  (unsigned long)maxFar_g);
-    showLines(l0, l1, nullptr, nullptr, nullptr, "TRIG2: done");
-    waitTrig(TRIG_2_ID);
+    showLines(l0, l1, nullptr, nullptr, nullptr, "TRIG2: summary");
+    return waitTrig(TRIG_2_ID);
 }
 
 /* ============================================================
- *   Step 4 — calibration summary (paged NVS readback)
+ *   Step 4 — summary of the staged values; the one place that saves
  * ============================================================ */
 
-void EnlightCalibRoutine::step4() {
-    // Read all calibration values fresh from NVS.
-    EnlightCalib cal;
-    enlight_calib_load(cal);
+bool EnlightCalibRoutine::step4() {
+    // The values about to be saved — nothing is on flash yet.
+    const EnlightCalib& cal = _work;
 
     // Build one formatted line per calibration value.
     struct CalEntry { char line[22]; };
-    const uint8_t N_ENTRIES    = 17;
-    const uint8_t ROWS_PER_PAGE = 5;
+    const uint8_t N_ENTRIES    = 21;
+    const uint8_t ROWS_PER_PAGE = 4;
     const uint8_t N_PAGES      = (N_ENTRIES + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
 
     CalEntry entries[N_ENTRIES];
@@ -317,7 +429,7 @@ void EnlightCalibRoutine::step4() {
     snprintf(entries[4].line,  sizeof(entries[4].line),  "rcalN:  %lu",  (unsigned long)cal.rcalNear);
     snprintf(entries[5].line,  sizeof(entries[5].line),  "gcalN:  %lu",  (unsigned long)cal.gcalNear);
     snprintf(entries[6].line,  sizeof(entries[6].line),  "bcalN:  %lu",  (unsigned long)cal.bcalNear);
-    snprintf(entries[7].line,  sizeof(entries[7].line),  "limpow: %lu",  (unsigned long)cal.limpow);
+    snprintf(entries[7].line,  sizeof(entries[7].line),  "refD:   %u m", (unsigned)cal.refDistM);
     snprintf(entries[8].line,  sizeof(entries[8].line),  "rfact:  %.4g", (double)cal.rfact);
     snprintf(entries[9].line,  sizeof(entries[9].line),  "bfact:  %.4g", (double)cal.bfact);
     snprintf(entries[10].line, sizeof(entries[10].line), "nRatMx: %.4g", (double)cal.nearRatioMax);
@@ -327,6 +439,20 @@ void EnlightCalibRoutine::step4() {
     snprintf(entries[14].line, sizeof(entries[14].line), "thFrR:  %lu",  (unsigned long)cal.thresh_far_r);
     snprintf(entries[15].line, sizeof(entries[15].line), "thFrG:  %lu",  (unsigned long)cal.thresh_far_g);
     snprintf(entries[16].line, sizeof(entries[16].line), "thFrB:  %lu",  (unsigned long)cal.thresh_far_b);
+    snprintf(entries[17].line, sizeof(entries[17].line), "refR:   %lu",  (unsigned long)cal.refFarR);
+    snprintf(entries[18].line, sizeof(entries[18].line), "refG:   %lu",  (unsigned long)cal.refFarG);
+    snprintf(entries[19].line, sizeof(entries[19].line), "refB:   %lu",  (unsigned long)cal.refFarB);
+    // The headline number: how far this DEVICE can see, from its own
+    // calibration.  Verifiable by walking, which is the point of showing it.
+    // Computed from the staged values, not through _e, which only has the new
+    // phase so far — the rest is applied when TRIG2 saves.
+    snprintf(entries[20].line, sizeof(entries[20].line), "Rmax:   %.1f m",
+             (double)enlight_max_range_m(cal));
+
+    // The TRIG2 press that closed step 3 may still be down.  Saving takes a
+    // fresh hold, so a long press there cannot save a summary nobody read.
+    while (buttonDown(TRIG_2_ID))
+        if (!pause(10)) return false;
 
     uint8_t page = 0;
     for (;;) {
@@ -342,21 +468,21 @@ void EnlightCalibRoutine::step4() {
         }
 
         char footer[22];
-        snprintf(footer, sizeof(footer), "^V pg%u/%u TRIG2:apply", page + 1, N_PAGES);
-        _disp.print(0, 50, footer);
+        snprintf(footer, sizeof(footer), "^V %u/%u  hold T2: save", page + 1, N_PAGES);
+        _disp.print(0, 40, footer);
+        _disp.print(0, 50, "Hold B: discard");
         _disp.flush();
 
-        // Wait for TRIG2 (exit) or ^ / V (page change).
+        // Wait for TRIG2 held (save), B held (abort, in tick()) or ^ / V.
         bool redraw = false;
         while (!redraw) {
-            const InputReport& rep = _input.poll();
+            if (!tick()) return false;
+            const InputReport& rep = *_rep;
 
             for (uint8_t i = 0; i < rep.buttonCount; i++) {
                 if (rep.buttons[i].id == TRIG_2_ID &&
-                    (rep.buttons[i].state == ButtonState::HELD)) {
-                    esp_restart();
-                    return;
-                }
+                    (rep.buttons[i].state == ButtonState::HELD))
+                    return true;
             }
 
             for (uint8_t i = 0; i < rep.keyEventCount; i++) {
@@ -379,9 +505,21 @@ void EnlightCalibRoutine::step4() {
 
 bool EnlightCalibRoutine::runOne(EnlightRawMeasure& out) {
     _e.setRepetitions(REPS);
-    _e.run();
-    while (_e.poll().status == EnlightStatus::RUNNING)
+    // run() refuses while the device is still active.  session() zeroed the
+    // cooldown, so that can only be a result not yet polled — but it must be
+    // waited out, not ignored: carrying on would read back the PREVIOUS
+    // shot's accumulators from rawMeasure() and count them twice.
+    while (!_e.run()) {
+        _e.poll();
+        if (!tick()) return false;
         delay(1);
+    }
+    while (_e.poll().status == EnlightStatus::RUNNING) {
+        // An abort here leaves the run to finish on its own; session()
+        // settles the device before giving it back.
+        if (!tick()) return false;
+        delay(1);
+    }
     out = _e.rawMeasure();
     if (out.totalSamples == 0) return false;
     return (float)out.satCount / (float)out.totalSamples <= SAT_THRESH;
@@ -446,15 +584,50 @@ void EnlightCalibRoutine::showLines(const char* l0, const char* l1,
     _disp.flush();
 }
 
-void EnlightCalibRoutine::waitTrig(uint8_t trigId) {
+bool EnlightCalibRoutine::waitTrig(uint8_t trigId) {
     while (true) {
-        const InputReport& rep = _input.poll();
-        for (uint8_t i = 0; i < rep.buttonCount; i++) {
-            if (rep.buttons[i].id == trigId &&
-                (rep.buttons[i].state == ButtonState::PRESSED ||
-                 rep.buttons[i].state == ButtonState::HELD))
-                return;
-        }
+        if (!tick()) return false;
+        if (buttonDown(trigId)) return true;
         delay(10);
     }
+}
+
+bool EnlightCalibRoutine::pause(uint32_t ms) {
+    const uint32_t start = millis();
+    while (millis() - start < ms) {
+        if (!tick()) return false;
+        delay(5);
+    }
+    return true;
+}
+
+bool EnlightCalibRoutine::tick() {
+    _rep = &_input.poll();
+    idle();
+
+    const uint32_t now = millis();
+    if (!keyDown('B'))         _bDownAt = 0;
+    else if (_bDownAt == 0)    _bDownAt = now ? now : 1;
+    else if (now - _bDownAt >= ABORT_HOLD_MS) _aborted = true;
+    return !_aborted;
+}
+
+bool EnlightCalibRoutine::keyDown(char key) const {
+    if (!_rep) return false;
+    for (uint8_t i = 0; i < _rep->keyEventCount; i++) {
+        const InputReport::KeyEntry& ke = _rep->keyEvents[i];
+        if (ke.keypadId != _keypadId || ke.key != key) continue;
+        return ke.state == KeyState::PRESSED || ke.state == KeyState::HELD;
+    }
+    return false;
+}
+
+bool EnlightCalibRoutine::buttonDown(uint8_t id) const {
+    if (!_rep) return false;
+    for (uint8_t i = 0; i < _rep->buttonCount; i++) {
+        if (_rep->buttons[i].id != id) continue;
+        return _rep->buttons[i].state == ButtonState::PRESSED ||
+               _rep->buttons[i].state == ButtonState::HELD;
+    }
+    return false;
 }

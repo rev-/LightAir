@@ -5,6 +5,9 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <functional>
+#include <vector>
+#include <initializer_list>
 
 #include "Arduino.h"
 #include "ArduinoLog.h"
@@ -13,8 +16,11 @@ HostLog Log;
 
 #include "lua/LightAir_LuaGame.h"
 #include "game/LightAir_GameRunner.h"
+#include "game/LightAir_ToolsMenu.h"
+#include "game/LightAir_ConfigBlob.h"
 #include "radio/LightAir_RadioTestTransport.h"
 #include "enlight/Enlight.h"
+#include "esp_system.h"            // g_restartCalls (the esp_restart() stub counts)
 
 // ---- Enlight stub (link-time): the verbs guard on enlightPtr, but the
 // test also exercises la.shine paths through a scripted instance.
@@ -23,10 +29,37 @@ static uint8_t       g_shineId     = 0;
 Enlight::Enlight(const EnlightCalib&) {}
 Enlight::~Enlight() {}
 bool Enlight::run() { return true; }
-EnlightResult Enlight::poll() { return EnlightResult(g_shineStatus, g_shineId); }
+// A scripted one-shot measurement, mirroring the real poll() contract: while
+// g_pendReadyAt is in the future the run is in flight (RUNNING); after it,
+// the result is delivered exactly once — as NO_HIT if discardResult() was
+// called while it was undelivered.  Without a pending run, the persistent
+// g_shineStatus above applies (the older sections script it that way).
+static bool     g_pendActive  = false;
+static uint32_t g_pendReadyAt = 0;
+static uint8_t  g_pendId      = 0;
+static bool     g_pendDiscard = false;
+static int      g_discardCalls = 0;
+EnlightResult Enlight::poll() {
+    if (g_pendActive) {
+        if (millis() < g_pendReadyAt) return EnlightResult(EnlightStatus::RUNNING, 0);
+        g_pendActive = false;
+        if (g_pendDiscard) { g_pendDiscard = false; return EnlightResult(EnlightStatus::NO_HIT, 0); }
+        return EnlightResult(EnlightStatus::PLAYER_HIT, g_pendId);
+    }
+    return EnlightResult(g_shineStatus, g_shineId);
+}
+void Enlight::discardResult() {
+    g_discardCalls++;
+    if (g_pendActive) g_pendDiscard = true;
+}
 static EnlightCalib g_calib;
 static Enlight g_enlight(g_calib);
 Enlight* enlightPtr = &g_enlight;
+
+// lua_Writer for §1d: dumps a compiled chunk to a FILE*.
+static int dumpWriter(lua_State*, const void* p, size_t sz, void* ud) {
+    return (sz == 0 || fwrite(p, sz, 1, (FILE*)ud) == 1) ? 0 : 1;
+}
 
 // ---- fake hardware behind the abstract interfaces ----
 // Records the tray band (the top of the screen) so a test can assert
@@ -71,6 +104,7 @@ struct FakeRGB : LightAir_RGB {
 };
 
 uint8_t TotemRoleId_BONUS();
+uint8_t TotemRoleId_MALUS();
 uint8_t TotemRoleId_CP();
 static int failures = 0;
 #define CHECK(cond, msg) do { \
@@ -78,9 +112,12 @@ static int failures = 0;
 } while (0)
 
 // Find a monitor var's backing int by (partial) name.
+// BAR is an INT row that renders as a filling bar while it sits at its
+// trigger value — same `asInt` slot behind it — so both count as a number.
 static int* slotOf(const LightAir_Game& g, const char* name) {
     for (uint8_t i = 0; i < g.monitorCount; i++)
-        if (g.monitorVars[i].type == VarType::INT &&
+        if ((g.monitorVars[i].type == VarType::INT ||
+             g.monitorVars[i].type == VarType::BAR) &&
             strcmp(g.monitorVars[i].name, name) == 0)
             return g.monitorVars[i].asInt;
     return nullptr;
@@ -102,7 +139,8 @@ int main() {
         { "games/upkeep.lua",     0x0005 },
         { "games/kingofhill.lua", 0x0006 },
         { "games/virus.lua",      0x0007 },
-        { "games/festasportsasso.lua", 0x0008 },
+        { "games/custom/festasportsasso.lua", 0x0008 },
+        { "games/custom/tirobersaglio.lua",   0x0009 },
     };
     static LightAir_LuaGame shared;   // the one loaded-game instance
     static LightAir_LuaGame scanner;  // manifest-scan scratch instance
@@ -145,6 +183,92 @@ int main() {
         CHECK(!scanner.loaded(), "rejected peeks leave the scanner unloaded");
     }
 
+    // ---- 1c. A manifest peek must not need the libraries -------------
+    // Every ruleset pulls its libraries in at file scope, and a peek runs
+    // file scope.  If it loaded them for real it would compile tens of
+    // kilobytes of Lua per file into a state thrown away immediately —
+    // which is what ran a device out of memory mid-scan and left one game
+    // in the menu.  The fixture asks for a library that does not exist and
+    // then indexes, calls and chains it the way a ruleset does.
+    {
+        char name[16] = {0};
+        uint16_t tid = 0;
+        CHECK(scanner.peekManifest("test/host/fixtures/libatscope.lua",
+                                   name, sizeof(name), &tid),
+              "a peek reads the manifest without loading any library");
+        CHECK(tid == 0x7F06, "peek got the typeId past the library use");
+        CHECK(strcmp(name, "LibScope") == 0, "peek got the name past the library use");
+
+        // Loading it for real must NOT paper over the missing library: the
+        // stand-in exists for the peek and nowhere else.  Reuses the shared
+        // instance (the pool is deliberately small, and the deep test below
+        // reloads it straight afterwards).
+        CHECK(!shared.load("test/host/fixtures/libatscope.lua"),
+              "a real load still fails on a missing library");
+
+        // ...and it says WHY.  The menu puts this string on the LCD, which
+        // is the only channel a player editing .lua files over WiFi has:
+        // "Game failed to load" alone sent two device faults to be guessed
+        // at from the bench.  The reason must survive as far as the caller,
+        // must name the actual cause, and must not drag the traceback or
+        // the directory prefix onto a 20-column screen.
+        const char* why = shared.loadError();
+        CHECK(why && why[0], "a refused load reports a reason");
+        CHECK(strstr(why, "this_library_does_not_exist") != nullptr,
+              "the reason names the missing library");
+        CHECK(strchr(why, '\n') == nullptr, "the reason is one line, not a traceback");
+        CHECK(strncmp(why, "libatscope.lua:", 15) == 0,
+              "the reason keeps the basename and line, drops the directory");
+
+        CHECK(shared.load("games/teams.lua"), "a good file still loads");
+        CHECK(shared.loadError()[0] == 0, "a successful load clears the reason");
+    }
+
+    // ---- 1c'. Libraries lose their debug information; games keep it ----
+    // la.lib strips std.lua and projector.lua of line tables and local
+    // names after compiling them (~10 KB the N4 projectors cannot spare).
+    // The cost is confined to errors raised inside a library: they name
+    // the file but no line.  An error in the game file must keep both its
+    // line and the local's name — that message is a player's debugger.
+    {
+        CHECK(!shared.load("test/host/fixtures/libdebug_lib.lua"),
+              "a library error fails the load");
+        const std::string libWhy = shared.loadError();
+        CHECK(strncmp(libWhy.c_str(), "projector.lua:", 14) == 0,
+              "an error inside a library still names the library");
+        CHECK(libWhy.size() > 14 && !(libWhy[14] >= '1' && libWhy[14] <= '9'),
+              "...but no line: the library's line table is gone");
+
+        CHECK(!shared.load("test/host/fixtures/libdebug_game.lua"),
+              "a game-file error fails the load");
+        const char* why = shared.loadError();
+        CHECK(strncmp(why, "libdebug_game.lua:9:", 20) == 0,
+              "an error in the game file keeps its line");
+        CHECK(strstr(why, "local 't'") != nullptr, "...and the local's name");
+        printf("  library error: %s\n  game error:    %s\n", libWhy.c_str(), why);
+    }
+
+    // ---- 1d. A ruleset is source, never bytecode --------------------
+    // Nothing in this project ships precompiled Lua, and undumping is a
+    // way straight out of a sandbox that has already had load, loadfile
+    // and dofile taken off it — an uploaded .lua is untrusted input.  So
+    // the loader asks the parser for text only.
+    {
+        const char* path = "test/host/build/binary_chunk.lua";
+        lua_State* T = luaL_newstate();
+        CHECK(luaL_loadstring(T, "return { api = 1 }") == LUA_OK, "dump source compiles");
+        FILE* out = fopen(path, "wb");
+        CHECK(out != nullptr, "dump file opened");
+        lua_dump(T, dumpWriter, out, 0);
+        fclose(out);
+        lua_close(T);
+
+        CHECK(!shared.load(path), "a binary chunk is refused");
+        CHECK(strstr(shared.loadError(), "binary") != nullptr,
+              "and refused for being bytecode, not for being unreadable");
+        remove(path);
+    }
+
     // Deep-test freeforall: realize it again on the same instance.
     if (!shared.load("games/freeforall.lua")) {
         printf("no FFA, aborting\n");
@@ -154,7 +278,7 @@ int main() {
 
     const LightAir_Game& game = ffa->descriptor();
     CHECK(game.configCount == 5, "ffa config count");
-    CHECK(game.monitorCount == 8, "ffa monitor count");
+    CHECK(game.monitorCount == 9, "ffa monitor count (incl. the respawn bar)");
     CHECK(game.ruleCount == 4, "ffa rule count");
     CHECK(game.behaviorCount == 3, "ffa behaviour rows (states 0..2)");
     CHECK(game.directRadioRuleCount == 4,
@@ -236,7 +360,11 @@ int main() {
 
     // ---- 6. Behaviour tick: trigger held -> shine, energy drops ----
     int* energy = slotOf(game, "energy");
-    CHECK(energy && *energy == 50, "energy from config");
+    if (!energy) {
+        printf("  FAIL no energy slot — the rest of this block would segfault\n");
+        return ++failures;
+    }
+    CHECK(*energy == 30, "energy from config");
     InputReport inputs = {};
     inputs.buttonCount = 1;
     inputs.buttons[0].id = 0;                              // TRIG_1
@@ -244,7 +372,7 @@ int main() {
     RadioReport rr = {};
     out = GameOutput();
     game.behaviors[0].onUpdate(inputs, rr, disp, out);
-    CHECK(*energy == 49, "shine spent energy");
+    CHECK(*energy == 29, "shine spent energy");
     CHECK(out.ui.count == 1, "enlight UI feedback");
 
     // Confirmed lit target -> unicast LIT queued.
@@ -361,6 +489,117 @@ int main() {
             CHECK(out.radio.replyCount == 1 && out.radio.replies[0].payloadLen == 1,
                   "pickup in range is claimed by this player");
         }
+
+        // ---- 10b. Per-totem options (Totems submenu, O key) ----
+        // The `options` lists reach the descriptor the menu reads...
+        const LightAir_TotemRequirement* bReq = nullptr;
+        const LightAir_TotemRequirement* mReq = nullptr;
+        for (uint8_t i = 0; i < tg.totemRequirementCount; i++) {
+            if (tg.totemRequirements[i].roleId == TotemRoleId_BONUS()) bReq = &tg.totemRequirements[i];
+            if (tg.totemRequirements[i].roleId == TotemRoleId_MALUS()) mReq = &tg.totemRequirements[i];
+        }
+        CHECK(bReq && bReq->optionCount == 5, "teams BONUS offers LIFE + the four standard projectors");
+        CHECK(bReq && bReq->optionCount > 0 && strcmp(bReq->optionLabels[0], "LIFE") == 0,
+              "BONUS option 1 is LIFE");
+        uint8_t fastOpt = 0;
+        for (uint8_t k = 0; bReq && k < bReq->optionCount; k++)
+            if (strcmp(bReq->optionLabels[k], "FAST") == 0) fastOpt = k + 1;
+        CHECK(fastOpt > 0, "BONUS offers FAST");
+        CHECK(mReq && mReq->optionCount == 2 &&
+              strcmp(mReq->optionLabels[0], "LIFE") == 0 &&
+              strcmp(mReq->optionLabels[1], "DIM") == 0, "MALUS offers LIFE, DIM");
+        const LightAir_TotemRequirement* baseReq = nullptr;
+        for (uint8_t i = 0; i < tg.totemRequirementCount; i++)
+            if (tg.totemRequirements[i].optionCount == 0) baseReq = &tg.totemRequirements[i];
+        CHECK(baseReq && baseReq->optionLabels == nullptr, "a role with no options declares none");
+
+        // ...and la.totem_option() hands the claiming player the pick the
+        // runner holds for that totem: LIFE adds this player's starting
+        // lives, capped at twice that.
+        runner.clearTotems();
+        runner.addTotem(253, TotemRoleId_BONUS(), 1);           // LIFE
+        runner.addTotem(252, TotemRoleId_MALUS(), 1);           // LIFE
+        CHECK(runner.totemOption(253) == 1 && runner.totemOption(251) == 0,
+              "runner keeps each totem's option");
+        *tlives = 1;
+        if (bonus && bonus->onReceive) {
+            out = GameOutput();
+            bonus->onReceive(bon, /*rssi*/ -40, disp, out);
+            CHECK(*tlives == 4, "BONUS LIFE: 1 + 3 starting lives");
+            out = GameOutput();
+            bonus->onReceive(bon, /*rssi*/ -40, disp, out);
+            CHECK(*tlives == 6, "BONUS LIFE capped at 2x starting lives");
+        }
+        const DirectRadioRule* malus = nullptr;
+        for (uint8_t i = 0; i < tg.directRadioRuleCount; i++)
+            if (tg.directRadioRules[i].fromState == 0 &&
+                tg.directRadioRules[i].msgType == RadioMsg::MSG_MALUS_BEACON)
+                malus = &tg.directRadioRules[i];
+        CHECK(malus && malus->onReceive, "teams handles MALUS_BEACON in play");
+        if (malus && malus->onReceive) {
+            RadioPacket mal = bon;
+            mal.senderId = 252; mal.msgType = RadioMsg::MSG_MALUS_BEACON;
+            out = GameOutput();
+            malus->onReceive(mal, /*rssi*/ -40, disp, out);
+            CHECK(*tlives == 0, "MALUS LIFE takes every life");
+        }
+        // Every pickup cue exists in the real kernel's UI table: la.ui() with
+        // an unknown name is a Lua error, which the fault counter would record.
+        {
+            uint32_t faults0 = shared.faultStats().total;
+            runner.clearTotems();
+            runner.addTotem(253, TotemRoleId_BONUS(), fastOpt);  // BonusProjector
+            runner.addTotem(252, TotemRoleId_MALUS(), 2);        // DIM -> MalusDim
+            *tlives = 3;
+            if (bonus && bonus->onReceive) {
+                out = GameOutput();
+                bonus->onReceive(bon, /*rssi*/ -40, disp, out);
+                CHECK(out.ui.count > 0, "projector bonus queued a UI cue");
+            }
+            if (malus && malus->onReceive) {
+                RadioPacket mal = bon;
+                mal.senderId = 252; mal.msgType = RadioMsg::MSG_MALUS_BEACON;
+                out = GameOutput();
+                malus->onReceive(mal, /*rssi*/ -40, disp, out);
+                CHECK(out.ui.count > 0, "DIM malus queued a UI cue");
+            }
+            CHECK(shared.faultStats().total == faults0,
+                  "BonusProjector / MalusDim are known UI events");
+        }
+
+        // A totem this match does not know gives nothing, but is still claimed.
+        runner.clearTotems();
+        *tlives = 2;
+        if (bonus && bonus->onReceive) {
+            out = GameOutput();
+            bonus->onReceive(bon, /*rssi*/ -40, disp, out);
+            CHECK(*tlives == 2 && out.radio.replyCount == 1,
+                  "unknown totem: claimed, no effect");
+        }
+
+        // ---- 10c. Config blob carries the options ----
+        uint8_t assign[TotemDefs::MAX_TOTEMS] = {};
+        uint8_t opts[TotemDefs::MAX_TOTEMS]   = {};
+        uint8_t teams[PlayerDefs::MAX_PLAYER_ID];
+        memset(teams, 0xFF, sizeof(teams));
+        assign[1] = TotemRoleId_BONUS();  opts[1] = fastOpt;
+        assign[2] = TotemRoleId_MALUS();  opts[2] = 2;
+        teams[3] = 1;
+        uint8_t blob[250];
+        uint16_t len = game_serialize_config(tg, blob, sizeof(blob), assign, teams, 0x5A, opts);
+        CHECK(len == 2 + tg.configCount * 4 + PlayerDefs::MAX_PLAYER_ID + 2 * TotemDefs::MAX_TOTEMS + 1,
+              "blob size includes 16 option bytes");
+        uint8_t assign2[TotemDefs::MAX_TOTEMS] = {};
+        uint8_t opts2[TotemDefs::MAX_TOTEMS]   = {};
+        uint8_t teams2[PlayerDefs::MAX_PLAYER_ID] = {};
+        uint8_t token = 0;
+        CHECK(game_apply_config(tg, blob, len, assign2, teams2, &token, opts2),
+              "blob applies");
+        CHECK(memcmp(assign, assign2, sizeof(assign)) == 0 &&
+              memcmp(opts, opts2, sizeof(opts)) == 0 &&
+              teams2[3] == 1 && token == 0x5A, "blob round-trips roles, options, teams, token");
+        CHECK(!game_apply_config(tg, blob, (uint16_t)(len - TotemDefs::MAX_TOTEMS), assign2, teams2, &token, opts2),
+              "an old-format blob (no option bytes) is rejected");
     }
 
     // ---- 11. Fault policy: log, notify, continue ----
@@ -528,7 +767,7 @@ int main() {
     // start -> shone -> clock out -> stats screen -> the staff's A+B
     // chord, which hands the projector on and welcomes the next visitor.
     {
-        bool ok = shared.load("games/festasportsasso.lua");
+        bool ok = shared.load("games/custom/festasportsasso.lua");
         CHECK(ok, "festasportsasso loads");
         const LightAir_Game& fs = shared.descriptor();
         // The two structural consequences of a game that never ends.
@@ -645,8 +884,8 @@ int main() {
         CHECK(fs.winnerVarCount == 2 && *fs.winnerVars[1].value == 1,
               "shone_times counted");
         disp.update();
-        CHECK(!strcmp(rawDisp.tray[0], "SHONE by RED"), "down screen credits the shiner");
-        CHECK(!strcmp(rawDisp.tray[1], "GO TO BASE"), "...and what to do about it");
+        CHECK(!strcmp(rawDisp.tray[0], "Illuminato da RED"), "down screen credits the shiner");
+        CHECK(!strcmp(rawDisp.tray[1], "VAI ALLA BASE"), "...and what to do about it");
 
         // The turn clock runs out while down: stats screen, frozen.
         *clock = 0;
@@ -661,7 +900,7 @@ int main() {
         // point landed in this script, so the score is players_lit alone.
         g_millis += 3001;
         disp.update();
-        CHECK(!strcmp(rawDisp.tray[0], "#2 POINTS: 1"),
+        CHECK(!strcmp(rawDisp.tray[0], "#2 PUNTI: 1"),
               "stats screen leads with player number and turn score");
 
         // The scoring formula itself: 10 per CP totem point, 1 per player
@@ -677,22 +916,1143 @@ int main() {
         if (over) over->onTransition(disp, out);
         g_millis += 3001;
         disp.update();
-        CHECK(!strcmp(rawDisp.tray[0], "#2 POINTS: 53"),
+        CHECK(!strcmp(rawDisp.tray[0], "#2 PUNTI: 53"),
               "score = 10*totem points + players lit");
 
-        // Only the staff's A+B chord starts the next visitor.
-        keys.keyEventCount = 1;
-        keys.keyEvents[0] = { 0, 'A', KeyState::PRESSED };
-        CHECK(restart && !restart->condition(keys, nrr), "A alone does not restart");
+        // Only the staff's < + > chord starts the next visitor.  A+B is
+        // the firmware's in-game menu chord and must leave the turn alone.
         keys.keyEventCount = 2;
+        keys.keyEvents[0] = { 0, 'A', KeyState::HELD };
         keys.keyEvents[1] = { 0, 'B', KeyState::HELD };
-        CHECK(restart && restart->condition(keys, nrr), "A+B restarts the turn");
+        CHECK(restart && !restart->condition(keys, nrr), "A+B does not restart");
+        keys.keyEventCount = 1;
+        keys.keyEvents[0] = { 0, '<', KeyState::PRESSED };
+        CHECK(restart && !restart->condition(keys, nrr), "< alone does not restart");
+        keys.keyEventCount = 2;
+        keys.keyEvents[1] = { 0, '>', KeyState::HELD };
+        CHECK(restart && restart->condition(keys, nrr), "< + > restarts the turn");
         out = GameOutput();
         if (restart) restart->onTransition(disp, out);
         *fs.currentState = 0;
         CHECK(*counter == 12, "counter's first part bumped, projector digit kept");
         CHECK(*clock == 500 && *fLives == 3 && *fPoints == 0, "turn stats reset");
         CHECK(*fs.winnerVars[1].value == 0, "shone_times reset with the turn");
+    }
+
+    // ---- 15. `bar` monitor rows reach the display with live pointers ----
+    // A bar's timing belongs to whoever owns the wait, not to the display, so
+    // what matters here is that both pointers land on the right SLOTS and
+    // still read through after the owner writes them.  A copied value would
+    // pass a first assertion and then freeze.
+    {
+        // Realized on the shared slot, as every game after the first is: the
+        // instance pool is deliberately small and a reload is how the menu
+        // switches games anyway.
+        CHECK(shared.load("test/host/fixtures/bar.lua"), "bar fixture loads");
+        const LightAir_Game& bd = shared.descriptor();
+        *bd.currentState = bd.initialState;
+        bd.onBegin(disp, radio, &ui, runner);
+
+        const MonitorVar* owned = nullptr;   // energy, with a start_var
+        const MonitorVar* selfT = nullptr;   // respawn_zero, without one
+        const MonitorVar* plain = nullptr;   // the ordinary row on the other screen
+        for (uint8_t i = 0; i < bd.monitorCount; i++) {
+            const MonitorVar& m = bd.monitorVars[i];
+            if (m.type == VarType::BAR && !strcmp(m.name, "energy"))       owned = &m;
+            if (m.type == VarType::BAR && !strcmp(m.name, "respawn_zero")) selfT = &m;
+            if (m.type == VarType::INT && !strcmp(m.name, "energy"))       plain = &m;
+        }
+        CHECK(owned && selfT, "both bar rows synthesized as VarType::BAR");
+        CHECK(plain, "a non-bar row beside them stays VarType::INT");
+
+        if (owned && selfT && plain) {
+            CHECK(owned->barTrigger == 0, "bar_at reached the descriptor");
+            CHECK(owned->barFill && *owned->barFill == 10000, "fill_var points at reload_ms");
+            CHECK(owned->barStart && *owned->barStart == 0, "start_var points at reload");
+            CHECK(selfT->barStart == nullptr, "no start_var leaves the display self-starting");
+            CHECK(selfT->barWidth == 30, "width reached the descriptor");
+            CHECK(owned->barWidth == 0, "an unset width defers to the display default");
+            CHECK(owned->asInt == plain->asInt,
+                  "the bar and the plain row address the same energy slot");
+
+            // The owner writes; the binding must see it, because these are
+            // pointers into the slots and not copies taken at load.
+            *owned->asInt = 0;
+            int* reload     = slotOf(bd, "reload");
+            int* reloadMs   = slotOf(bd, "reload_ms");
+            CHECK(reload == owned->barStart, "start_var resolved to the reload slot");
+            CHECK(reloadMs == owned->barFill, "fill_var resolved to the reload_ms slot");
+            if (reload && reloadMs && owned->barStart && owned->barFill) {
+                *reload = 4321;
+                *reloadMs = 7000;
+                CHECK(*owned->barStart == 4321, "the start pointer reads the owner's write");
+                CHECK(*owned->barFill  == 7000, "the fill pointer reads the owner's write");
+            } else {
+                CHECK(false, "bar fixture vars reachable through the descriptor");
+            }
+        }
+    }
+
+    // ---- 15b. Config choices: a list of values, each with its label ----
+    // The menu shows the label and steps through the list in its declared
+    // order; the blob still carries the plain value, and a value outside
+    // the list never lands.  Bad declarations are refused at load.
+    {
+        CHECK(shared.load("test/host/fixtures/choices.lua"), "choices fixture loads");
+        const LightAir_Game& cg = shared.descriptor();
+        CHECK(cg.configCount == 3, "choices fixture config count");
+        if (cg.configCount == 3) {
+            const ConfigVar& ff = cg.configVars[0];
+            const ConfigVar& tm = cg.configVars[1];
+            const ConfigVar& lv = cg.configVars[2];
+            CHECK(ff.choiceCount == 2 && tm.choiceCount == 3 && lv.choiceCount == 0,
+                  "choice counts reached the descriptor; a numeric var has none");
+            CHECK(!strcmp(ff.choiceLabels[0], "OFF") && !strcmp(ff.choiceLabels[1], "ON"),
+                  "ON/OFF labels");
+            CHECK(ff.choiceValues[0] == 0 && ff.choiceValues[1] == 1, "ON/OFF values");
+            CHECK(tm.min == 300 && tm.max == 1800, "min/max bound the listed values");
+            CHECK(*tm.value == 600 && configChoiceIndex(tm, 600) == 0, "default is the first listed");
+            CHECK(configChoiceIndex(tm, 900) == -1, "an unlisted value has no index");
+
+            // Menu stepping: list order, stopping at the ends.
+            CHECK(configStepValue(tm, +1) == 300, "> steps to the next listed value, not the next larger");
+            *tm.value = 1800;
+            CHECK(configStepValue(tm, +1) == 1800, "> stops at the end of the list");
+            CHECK(configStepValue(tm, -1) == 300, "< steps back in list order");
+            *tm.value = 600;
+            CHECK(configStepValue(tm, -1) == 600, "< stops at the start of the list");
+            *ff.value = 0;
+            CHECK(configStepValue(ff, +1) == 1, "OFF > ON");
+            CHECK(configStepValue(lv, +1) == 5 && configStepValue(lv, -1) == 1,
+                  "a numeric var still steps by step within min/max");
+
+            // The blob carries the plain values; an unlisted one keeps ours.
+            uint8_t blob[GameDefaults::RADIO_OUT_PAYLOAD];
+            *ff.value = 1; *tm.value = 1800; *lv.value = 5;
+            uint16_t len = game_serialize_config(cg, blob, sizeof(blob), nullptr, nullptr, 7, nullptr);
+            CHECK(len > 0, "choices blob serializes");
+            *ff.value = 0; *tm.value = 600; *lv.value = 1;
+            CHECK(game_apply_config(cg, blob, len, nullptr, nullptr, nullptr, nullptr),
+                  "choices blob applies");
+            CHECK(*ff.value == 1 && *tm.value == 1800 && *lv.value == 5, "values round-trip");
+            int32_t bad = 900;                          // time: not listed, but in range
+            memcpy(blob + 2 + 4, &bad, 4);
+            game_apply_config(cg, blob, len, nullptr, nullptr, nullptr, nullptr);
+            CHECK(*tm.value == 1800, "an unlisted value is refused, not clamped onto the list");
+        }
+
+        // Refused declarations, each for its own reason.
+        struct Bad { const char* body; const char* why; };
+        const Bad bads[] = {
+            { "{ { 0, \"OFF\" }, { 0, \"ZERO\" } }",         "listed twice" },
+            { "{ { 0, \"TOOLONGLABEL\" } }",                 "1..8 chars" },
+            { "{}",                                           "choices (1.." },
+            { "{ 1, 2 }",                                     "{ value, label }" },
+            { "{ {0,\"A\"},{1,\"B\"},{2,\"C\"},{3,\"D\"},{4,\"E\"},{5,\"F\"},{6,\"G\"},{7,\"H\"},{8,\"I\"} }",
+                                                              "choices (1.." },
+        };
+        const char* path = "test/host/build/badchoices.lua";
+        for (const Bad& b : bads) {
+            FILE* f = fopen(path, "w");
+            fprintf(f, "return { api = 1, type_id = 0x7F08, name = \"Bad\", initial_state = 0,\n"
+                       "  config = { { id = \"x\", name = \"X\", default = 0, choices = %s } },\n"
+                       "  vars = {}, monitor = {}, winners = {}, totem_slots = {}, teams = 0,\n"
+                       "  rules = {}, update = {} }\n", b.body);
+            fclose(f);
+            CHECK(!shared.load(path), b.why);
+            CHECK(strstr(shared.loadError(), b.why) != nullptr, shared.loadError());
+        }
+        // A default outside the list, and choices beside min/max.
+        {
+            FILE* f = fopen(path, "w");
+            fprintf(f, "return { api = 1, type_id = 0x7F08, name = \"Bad\", initial_state = 0,\n"
+                       "  config = { { id = \"x\", name = \"X\", default = 2, choices = { {0,\"OFF\"},{1,\"ON\"} } } },\n"
+                       "  vars = {}, monitor = {}, winners = {}, totem_slots = {}, teams = 0,\n"
+                       "  rules = {}, update = {} }\n");
+            fclose(f);
+            CHECK(!shared.load(path) && strstr(shared.loadError(), "not one of its choices"),
+                  "a default outside the list is refused");
+            f = fopen(path, "w");
+            fprintf(f, "return { api = 1, type_id = 0x7F08, name = \"Bad\", initial_state = 0,\n"
+                       "  config = { { id = \"x\", name = \"X\", min = 0, max = 1, default = 0, choices = { {0,\"OFF\"},{1,\"ON\"} } } },\n"
+                       "  vars = {}, monitor = {}, winners = {}, totem_slots = {}, teams = 0,\n"
+                       "  rules = {}, update = {} }\n");
+            fclose(f);
+            CHECK(!shared.load(path) && strstr(shared.loadError(), "replace min/max/step"),
+                  "choices beside min/max are refused");
+        }
+        remove(path);
+    }
+
+    // ---- 15c. draw = "player": a var the DM fills at Start ----------------
+    // Virus's patient zero is not in the config menu: the binding hands the
+    // slot to the setup menu, which writes the drawn ID before onBegin.
+    {
+        CHECK(shared.load("games/virus.lua"), "virus loads");
+        const LightAir_Game& vg = shared.descriptor();
+        CHECK(vg.drawnPlayerCount == 1 && vg.drawnPlayerVars && vg.drawnPlayerVars[0],
+              "virus declares one drawn var");
+        for (uint8_t i = 0; i < vg.configCount; i++)
+            CHECK(strcmp(vg.configVars[i].name, "Virus") != 0, "the first virus is not a menu entry");
+
+        const char* path = "test/host/build/baddraw.lua";
+        const char* bodies[][2] = {
+            { "{ id = \"x\", draw = \"team\" }",              "unknown draw" },
+            { "{ id = \"x\", draw = \"player\", text = true }", "cannot be text" },
+        };
+        for (auto& b : bodies) {
+            FILE* f = fopen(path, "w");
+            fprintf(f, "return { api = 1, type_id = 0x7F09, name = \"Bad\", initial_state = 0,\n"
+                       "  config = {}, vars = { %s }, monitor = {}, winners = {},\n"
+                       "  totem_slots = {}, teams = 0, rules = {}, update = {} }\n", b[0]);
+            fclose(f);
+            CHECK(!shared.load(path) && strstr(shared.loadError(), b[1]), b[1]);
+        }
+        remove(path);
+    }
+
+    // ---- 16. A shine action's TOTAL length is the burst, not each note ----
+    // Several projectors have to be tellable apart by their pattern, not by
+    // the pitch of one note — so a multi-step action has to fit inside the
+    // beam rather than stretching to N times its length.
+    {
+        typedef LightAir_UICtrl::UIAction A;
+        const uint16_t burst = 300;
+
+        auto totalOf = [&](const A& a) {
+            uint32_t t = 0;
+            for (uint8_t i = 0; i < a.stepCount; i++)
+                t += LightAir_UICtrl::burstStepMs(a, i, burst);
+            return t;
+        };
+
+        // One note: the whole burst, as before.
+        A one = {}; one.stepCount = 1; one.durations[0] = 10;
+        CHECK(LightAir_UICtrl::burstStepMs(one, 0, burst) == burst,
+              "a single-step action still lasts the whole burst");
+
+        // Three EVEN notes: one burst between them, not three.
+        A three = {}; three.stepCount = 3;
+        three.durations[0] = three.durations[1] = three.durations[2] = 1;
+        CHECK(totalOf(three) == burst, "three even notes total exactly one burst");
+        CHECK(LightAir_UICtrl::burstStepMs(three, 0, burst) == 100,
+              "even notes divide the burst evenly");
+
+        // A declared SHAPE is preserved as a ratio: 1:3 stays 1:3.
+        A shaped = {}; shaped.stepCount = 2;
+        shaped.durations[0] = 1; shaped.durations[1] = 3;
+        CHECK(totalOf(shaped) == burst, "a shaped action totals exactly one burst");
+        CHECK(LightAir_UICtrl::burstStepMs(shaped, 0, burst) == 75 &&
+              LightAir_UICtrl::burstStepMs(shaped, 1, burst) == 225,
+              "the declared durations are kept as a ratio");
+
+        // Rounding must not drift: 3 notes into 100 ms still totals 100.
+        CHECK(LightAir_UICtrl::burstStepMs(three, 0, 100) +
+              LightAir_UICtrl::burstStepMs(three, 1, 100) +
+              LightAir_UICtrl::burstStepMs(three, 2, 100) == 100,
+              "an indivisible burst still totals exactly, with no drift");
+
+        // No shape declared at all: fall back to an even split.
+        A flat = {}; flat.stepCount = 2;
+        CHECK(totalOf(flat) == burst, "zero durations split the burst evenly");
+
+        // A note squeezed out by a tiny burst still advances the ticker.
+        A many = {}; many.stepCount = 4;
+        for (uint8_t i = 0; i < 4; i++) many.durations[i] = 1;
+        for (uint8_t i = 0; i < 4; i++)
+            CHECK(LightAir_UICtrl::burstStepMs(many, i, 2) > 0,
+                  "no step is ever zero-length");
+
+        CHECK(LightAir_UICtrl::burstStepMs(one, 3, burst) == 0,
+              "a step past the end is nothing");
+
+        // ...and that executeStep actually USES it.  Checking the arithmetic
+        // alone would pass even if the call site still handed every step the
+        // whole burst, which is exactly the bug being fixed.
+        {
+            LightAir_UICtrl u2(audio, vib, rgb);
+            A shaped2 = {};
+            shaped2.stepCount   = 2;
+            shaped2.durations[0] = 1;   shaped2.durations[1] = 3;
+            shaped2.soundFreqs[0] = 1000; shaped2.soundFreqs[1] = 500;
+            shaped2.priority    = 2;
+            u2.setEnlightAction(&shaped2);
+
+            hostTicker().lastMs = 0;
+            u2.triggerEnlight(burst);
+            CHECK(hostTicker().lastMs == 75,
+                  "the first note of a 1:3 action is scheduled for its share of "
+                  "the burst, not the whole of it");
+
+            // And the standard single-step action still takes the lot.
+            LightAir_UICtrl u3(audio, vib, rgb);
+            hostTicker().lastMs = 0;
+            u3.triggerEnlight(burst);
+            CHECK(hostTicker().lastMs == burst,
+                  "a single-step action is still scheduled for the whole burst");
+        }
+    }
+
+    // ---- 17. Binding sets belong to one ruleset at a time ------------
+    // GameRunner::begin builds one display binding set per state that shows
+    // anything, plus one to freeze the screen on.  The table is sized to what
+    // a single ruleset needs, so a second begin() must rebuild it rather than
+    // append to the last one's — otherwise a restart, or switching game
+    // without a reboot, silently runs it out and the screen stops updating.
+    {
+        FakeDisplay          raw2;
+        LightAir_DisplayCtrl d2(raw2);
+        FakeAudio            a2; FakeVib v2; FakeRGB r2;
+        LightAir_UICtrl      u2(a2, v2, r2);
+        LightAir_InputCtrl   in2;
+        LightAir_RadioTestTransport tr2;
+        LightAir_Radio       rad2(tr2, 2, 0x42, 0, 0);
+        LightAir_GameRunner  run2;
+
+        CHECK(shared.load("games/custom/festasportsasso.lua"),
+              "festasportsasso loads for the binding-set test");
+        const LightAir_Game& g2 = shared.descriptor();
+
+        run2.begin(g2, d2, in2, rad2, &u2);
+        const uint8_t first = d2.bindingSetCount();
+        CHECK(first > 0 && first <= DisplayDefaults::MAX_SETS,
+              "the first begin built a plausible number of sets");
+
+        // Enough repeats to overflow the table if they accumulated.
+        for (uint8_t i = 0; i < DisplayDefaults::MAX_SETS; i++)
+            run2.begin(g2, d2, in2, rad2, &u2);
+        CHECK(d2.bindingSetCount() == first,
+              "repeated begin() rebuilds the same sets instead of appending");
+    }
+
+    // ---- 18. A measurement belongs to the state it was fired in ----------
+    // Only in-play states read Enlight (proj.result), and Enlight keeps a
+    // completed result until it is read.  A beam still in flight when its
+    // shooter went down used to sit there for the whole wait and go out as
+    // a LIT on the first tick back in play.  Driven through the real
+    // GameRunner::update(), which discards on every state change.
+    {
+        FakeDisplay          raw3;
+        LightAir_DisplayCtrl d3(raw3);
+        FakeAudio            a3; FakeVib v3; FakeRGB r3;
+        LightAir_UICtrl      u3(a3, v3, r3);
+        LightAir_InputCtrl   in3;
+        LightAir_RadioTestTransport tr3;
+        LightAir_Radio       rad3(tr3, 2, 0x42, 0, 0);
+        rad3.begin();
+        LightAir_GameRunner  run3;
+        run3.clearRoster();
+        run3.addToRoster(2);
+        run3.addToRoster(3);
+
+        CHECK(shared.load("games/freeforall.lua"), "freeforall loads for the stale-beam test");
+        const LightAir_Game& g3 = shared.descriptor();
+        g_millisStep = 1;
+        run3.begin(g3, d3, in3, rad3, &u3);
+        int* l3 = slotOf(g3, "lives");
+
+        // Count LITs (0x10) this device put on the wire since the last call.
+        auto litsSent = [&]() {
+            int n = 0;
+            while (tr3.hasSent()) {
+                LightAir_RadioTestTransport::SentEntry e = tr3.popSent();
+                if (e.pkt.msgType == 0x10) n++;
+            }
+            return n;
+        };
+        auto fire = [&](uint32_t inMs) {
+            g_pendActive = true; g_pendDiscard = false;
+            g_pendReadyAt = millis() + inMs; g_pendId = 3;
+        };
+
+        // Control: a beam that completes in play goes out as a LIT.
+        litsSent();
+        fire(0);
+        run3.update();
+        CHECK(litsSent() == 1, "a beam completed in play sends its LIT");
+
+        // The bug: in flight when the shooter goes down, read on respawn.
+        fire(200);
+        int callsBefore = g_discardCalls;
+        *l3 = 0;                                 // shone mid-burst
+        run3.update();                           // IN_GAME -> OUT_GAME
+        CHECK(*g3.currentState == 1, "shooter went down");
+        CHECK(g_discardCalls > callsBefore, "the state change discarded the pending beam");
+        g_millis += 60000;                       // burst long done; respawn due
+        run3.update();                           // OUT_GAME -> IN_GAME, first in-play tick
+        run3.update();
+        CHECK(*g3.currentState == 0, "shooter is back in play");
+        CHECK(litsSent() == 0, "no stale LIT after respawn");
+        CHECK(!g_pendActive, "the stale result was consumed, freeing Enlight");
+
+        // And the next real beam works normally.
+        fire(0);
+        run3.update();
+        CHECK(litsSent() == 1, "the first beam after respawn sends its LIT");
+
+        g_millisStep = 0;
+    }
+
+    // ---- 19. In-game hold: busy, not out of the game ---------------------
+    // A+B opens the hold tool.  While it runs the player is answered by the
+    // ruleset's own handlers (a LIT is taken and replied to), totem beacons
+    // go unanswered, the game cannot touch the optics, the clock keeps
+    // running, and an END GAME does its data work at once — state, own score
+    // out, the round-robin answered — while the end screen and its cue wait
+    // for the tool to return.  Then: A held alone restarts the end screen,
+    // A+B does not.  All through the real GameRunner and freeforall.lua.
+    {
+        struct ScriptKeypad : LightAir_Keypad {
+            bool want[128] = {};
+            bool have[128] = {};
+            uint8_t getEvents(KeypadRawEvent* buf, uint8_t maxN) override {
+                uint8_t n = 0;
+                for (int k = 0; k < 128 && n < maxN; k++)
+                    if (want[k] != have[k]) { have[k] = want[k]; buf[n++] = { (char)k, want[k] }; }
+                return n;
+            }
+        };
+        struct ScriptTool : LightAir_HoldTool {
+            std::function<void(LightAir_HoldHost&)> body;
+            int runs = 0;
+            const char* holdName() const override { return "Script"; }
+            void runHeld(LightAir_HoldHost& h) override { runs++; if (body) body(h); }
+        };
+        struct UIRec : LightAir_UIEventObserver {
+            int endGame = 0;
+            void onEventStarted(uint8_t id, uint8_t, uint8_t) override {
+                if (id == (uint8_t)LightAir_UICtrl::UIEvent::EndGame) endGame++;
+            }
+        };
+
+        FakeDisplay          raw4;
+        LightAir_DisplayCtrl d4(raw4);
+        FakeAudio            a4; FakeVib v4; FakeRGB r4;
+        LightAir_UICtrl      u4(a4, v4, r4);
+        UIRec                rec4;
+        u4.setObserver(&rec4);
+        LightAir_InputCtrl   in4;
+        ScriptKeypad         kp4;
+        in4.registerKeypad(InputDefaults::KEYPAD_ID, kp4);
+        LightAir_RadioTestTransport tr4;
+        LightAir_Radio       rad4(tr4, 2, 0x42, 0, 0);
+        rad4.begin();
+        LightAir_GameRunner  run4;
+        run4.clearRoster();
+        run4.addToRoster(2);
+        run4.addToRoster(3);
+        ScriptTool           tool4;
+        run4.setHoldTool(tool4);
+
+        CHECK(shared.load("games/freeforall.lua"), "freeforall loads for the hold test");
+        const LightAir_Game& g4 = shared.descriptor();
+        CHECK(g4.onClockTick != nullptr, "a Lua game ticks its clocks while held");
+        g_millisStep = 1;
+        run4.begin(g4, d4, in4, rad4, &u4);
+        int* lives4 = slotOf(g4, "lives");
+        int* time4  = slotOf(g4, "time_left");
+
+        // Sent packets of one msgType since the last drain; the rest dropped.
+        int  sentOf[256];
+        auto drain = [&]() {
+            memset(sentOf, 0, sizeof(sentOf));
+            int n18 = 0;
+            while (tr4.hasSent()) {
+                LightAir_RadioTestTransport::SentEntry e = tr4.popSent();
+                sentOf[e.pkt.msgType]++;
+                // The fused score broadcast carries one 9-byte record per
+                // player it has: 18 bytes = both of us.
+                if (e.pkt.msgType == RadioMsg::MSG_SCORE_COLLECT && e.pkt.payloadLen == 18) n18++;
+            }
+            return n18;
+        };
+        uint32_t ts = 50000;
+        auto from = [&](uint8_t sender, uint8_t type, const uint8_t* p, uint8_t n) {
+            tr4.push(sender, 0, 0, type, 0x42, ts++, 0, p, n);
+        };
+        const uint8_t ready = 0;
+
+        // Control, not held: a BONUS totem at arm's length is claimed.
+        drain();
+        from(254, RadioMsg::MSG_BONUS_BEACON, &ready, 1);
+        g_millis += 20; run4.update();
+        drain();
+        CHECK(sentOf[RadioMsg::MSG_BONUS_BEACON + 1] == 1, "in play, a BONUS beacon is answered");
+
+        const int endGameBefore = rec4.endGame;
+        bool gameSawBeam = true;
+        tool4.body = [&](LightAir_HoldHost& host) {
+            CHECK(run4.held(), "the runner reports the hold");
+            CHECK(enlightPtr == nullptr, "the game's optics handle is unplugged");
+
+            // A LIT from player 3 is taken and answered by the ruleset.
+            const int before = *lives4;
+            drain();
+            from(3, RadioMsg::MSG_LIT, nullptr, 0);
+            g_millis += 20; host.service();
+            drain();
+            CHECK(*lives4 == before - 1, "held: a LIT still costs a life");
+            CHECK(sentOf[RadioMsg::MSG_LIT + 1] == 1, "held: the LIT is answered");
+
+            // Shone to zero while held: the player goes out like anyone else,
+            // and the next LIT is answered DOWN — not another SHONE, which
+            // would hand the next shooter a free point.
+            *lives4 = 1;
+            auto replySub = [&]() {
+                int sub = -1;
+                while (tr4.hasSent()) {
+                    LightAir_RadioTestTransport::SentEntry e = tr4.popSent();
+                    if (e.pkt.msgType == RadioMsg::MSG_LIT + 1 && e.pkt.payloadLen)
+                        sub = e.pkt.payload[0];
+                }
+                return sub;
+            };
+            from(4, RadioMsg::MSG_LIT, nullptr, 0);
+            g_millis += 20; host.service();
+            CHECK(replySub() == 2, "held: the last life's LIT is answered SHONE");
+            g_millis += 20; host.service();
+            CHECK(*g4.currentState == 1, "held: shone to zero, the player is out");
+            from(5, RadioMsg::MSG_LIT, nullptr, 0);
+            g_millis += 20; host.service();
+            CHECK(replySub() == 3, "held: once out, a LIT is answered DOWN");
+            CHECK(*lives4 == 0, "held: lives never go below zero");
+
+            // A totem beacon goes unanswered: no totem actions while busy.
+            from(254, RadioMsg::MSG_BONUS_BEACON, &ready, 1);
+            g_millis += 20; host.service();
+            drain();
+            CHECK(sentOf[RadioMsg::MSG_BONUS_BEACON + 1] == 0, "held: a BONUS beacon is NOT answered");
+
+            // A beam result waiting in Enlight stays there: the game can't
+            // read it, so it can't send a LIT on the player's behalf.
+            g_pendActive = true; g_pendDiscard = false; g_pendReadyAt = 0; g_pendId = 3;
+            for (int i = 0; i < 5; i++) { g_millis += 20; host.service(); }
+            drain();
+            CHECK(sentOf[RadioMsg::MSG_LIT] == 0, "held: no LIT goes out");
+            gameSawBeam = !g_pendActive;
+
+            // The match clock keeps running.
+            const int t0 = *time4;
+            g_millis += 3000; host.service();
+            CHECK(*time4 <= t0 - 3, "held: time_left keeps counting down");
+
+            // END GAME: the data work happens now...
+            drain();
+            from(3, RadioMsg::MSG_END_GAME, nullptr, 0);
+            g_millis += 20; host.service();
+            drain();
+            CHECK(*g4.currentState == g4.scoringState, "held: END GAME moves to the scoring state");
+            CHECK(sentOf[RadioMsg::MSG_SCORE_COLLECT] >= 1, "held: own score goes out at once");
+            CHECK(sentOf[RadioMsg::MSG_END_GAME] >= 1, "held: END GAME is flooded on");
+            // ...and the presentation waits.
+            CHECK(rec4.endGame == endGameBefore, "held: the EndGame cue waits for the tool");
+
+            // Player 3's scores arrive: answered with the fused record.
+            uint8_t rec[9] = { 3, 5, 0, 0, 0, 1, 0, 0, 0 };
+            from(3, RadioMsg::MSG_SCORE_COLLECT, rec, 9);
+            g_millis += 20; host.service();
+            CHECK(drain() >= 1, "held: the round-robin is answered with both scores");
+
+            bool drawn = false;
+            for (auto& row : raw4.tray) if (strstr(row, "Restart")) drawn = true;
+            CHECK(!drawn, "held: the end screen is not drawn over the tool");
+        };
+
+        kp4.want['A'] = kp4.want['B'] = true;
+        for (int i = 0; i < 100 && tool4.runs == 0; i++) { g_millis += 10; run4.update(); }
+        CHECK(tool4.runs == 1, "A+B held opens the hold tool");
+        CHECK(!gameSawBeam, "the pending beam was not consumed by the game");
+        CHECK(!run4.held(), "the hold ends when the tool returns");
+        CHECK(enlightPtr == &g_enlight, "the optics handle is plugged back in");
+        CHECK(rec4.endGame == endGameBefore + 1, "the deferred EndGame cue plays at hold exit");
+
+        // Keys still down when the tool returns do not reopen it.
+        for (int i = 0; i < 20; i++) { g_millis += 50; run4.update(); }
+        CHECK(tool4.runs == 1, "A+B still held after the tool does not reopen it");
+        bool shown = false;
+        for (auto& row : raw4.tray) if (!strcmp(row, "Hold A: Restart")) shown = true;
+        CHECK(shown, "the end screen appears once the tool is gone");
+        CHECK(g_restartCalls == 0, "no restart while A+B is the chord");
+
+        // End screen: A held alone restarts; not before RESTART_HOLD_MS.
+        kp4.want['A'] = kp4.want['B'] = false;
+        for (int i = 0; i < 5; i++) { g_millis += 20; run4.update(); }
+        tool4.body = nullptr;
+        kp4.want['A'] = true;
+        for (int i = 0; i < 15; i++) { g_millis += 100; run4.update(); }
+        CHECK(g_restartCalls == 0, "A held for 1.5 s does not restart yet");
+        for (int i = 0; i < 10 && g_restartCalls == 0; i++) { g_millis += 100; run4.update(); }
+        CHECK(g_restartCalls == 1, "A held alone for 2 s restarts from the end screen");
+
+        // A with B joining late is the menu chord, never a restart.
+        kp4.want['A'] = false;
+        for (int i = 0; i < 5; i++) { g_millis += 20; run4.update(); }
+        kp4.want['A'] = true;
+        g_millis += 100; run4.update();
+        kp4.want['B'] = true;
+        for (int i = 0; i < 40; i++) { g_millis += 100; run4.update(); }
+        CHECK(g_restartCalls == 1, "A+B on the end screen never restarts");
+        CHECK(tool4.runs == 2, "A+B opens the tools on the end screen too");
+        kp4.want['A'] = kp4.want['B'] = false;
+
+        g_pendActive = false;
+        g_millisStep = 0;
+    }
+
+
+    // ---- 20. The in-game tools menu ---------------------------------------
+    // Opened by A+B, it must not act on that same chord, must keep the game
+    // serviced while it waits, runs the picked tool and then returns
+    // straight to the game; B backs out without running anything.
+    {
+        struct StepKeypad : LightAir_Keypad {
+            // script(step) -> keys down at that poll, as a string
+            const char* (*script)(int) = nullptr;
+            int  step = 0;
+            bool have[128] = {};
+            uint8_t getEvents(KeypadRawEvent* buf, uint8_t maxN) override {
+                const char* down = script(step++);
+                uint8_t n = 0;
+                for (int k = 1; k < 128 && n < maxN; k++) {
+                    const bool want = strchr(down, (char)k) != nullptr;
+                    if (want != have[k]) { have[k] = want; buf[n++] = { (char)k, want }; }
+                }
+                return n;
+            }
+        };
+        struct CountTool : LightAir_HoldTool {
+            int runs = 0;
+            const char* holdName() const override { return "Count"; }
+            void runHeld(LightAir_HoldHost&) override { runs++; }
+        };
+        struct CountHost : LightAir_HoldHost {
+            int calls = 0;
+            void service() override { calls++; }
+        };
+
+        FakeDisplay        rawM;
+        LightAir_InputCtrl inM;
+        StepKeypad         kpM;
+        inM.registerKeypad(InputDefaults::KEYPAD_ID, kpM);
+        LightAir_ToolsMenu menu(rawM, inM, InputDefaults::KEYPAD_ID);
+        CountTool          t1;
+        CHECK(menu.addTool(t1), "a tool registers");
+
+        // A+B still down from the chord for a while, then released, then A.
+        kpM.script = [](int s) -> const char* {
+            if (s < 10) return "AB";
+            if (s < 15) return "";
+            return "A";
+        };
+        // The runner opens the menu having already polled the chord: the keys
+        // are down in InputCtrl before the menu's first poll.
+        inM.poll(); inM.poll();
+        CountHost h1;
+        menu.runHeld(h1);
+        CHECK(t1.runs == 1, "A picks the tool, and only after the chord is released");
+        CHECK(kpM.step >= 16, "the chord's own A did not select anything");
+        CHECK(h1.calls >= kpM.step - 3, "the game is serviced on every menu poll");
+
+        // B backs out.
+        kpM.step = 0;
+        kpM.script = [](int s) -> const char* { return s < 3 ? "" : "B"; };
+        CountHost h2;
+        menu.runHeld(h2);
+        CHECK(t1.runs == 1, "B leaves the menu without running a tool");
+    }
+
+
+    // ---- 21. hold = { accept, on_enter, on_exit } --------------------------
+    // The ruleset's own refinement: accept narrows what a held player still
+    // receives (LIT yes, POINT_REPORT no; an area hit is a LIT, whoever is
+    // its centre), the hooks bracket the hold, the update body stops and
+    // the countdown_in clock does not.
+    {
+        struct ScriptTool : LightAir_HoldTool {
+            std::function<void(LightAir_HoldHost&)> body;
+            const char* holdName() const override { return "Script"; }
+            void runHeld(LightAir_HoldHost& h) override { if (body) body(h); }
+        };
+        struct ChordKeypad : LightAir_Keypad {
+            bool down = false, have = false;
+            uint8_t getEvents(KeypadRawEvent* buf, uint8_t maxN) override {
+                if (down == have || maxN < 2) return 0;
+                have = down;
+                buf[0] = { 'A', down }; buf[1] = { 'B', down };
+                return 2;
+            }
+        };
+
+        CHECK(shared.load("test/host/fixtures/hold.lua"), "hold fixture loads");
+        const LightAir_Game& hd = shared.descriptor();
+        CHECK(hd.holdAccept && hd.holdAcceptCount == 1 &&
+              hd.holdAccept[0] == RadioMsg::MSG_LIT, "hold.accept reaches the descriptor");
+
+        FakeDisplay          raw5;
+        LightAir_DisplayCtrl d5(raw5);
+        LightAir_InputCtrl   in5;
+        ChordKeypad          kp5;
+        in5.registerKeypad(InputDefaults::KEYPAD_ID, kp5);
+        LightAir_RadioTestTransport tr5;
+        LightAir_Radio       rad5(tr5, 2, 0x42, 0, 0);
+        rad5.begin();
+        LightAir_GameRunner  run5;
+        ScriptTool           tool5;
+        run5.setHoldTool(tool5);
+        g_millisStep = 1;
+        run5.begin(hd, d5, in5, rad5, nullptr);
+
+        int* lits     = slotOf(hd, "lits");
+        int* reports  = slotOf(hd, "reports");
+        int* updates  = slotOf(hd, "updates");
+        int* clock5   = slotOf(hd, "clock");
+        int* entered  = slotOf(hd, "entered");
+        int* exited   = slotOf(hd, "exited");
+
+        uint32_t ts = 90000;
+        tool5.body = [&](LightAir_HoldHost& host) {
+            CHECK(*entered == 1 && *exited == 0, "hold.on_enter ran on the way in");
+            const int u0 = *updates, c0 = *clock5;
+            tr5.push(3, 0, 0, RadioMsg::MSG_LIT,    0x42, ts++, 0, nullptr, 0);
+            tr5.push(3, 0, 0, RadioMsg::MSG_POINT_REPORT, 0x42, ts++, 0, nullptr, 0);
+            g_millis += 20;   host.service();
+            g_millis += 2000; host.service();
+            CHECK(*lits == 1,     "held: an accepted msgType still arrives");
+            CHECK(*reports == 0, "held: one outside hold.accept does not");
+            CHECK(*updates == u0, "held: the update body does not run");
+            CHECK(*clock5 <= c0 - 2, "held: the countdown_in clock keeps running");
+            const uint8_t area[3] = { 50, 3, 0xFF };
+            tr5.push(4,   0, 0, RadioMsg::MSG_AREA, 0x42, ts++, 0, area, 3);
+            tr5.push(254, 0, 0, RadioMsg::MSG_AREA, 0x42, ts++, 0, area, 3);
+            g_millis += 20; host.service();
+            CHECK(*lits == 3, "held: area hits arrive as LITs, a totem's beacon included");
+        };
+        kp5.down = true;
+        for (int i = 0; i < 100 && *entered == 0; i++) { g_millis += 10; run5.update(); }
+        CHECK(*exited == 1, "hold.on_exit ran on the way out");
+        kp5.down = false;
+        for (int i = 0; i < 5; i++) { g_millis += 10; run5.update(); }
+        tr5.push(3, 0, 0, RadioMsg::MSG_POINT_REPORT, 0x42, ts++, 0, nullptr, 0);
+        g_millis += 10; run5.update();
+        CHECK(*reports == 1, "after the hold, everything arrives again");
+
+        g_millisStep = 0;
+    }
+
+
+    // ---- 22. A powered projector's icon reaches the energy cell -------------
+    // The firmware has the bitmaps and the binding reads an icon var, but a
+    // game has to connect the two.  Through the real binding and runner: a
+    // BONUS totem set to FAST is claimed, and the energy cell's icon must
+    // follow — then going out must put the standard glyph back.
+    {
+        FakeDisplay          raw6;
+        LightAir_DisplayCtrl d6(raw6);
+        LightAir_InputCtrl   in6;
+        LightAir_RadioTestTransport tr6;
+        LightAir_Radio       rad6(tr6, 2, 0x42, 0, 0);
+        rad6.begin();
+        LightAir_GameRunner  run6;
+        run6.clearRoster();
+        run6.addToRoster(2);
+
+        CHECK(shared.load("games/freeforall.lua"), "freeforall loads for the icon test");
+        const LightAir_Game& g6 = shared.descriptor();
+
+        // BONUS options are LIFE, then the standard catalogue in id order:
+        // SPLASH (1), FAST (2), ... — so FAST is option 3.
+        const LightAir_TotemRequirement* bReq = nullptr;
+        for (uint8_t i = 0; i < g6.totemRequirementCount; i++)
+            if (g6.totemRequirements[i].roleId == TotemRoleId_BONUS()) bReq = &g6.totemRequirements[i];
+        uint8_t fastOpt = 0;
+        for (uint8_t k = 0; bReq && k < bReq->optionCount; k++)
+            if (!strcmp(bReq->optionLabels[k], "FAST")) fastOpt = (uint8_t)(k + 1);
+        CHECK(fastOpt > 0, "FAST is a BONUS option");
+        run6.clearTotems();
+        run6.addTotem(254, TotemRoleId_BONUS(), fastOpt);
+
+        g_millisStep = 1;
+        run6.begin(g6, d6, in6, rad6, nullptr);
+
+        const int* icon = nullptr;
+        for (uint8_t i = 0; i < g6.monitorCount; i++)
+            if (!strcmp(g6.monitorVars[i].name, "energy") && g6.monitorVars[i].iconVar)
+                icon = g6.monitorVars[i].iconVar;
+        CHECK(icon != nullptr, "the energy cell reads an icon var");
+        CHECK(icon && *icon == ICON_ENERGY, "baseline in hand: the standard energy glyph");
+
+        const uint8_t ready = 0;
+        tr6.push(254, 0, 0, RadioMsg::MSG_BONUS_BEACON, 0x42, 70000, 0, &ready, 1);
+        g_millis += 20; run6.update();
+        CHECK(icon && *icon == ICON_FAST, "BONUS FAST puts the FAST icon in the energy cell");
+
+        // Shone to zero: out of the game, and FAST goes with it.
+        *slotOf(g6, "lives") = 0;
+        g_millis += 20; run6.update();
+        CHECK(*g6.currentState == 1, "out of the game");
+        CHECK(icon && *icon == ICON_ENERGY, "going out puts the standard glyph back");
+
+        g_millisStep = 0;
+    }
+
+    // ---- 23. Area effects: the runner's service, each game's own LIT ------
+    // A SPLASH hit that lands makes its victim the centre of an area: the
+    // victim's runner broadcasts a beacon crediting the shooter, a
+    // bystander's runner turns it into a LIT for its own ruleset at the
+    // band's strength, and a knock-out goes back to the shooter as a SHONE.
+    // Teams never mentions any of it.  Real binding, radio and runner; this
+    // device is player 2 (team 0), 3, 5 and 7 are team 1, 4 is team 0.
+    {
+        FakeDisplay          raw7;
+        LightAir_DisplayCtrl d7(raw7);
+        LightAir_InputCtrl   in7;
+        LightAir_RadioTestTransport tr7;
+        LightAir_Radio       rad7(tr7, 2, 0x42, 0, 0);
+        rad7.begin();
+        LightAir_GameRunner  run7;
+        auto roster7 = [&](LightAir_GameRunner& r) {
+            r.clearRoster();
+            const uint8_t ids[]   = { 2, 3, 4, 5, 7 };
+            const uint8_t teams[] = { 0, 1, 0, 1, 1 };
+            for (uint8_t i = 0; i < 5; i++) { r.addToRoster(ids[i]); r.setTeam(ids[i], teams[i]); }
+        };
+        auto cfgOf = [](const LightAir_Game& g, const char* name) -> int* {
+            for (uint8_t i = 0; i < g.configCount; i++)
+                if (!strcmp(g.configVars[i].name, name)) return g.configVars[i].value;
+            return nullptr;
+        };
+
+        // What one update put on the wire, kept until the next one.
+        std::vector<LightAir_RadioTestTransport::SentEntry> sent7;
+        uint32_t ts7 = 90000;
+        auto step = [&](LightAir_GameRunner& r, LightAir_RadioTestTransport& tr) {
+            g_millis += 20; r.update();
+            sent7.clear();
+            while (tr.hasSent()) sent7.push_back(tr.popSent());
+        };
+        auto from = [&](uint8_t sender, uint8_t team, uint8_t type,
+                        std::initializer_list<uint8_t> p) {
+            const std::vector<uint8_t> b(p);
+            tr7.push(sender, 0, team, type, 0x42, ts7++, 0, b.data(), (uint8_t)b.size());
+            step(run7, tr7);
+        };
+        auto sentOf = [&](uint8_t type) -> const LightAir_RadioTestTransport::SentEntry* {
+            for (const auto& e : sent7) if (e.pkt.msgType == type) return &e;
+            return nullptr;
+        };
+        auto replied = [&]() -> int {               // sub of the LIT answer, -1 = none
+            const auto* e = sentOf(RadioMsg::MSG_LIT + 1);
+            return e && e->pkt.payloadLen ? e->pkt.payload[0] : -1;
+        };
+        auto beacon = [&](uint8_t originator) {     // a broadcast area beacon for it
+            const auto* e = sentOf(RadioMsg::MSG_AREA);
+            return e && e->dstMac[0] == 0xFF && e->pkt.resend == 0 &&
+                   e->pkt.payloadLen == 3 && e->pkt.payload[0] == 1 &&
+                   e->pkt.payload[1] == originator && e->pkt.payload[2] == 1;
+        };
+
+        roster7(run7);
+        CHECK(shared.load("games/teams.lua"), "teams loads for the area test");
+        const LightAir_Game& ag = shared.descriptor();
+        CHECK(ag.areaPolicyCount == 1 && ag.areaPolicies && ag.areaPolicies[0].id == 1 &&
+              ag.areaPolicies[0].on == AreaTrigger::LIT && ag.areaPolicies[0].projector == 1,
+              "the projector library declared SPLASH's area, triggered by its hits");
+        g_millisStep = 1;
+        run7.begin(ag, d7, in7, rad7, nullptr);
+        int* al = slotOf(ag, "lives");
+        int* ff = cfgOf(ag, "FriendlyFire");
+        CHECK(al && ff, "teams lives and friendly-fire slots");
+        if (!al || !ff) { g_millisStep = 0; return 1; }
+
+        // -- Victim: the trigger --
+        *al = 5;
+        from(3, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });            // SPLASH, strength 1
+        CHECK(*al == 4 && replied() == HitReply::TAKEN, "victim: the direct SPLASH hit is the game's");
+        CHECK(beacon(3), "victim: a landed SPLASH hit broadcasts a single-hop beacon crediting its shooter");
+        from(7, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        CHECK(*al == 3 && !sentOf(RadioMsg::MSG_AREA),
+              "victim: a second burst within the gap is not sent, the hit still lands");
+        g_millis += 300;
+        from(3, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        CHECK(*al == 3 && replied() != HitReply::TAKEN && !sentOf(RadioMsg::MSG_AREA),
+              "victim: a hit the game refuses (immune) bursts nothing");
+        from(4, 0, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        CHECK(*al == 3 && !sentOf(RadioMsg::MSG_AREA), "victim: a teammate's refused hit bursts nothing");
+        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0 });            // BASE projector
+        CHECK(*al == 2 && !sentOf(RadioMsg::MSG_AREA), "victim: a projector without an area bursts nothing");
+        g_millis += 3100;                                         // every window closed
+        *al = 1;
+        from(7, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        CHECK(replied() == HitReply::SHONE && beacon(7), "victim: a knock-out bursts too (on = \"lit\")");
+
+        // -- Bystander: the receive side --
+        CHECK(shared.load("games/teams.lua"), "teams reloads for the bystander");
+        run7.begin(ag, d7, in7, rad7, nullptr);
+        g_millis += 3100;
+        *al = 6;
+        tr7.testRssi = -90;
+        from(3, 1, RadioMsg::MSG_AREA, { 1, 5, 1 });
+        CHECK(*al == 6, "bystander: out of the area, nothing");
+        tr7.testRssi = -50;
+        *ff = 1;
+        from(3, 1, RadioMsg::MSG_AREA, { 1, 2, 0 });
+        CHECK(*al == 6, "bystander: never caught by an area of its own (self = false), friendly fire or not");
+        *ff = 0;
+        from(3, 1, RadioMsg::MSG_AREA, { 1, 4, 0 });
+        CHECK(*al == 6, "bystander: a teammate's area is the game's friendly-fire call");
+        from(3, 1, RadioMsg::MSG_AREA, { 99, 5, 1 });
+        CHECK(*al == 6, "bystander: an unknown policy is ignored");
+        tr7.testRssi = -65;
+        from(3, 1, RadioMsg::MSG_AREA, { 1, 5, 1 });
+        CHECK(*al == 5, "bystander: the outer band is one life");
+        tr7.testRssi = -50;
+        from(3, 1, RadioMsg::MSG_AREA, { 1, 5, 1 });
+        CHECK(*al == 3, "bystander: the inner band is two lives, by the game's own LIT rule");
+        CHECK(!sentOf(RadioMsg::MSG_LIT + 1) && !sentOf(RadioMsg::MSG_AREA) &&
+              !sentOf(RadioMsg::MSG_AREA_CREDIT),
+              "bystander: an area hit answers nobody, never bursts again, credits only a knock-out");
+        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0 });
+        CHECK(*al == 2 && replied() == HitReply::TAKEN,
+              "bystander: area hits opened no immunity window for their originator");
+        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0, AreaDefaults::HIT_FLAG_AREA });
+        CHECK(*al == 2 && replied() != HitReply::TAKEN,
+              "bystander: a LIT from the air claiming the area flag is a direct hit (immune)");
+        from(7, 1, RadioMsg::MSG_AREA, { 1, 5, 1 });
+        CHECK(*al == 0, "bystander: an open immunity window does not stop an area hit");
+        const auto* cr = sentOf(RadioMsg::MSG_AREA_CREDIT);
+        CHECK(cr && cr->dstMac[0] != 0xFF && cr->dstMac[5] == 5 && cr->pkt.payloadLen == 2 &&
+              cr->pkt.payload[0] == 1 && cr->pkt.payload[1] == HitReply::SHONE,
+              "bystander: an area knock-out is credited to its originator, by unicast");
+        CHECK(!sentOf(RadioMsg::MSG_LIT + 1), "bystander: the knock-out answers nobody either");
+        RadioPacket credit = cr ? cr->pkt : RadioPacket{};
+
+        tr7.testRssi = -40;
+
+        // -- Originator: the credit --
+        LightAir_RadioTestTransport tr8;
+        LightAir_Radio       rad8(tr8, 5, 0x42, 0, 0);
+        rad8.begin();
+        LightAir_GameRunner  run8;
+        roster7(run8);
+        CHECK(shared.load("games/teams.lua"), "teams loads for the originator");
+        run8.begin(ag, d7, in7, rad8, nullptr);
+        int* ap = slotOf(ag, "points");
+        if (ap && cr) {
+            CHECK(*ap == 0, "originator: no points yet");
+            tr8.push(credit);
+            step(run8, tr8);
+            CHECK(*ap == 1, "originator: an area knock-out scores as its own SHONE");
+            const auto* a = sentOf(RadioMsg::MSG_AREA_CREDIT + 1);
+            CHECK(a && a->dstMac[5] == 2, "originator: the credit is acknowledged");
+            CHECK(sentOf(RadioMsg::MSG_POINT_REPORT) != nullptr,
+                  "originator: the game reports the point as it does any knock-out");
+            const uint8_t stray[2] = { 99, HitReply::SHONE };
+            tr8.push(2, 0, 0, RadioMsg::MSG_AREA_CREDIT, 0x42, ts7++, 0, stray, 2);
+            step(run8, tr8);
+            CHECK(*ap == 1 && sentOf(RadioMsg::MSG_AREA_CREDIT + 1),
+                  "originator: a credit for an unknown policy is acknowledged, not scored");
+        }
+
+        // -- A ruleset's own area: la.area_emit, and the chain guard --
+        CHECK(shared.load("test/host/fixtures/area.lua"), shared.loadError());
+        const LightAir_Game& fg = shared.descriptor();
+        run7.begin(fg, d7, in7, rad7, nullptr);
+        int* hits = slotOf(fg, "hits");     int* areaHits = slotOf(fg, "area_hits");
+        int* emitted = slotOf(fg, "emitted"); int* refused = slotOf(fg, "refused");
+        CHECK(hits && areaHits && emitted && refused, "area fixture slots");
+        if (hits && areaHits && emitted && refused) {
+            from(3, 0, RadioMsg::MSG_LIT, {});
+            const auto* b = sentOf(RadioMsg::MSG_AREA);
+            CHECK(*emitted == 1 && b && b->pkt.payload[0] == 40 && b->pkt.payload[1] == 2,
+                  "la.area_emit: a real hit makes this player the centre and the originator");
+            tr7.testRssi = -58;
+            from(3, 0, RadioMsg::MSG_AREA, { 40, 3, 0xFF });
+            CHECK(*hits == 2 && *areaHits == 1, "an area hit reaches the handler as pkt.area");
+            CHECK(*refused == 1 && !sentOf(RadioMsg::MSG_AREA),
+                  "la.area_emit from an area hit is refused: no chain reaction");
+            tr7.testRssi = -70;
+            from(3, 0, RadioMsg::MSG_AREA, { 40, 3, 0xFF });
+            CHECK(*hits == 2, "past the last band, nothing");
+
+            // Two knock-outs, two credits: one acknowledged, one left to
+            // time out.  Neither end of a credit is the ruleset's.
+            tr7.testRssi = -50;
+            from(3, 0, RadioMsg::MSG_AREA, { 40, 3, 0xFF });
+            const auto* c1 = sentOf(RadioMsg::MSG_AREA_CREDIT);
+            CHECK(c1 && c1->dstMac[5] == 3 && c1->pkt.payload[0] == 40,
+                  "the inner band knocks out: credit to the originator");
+            const uint32_t c1ts = c1 ? c1->pkt.timestamp : 0;
+            from(7, 0, RadioMsg::MSG_AREA, { 40, 7, 0xFF });
+            CHECK(sentOf(RadioMsg::MSG_AREA_CREDIT) != nullptr, "a second credit, to 7");
+            const uint8_t ack = 0;
+            tr7.push(3, 0, 0, RadioMsg::MSG_AREA_CREDIT + 1, 0x42, c1ts, 0, &ack, 1);
+            step(run7, tr7);
+            g_millis += 2500;                           // the credit to 7 times out
+            step(run7, tr7);
+
+            // Policy 42: teammates never, its originator yes, no credit.
+            // Roster teams: this device and 4 are team 0, 3 is team 1.
+            const int h0 = *hits;
+            from(3, 0, RadioMsg::MSG_AREA, { 42, 4, 0 });
+            CHECK(*hits == h0, "friendly = \"never\": a teammate's area spares this player");
+            from(3, 0, RadioMsg::MSG_AREA, { 42, 2, 0 });
+            CHECK(*hits == h0 + 1, "self = true: the originator is caught, \"never\" or not");
+            from(3, 0, RadioMsg::MSG_AREA, { 42, 3, 1 });
+            CHECK(*hits == h0 + 2 && !sentOf(RadioMsg::MSG_AREA_CREDIT),
+                  "credit = false: a knock-out goes unreported");
+            tr7.testRssi = -40;
+        }
+        // DONE-state rows: on_begin ran after the load, so its declaration
+        // was refused; and the credits' two ends never reached on_reply.
+        *fg.currentState = fg.scoringState;
+        int* late  = slotOf(fg, "late");
+        int* leaks = slotOf(fg, "leaks");
+        CHECK(late && *late == 1, "la.area_policy after the load is refused");
+        CHECK(leaks && *leaks == 0, "a credit's acknowledgement and timeout stay the service's");
+
+        // Held, with a hold.accept that takes no LIT: no area hit either.
+        {
+            struct Tool : LightAir_HoldTool {
+                std::function<void(LightAir_HoldHost&)> body;
+                const char* holdName() const override { return "Script"; }
+                void runHeld(LightAir_HoldHost& h) override { if (body) body(h); }
+            };
+            struct Chord : LightAir_Keypad {
+                bool down = false, have = false;
+                uint8_t getEvents(KeypadRawEvent* buf, uint8_t maxN) override {
+                    if (down == have || maxN < 2) return 0;
+                    have = down;
+                    buf[0] = { 'A', down }; buf[1] = { 'B', down };
+                    return 2;
+                }
+            };
+            CHECK(shared.load("test/host/fixtures/area.lua"), "area fixture reloads for the hold");
+            LightAir_InputCtrl in9;
+            Chord              kp9;
+            in9.registerKeypad(InputDefaults::KEYPAD_ID, kp9);
+            LightAir_RadioTestTransport tr9;
+            LightAir_Radio     rad9(tr9, 2, 0x42, 0, 0);
+            rad9.begin();
+            LightAir_GameRunner run9;
+            roster7(run9);
+            Tool tool9;
+            run9.setHoldTool(tool9);
+            run9.begin(fg, d7, in9, rad9, nullptr);
+            int* h9 = slotOf(fg, "hits");
+            bool ran = false;
+            tool9.body = [&](LightAir_HoldHost& host) {
+                ran = true;
+                const uint8_t area[3] = { 40, 3, 1 };
+                tr9.push(3, 0, 1, RadioMsg::MSG_AREA, 0x42, ts7++, 0, area, 3);
+                g_millis += 20; host.service();
+                CHECK(h9 && *h9 == 0, "held, no LIT accepted: an area hit does not arrive either");
+            };
+            kp9.down = true;
+            for (int i = 0; i < 100 && !ran; i++) { g_millis += 10; run9.update(); }
+            CHECK(ran, "the area fixture's hold ran");
+        }
+
+        // Malformed policies refuse the load, each for its own reason.
+        const char* bpath = "test/host/build/ba.lua";
+        const char* bads[][2] = {
+            { "la.area_policy(41, {})",                                   "bands required" },
+            { "la.area_policy(41, { bands = { { -60, 0 } } })",           "band out of range" },
+            { "la.area_policy(41, { bands = { { 5, 1 } } })",             "band out of range" },
+            { "la.area_policy(41, { bands = { {-60,1},{-61,1},{-62,1},{-63,1},{-64,1} } })",
+                                                                          "1-4 bands" },
+            { "la.area_policy(41, { bands = { { -60, 1 } }, on = \"lit\" })", "needs a projector" },
+            { "la.area_policy(41, { bands = { { -60, 1 } }, on = \"hit\" })", "on must be" },
+            { "la.area_policy(41, { bands = { { -60, 1 } }, friendly = \"no\" })", "friendly must be" },
+            { "la.area_policy(0, { bands = { { -60, 1 } } })",            "1-255" },
+            { "la.area_policy(41, { bands = {{-60,1}}, on = \"lit\", projector = 3 })"
+              " la.area_policy(42, { bands = {{-60,1}}, on = \"shone\", projector = 3 })",
+                                                                          "already triggers" },
+        };
+        for (auto& b : bads) {
+            FILE* f = fopen(bpath, "w");
+            fprintf(f, "%s\nreturn { api = 1, type_id = 0x7F0C, name = \"Bad\", initial_state = 0,\n"
+                       "  config = {}, vars = {}, monitor = {}, winners = {},\n"
+                       "  totem_slots = {}, teams = 0, rules = {}, update = {} }\n", b[0]);
+            fclose(f);
+            CHECK(!shared.load(bpath) && strstr(shared.loadError(), b[1]), b[1]);
+        }
+        // Declaring an id again replaces it, triggers included.
+        {
+            FILE* f = fopen(bpath, "w");
+            fprintf(f, "la.area_policy(41, { bands = {{-60,1}}, on = \"lit\", projector = 3 })\n"
+                       "la.area_policy(41, { bands = {{-50,2},{-70,1}}, on = \"lit\", projector = 3 })\n"
+                       "return { api = 1, type_id = 0x7F0C, name = \"Re\", initial_state = 0,\n"
+                       "  config = {}, vars = {}, monitor = {}, winners = {},\n"
+                       "  totem_slots = {}, teams = 0, rules = {}, update = {} }\n");
+            fclose(f);
+            CHECK(shared.load(bpath), shared.loadError());
+            const LightAir_Game& rg = shared.descriptor();
+            CHECK(rg.areaPolicyCount == 1 && rg.areaPolicies[0].bandCount == 2,
+                  "declaring a policy again replaces it");
+        }
+        remove(bpath);
+        g_millisStep = 0;
+    }
+
+    // ---- 24. Virus: down by a clean beam, back by touching a totem ------
+    // Through the real binding, radio and runner: this device (player 2) is
+    // patient zero; a clean LIT puts it down; once virus_respawn_secs is up
+    // it touches (single-hop 0xF4 [55, ACK]) once a second; a totem's 0xF5
+    // answer — matched by the radio against the touch it echoes — brings it
+    // back.  The totem side is test_totemdriver's.
+    {
+        FakeDisplay          raw8;
+        LightAir_DisplayCtrl d8(raw8);
+        LightAir_InputCtrl   in8;
+        LightAir_RadioTestTransport tr8;
+        LightAir_Radio       rad8(tr8, 2, 0x42, 0, 0);
+        rad8.begin();
+        LightAir_GameRunner  run8;
+        run8.clearRoster();
+        for (uint8_t id = 1; id <= 4; id++) run8.addToRoster(id);
+        run8.clearTotems();
+        run8.addTotem(254, TotemRoleId_BONUS(), 1);
+
+        CHECK(shared.load("games/virus.lua"), "virus loads for the down test");
+        const LightAir_Game& vg = shared.descriptor();
+        CHECK(vg.drawnPlayerCount == 1, "virus draws patient zero");
+        if (vg.drawnPlayerCount == 1) *vg.drawnPlayerVars[0] = 2;
+        g_millisStep = 1;
+        run8.begin(vg, d8, in8, rad8, nullptr);
+
+        std::vector<LightAir_RadioTestTransport::SentEntry> touches;
+        auto step8 = [&](uint32_t ms) {
+            g_millis += ms; run8.update();
+            while (tr8.hasSent()) {
+                LightAir_RadioTestTransport::SentEntry e = tr8.popSent();
+                if (e.pkt.msgType == RadioMsg::MSG_TOTEM_TOUCH) touches.push_back(e);
+            }
+        };
+        step8(20);
+        CHECK(*vg.currentState == 1, "patient zero starts as the virus");
+
+        const uint8_t clean[4] = { 1, 0, 0, 0 };            // strength 1, BASE, tag 0
+        tr8.push(3, 0, 0, RadioMsg::MSG_LIT, 0x42, 70000, 0, clean, 4);
+        step8(20);
+        CHECK(*vg.currentState == 3, "a clean beam puts the virus down");
+
+        for (int i = 0; i < 29; i++) step8(1000);
+        CHECK(touches.empty(), "no touch while the down time runs");
+        for (int i = 0; i < 20 && touches.empty(); i++) step8(100);
+        CHECK(touches.size() == 1, "the wait over, the down virus touches");
+        if (!touches.empty()) {
+            const RadioPacket& t = touches[0].pkt;
+            CHECK(touches[0].dstMac[0] == 0xFF && t.resend == 0 && t.payloadLen == 2 &&
+                  t.payload[0] == 55 && t.payload[1] == TotemTouch::ACK,
+                  "the touch is a single-hop broadcast [55, ACK]");
+            CHECK(*vg.currentState == 3, "still down until a totem answers");
+            const uint8_t ack[2] = { TotemTouch::ACK, TotemRoleId_BONUS() };
+            tr8.push(254, 0, 0, RadioMsg::MSG_TOTEM_TOUCH + 1, 0x42, t.timestamp, 0, ack, 2);
+            step8(20);
+            step8(20);
+            CHECK(*vg.currentState == 1, "a totem's answer brings the virus back");
+        }
+        g_millisStep = 0;
     }
 
     printf(failures == 0 ? "\nLUAGAME HOST TESTS PASS\n" : "\n%d FAILURES\n", failures);
@@ -702,4 +2062,5 @@ int main() {
 // avoid dragging TotemRoleIds include ordering issues into the test
 #include "totem/TotemRoleIds.h"
 uint8_t TotemRoleId_BONUS() { return TotemRoleId::BONUS; }
+uint8_t TotemRoleId_MALUS() { return TotemRoleId::MALUS; }
 uint8_t TotemRoleId_CP()    { return TotemRoleId::CP; }

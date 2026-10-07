@@ -34,7 +34,17 @@ namespace RadioMsg {
 // Used by every game where players shine each other directly.
 
 // Unicast lit notification, sent by the shining player to the lit target.
-// Reply (0x11) payload[0] = ReplySubType (TAKEN / SHONE / DOWN / FRIEND).
+//   payload[0] = strength, in standard hits
+//   payload[1] = projector id (games/lib/projector.lua)
+//   payload[2] = role tag
+//   payload[3] = RSSI gate, positive magnitude (50 means -50 dBm; 0 = none)
+//   payload[4] = flags, never sent on the wire: AreaDefaults::HIT_FLAG_AREA
+//                marks a hit the area service built locally from a MSG_AREA
+//                beacon (see below).  A real LIT is 4 bytes or fewer, and
+//                the runner clears the flag on any LIT from the air.
+// Reply (0x11) payload[0] = the game's reply sub-type.  Two values are
+// fixed for every ruleset, because the firmware reads them (HitReply):
+// TAKEN = the hit landed, SHONE = it put the player out of play.
 constexpr uint8_t MSG_LIT           = 0x10;
 
 // End-game score broadcast, one packet per player.
@@ -46,7 +56,30 @@ constexpr uint8_t MSG_POINT_REPORT  = 0x14;
 // 0x16 is used by games/virus.lua (Lua-declared infection broadcast;
 // game files may claim even msgTypes outside the 0xA0/0xF0 blocks —
 // typeId + sessionToken isolate games on the wire).
-// Next available in 0x10 block: 0x18
+
+// Area-effect beacon (the area service in LightAir_GameRunner).  Broadcast
+// from where an area effect happens — by the player a splashing projector
+// just hit, or (later) by a totem or by game code — so that everyone in
+// radio range applies the effect graded by the beacon's RSSI.
+//   payload[0] = area policy id (declared with la.area_policy; every device
+//                in the session holds the same policies)
+//   payload[1] = originator: who the effect is credited to and whose team
+//                friendly fire is judged against (not the relayer)
+//   payload[2] = originator's team (0xFF = none)
+// Single-hop only (resend 0): a flooded beacon would reach the whole field,
+// and the radius IS the beacon's reach.  Never answered.  A hit built from
+// one never emits another, which is what stops a chain reaction.
+constexpr uint8_t MSG_AREA          = 0x18;
+
+// Area knock-out credit, unicast to the originator by a player an area
+// effect put out of play.  payload[0] = policy id, payload[1] = the reply
+// sub-type the knocked-out player's ruleset gave (HitReply::SHONE).  The
+// originator's runner acknowledges it (0x1B, which frees the sender's
+// pending slot) and delivers it to its ruleset as if that player had
+// answered one of its own LITs with SHONE — so each game scores an area
+// knock-out exactly as it scores a direct one.
+constexpr uint8_t MSG_AREA_CREDIT   = 0x1A;
+// Next available in 0x10 block: 0x1C
 
 // ── 0x50 block: totem-mediated game messages ────────────────────
 // Messages that travel between a player and a totem (not player→player).
@@ -126,7 +159,9 @@ constexpr uint8_t MSG_ROSTER        = 0xA2;
 constexpr uint8_t MSG_JOIN              = 0xA4;
 
 // Countdown-start broadcast from DM to all joined players.
-// payload[0] = countdown_secs / 10 (multiply by 10 to recover; 0 = no delay).
+// payload[0]   = countdown_secs / 10 (multiply by 10 to recover; 0 = no delay).
+// payload[1..] = one byte per drawn var (LightAir_Game::drawnPlayerVars, in
+//                order): the player ID the DM drew for it.
 constexpr uint8_t MSG_START_COUNTDOWN   = 0xA6;
 
 // End-of-game signal; forces any device still in-game into scoringState.
@@ -151,7 +186,55 @@ constexpr uint8_t MSG_TOTEM_BEACON  = 0xF0;
 // TotemDriver calls runner->onRoster(), then reset() on receipt.
 constexpr uint8_t MSG_TOTEM_ROSTER  = 0xF2;
 
+// Totem touch: a player telling the totems near it "I am here".  Broadcast,
+// single hop, scoped to the game like any game message.  An ACTIVE totem
+// handles it in its driver, before and outside its program, so a touch
+// never moves the role's state machine (claims, cooldowns, scores).
+//   payload[0] = RSSI gate, positive magnitude (55 means -55 dBm; 0 = none):
+//                the totem acts only if it reads the touch at least this
+//                strongly — proximity is judged where the totem stands
+//   payload[1] = action (TotemTouch::ACK, or reserved, see below)
+// Reply (0xF5), from each totem that acted: [action, the totem's roleId].
+// A touch nobody acted on gets no reply: the player's ruleset learns
+// "no totem here" from silence.
+constexpr uint8_t MSG_TOTEM_TOUCH   = 0xF4;
+// Next available in 0xF0 block: 0xF6
+
 } // namespace RadioMsg
+
+// The two LIT reply sub-types the firmware reads (see MSG_LIT).  Every
+// ruleset that takes hits answers with these for these two meanings — the
+// area service triggers on them and credits on SHONE — and keeps every
+// other meaning (immune, friendly, already out, no effect) off both.
+namespace HitReply {
+    constexpr uint8_t TAKEN = 1;   // the hit landed
+    constexpr uint8_t SHONE = 2;   // the hit put the player out of play
+}
+
+// Totem touch actions (RadioMsg::MSG_TOTEM_TOUCH payload[1]).
+namespace TotemTouch {
+    // Acknowledge: play the arrival chaser (TotemUIEvent::Respawn, one dot
+    // around the strip in the toucher's colour) and reply.  The chaser plays
+    // only while the strip shows no other one-shot, so a touch never delays
+    // what the role itself animates; the reply goes out regardless.
+    constexpr uint8_t ACK = 0;
+    // Codes from here up are reserved for the totem's program — a touch that
+    // changes a cooldown or forces a state belongs to the role, which owns
+    // that state.  Until TotemVM can react to a touch, a totem ignores them
+    // (no animation, no reply).
+    constexpr uint8_t FIRST_PROGRAM = 1;
+}
+
+// Area effects (LightAir_GameRunner's area service; policies are declared
+// by game files and libraries with la.area_policy).
+namespace AreaDefaults {
+    constexpr uint8_t  MAX_POLICIES     = 8;    // per game
+    constexpr uint8_t  MAX_BANDS        = 4;    // RSSI bands per policy
+    constexpr uint8_t  HIT_FLAG_AREA    = 0x01; // MSG_LIT payload[4]: a locally built area hit
+    // One beacon per hit: a projector-triggered emission inside this window
+    // of the previous one is dropped, so a burst of hits cannot flood.
+    constexpr uint16_t EMIT_MIN_GAP_MS  = 250;
+}
 
 // ---------------------------------------------------------------
 // FlagEvent — payload[0] sub-types of MSG_FLAG_EVENT (0x50).
@@ -203,6 +286,34 @@ namespace EnlightDefaults {
     constexpr float    SAT_DITCH_FRAC  = 0.95f; // ditch period if any channel has >95% saturated samples
     constexpr float    SAT_SWITCH_FRAC = 0.02f; // switch to low-power PDM if >2% of a cycle's active samples saturated
     constexpr float    LOW_POWER_FACTOR = 0.1f; // amplitude scale for the dim PDM buffer
+    // Retroreflector return falls as 1/x^RANGE_FALLOFF_EXP.  One reference
+    // measurement at a known distance therefore fixes the whole curve, which
+    // is what lets classify() report a distance estimate in metres.
+    // Re-fit against measurement by editing this constant alone.
+    constexpr float    RANGE_FALLOFF_EXP = 3.0f;
+    // Distance, in metres, at which calibration step 1 captures the reference
+    // return.  Changing it invalidates stored refFar*/refDistM pairs only if
+    // the operator does not re-calibrate — refDistM travels with the values.
+    constexpr uint8_t  CAL_REF_DIST_M  = 5;
+}
+
+// ---------------------------------------------------------------
+// Projector optical limits
+//
+// The projector object lives in games/lib/projector.lua and clamps its own
+// balance values at load.  Only the numbers that reach the hardware are
+// bounded here, because only these can put Enlight into a bad state; they
+// are re-applied by the la.shine_config verb whatever a game file asks for.
+//
+// MAX_CYCLES is not a hardware limit — nothing in Enlight binds below
+// ~8000 (the uint16_t millisecond cap in triggerEnlight()).  100 matches
+// the ceiling EnlightTestMode already uses and is a typo guard, not a
+// recommendation: the playable range is far lower, bounded by AFE on-time
+// and by how long a player can hold a target steady.
+// ---------------------------------------------------------------
+namespace ProjectorLimits {
+    constexpr uint16_t MIN_CYCLES      = 1,   MAX_CYCLES      = 100;
+    constexpr uint16_t MIN_COOLDOWN_MS = 0,   MAX_COOLDOWN_MS = 10000;
 }
 
 // ---------------------------------------------------------------
@@ -216,6 +327,13 @@ struct RadioConfig {
 namespace RadioDefaults {
     constexpr uint16_t REPLY_TIMEOUT_MS = 2000;
     constexpr uint8_t  CHANNEL          = 1;
+    // Sanity bounds on a received RSSI.  A real frame is negative dBm and
+    // no weaker than the radio's own floor; anything outside that is a
+    // driver artefact, and the rulesets' proximity gates (`rssi < threshold
+    // -> reject`) would read it as "touching the antenna" and all open at
+    // once.  Out-of-range readings become RSSI_NONE, which fails every gate.
+    constexpr int8_t   RSSI_FLOOR_DBM   = -110;
+    constexpr int8_t   RSSI_NONE        = -128;
 }
 
 // ---------------------------------------------------------------
@@ -240,8 +358,19 @@ namespace InputDefaults {
 // Display configuration
 // ---------------------------------------------------------------
 namespace DisplayDefaults {
-    constexpr uint8_t MAX_SETS          = 32;
-    constexpr uint8_t MAX_BINDINGS      = 8;
+    // One binding set per game state that shows anything, plus one empty set
+    // the runner freezes the screen with after scoring.  So MAX_SETS is in
+    // practice the cap on how many states may carry a display: 12 leaves room
+    // for 11, against LuaDefaults::MAX_STATES = 8 today.
+    //
+    // The sets are the largest single object in the firmware
+    // (MAX_SETS × MAX_BINDINGS × 76 B) and these boards have no PSRAM, so
+    // both numbers are sized to what a ruleset can reach rather than left
+    // round: the busiest stock game uses 5 sets of 4 bindings.
+    constexpr uint8_t MAX_SETS          = 12;
+    // The content area is CONTENT_HEIGHT / CELL_HEIGHT rows of CELL_COLS
+    // cells — four on this glass — so 6 is already headroom.
+    constexpr uint8_t MAX_BINDINGS      = 6;
     constexpr uint8_t SCREEN_WIDTH      = 128;
     constexpr uint8_t SCREEN_HEIGHT     = 64;
     constexpr uint8_t TRAY_HEIGHT       = 30;
@@ -274,13 +403,26 @@ namespace GameDefaults {
     constexpr uint8_t  MSG_JOIN               = RadioMsg::MSG_JOIN;
     constexpr uint8_t  MSG_START_COUNTDOWN    = RadioMsg::MSG_START_COUNTDOWN;
     constexpr uint8_t  COUNTDOWN_DEFAULT_S    = 20;   // default pre-game countdown in seconds
+    // A config var may list its values with a label each (ConfigVar
+    // choices): at most this many per var, labels of up to 8 characters.
+    constexpr uint8_t  MAX_CONFIG_CHOICES      = 8;
+    constexpr uint8_t  CONFIG_CHOICE_LABEL_LEN = 9;   // 8 chars + null
+    // Game vars the DM fills with a random joined player at Start
+    // (LightAir_Game::drawnPlayerVars), each sent as one byte in
+    // MSG_START_COUNTDOWN.
+    constexpr uint8_t  MAX_DRAWN_VARS          = 4;
     constexpr uint32_t ROSTER_WINDOW_MS  = 3000; // ms to collect presence broadcasts during discovery
     constexpr uint32_t ROSTER_RETRY_MS        = 1000; // ms between own re-broadcasts during discovery
     constexpr uint32_t PRESTART_BROADCAST_MS  = 2000; // ms between MSG_ROSTER broadcasts on pre-start screen
     constexpr uint32_t LOOP_MS           = 10;   // target game-loop duration in ms
     constexpr uint8_t  RADIO_OUT_MAX     = 4;    // max queued outgoing messages per loop
     constexpr uint8_t  RADIO_OUT_PAYLOAD = 237;  // max payload bytes per queued message (= RADIO_MAX_PAYLOAD)
-    constexpr uint8_t  MAX_GAMES         = 50;   // max games in the menu (manifests are lightweight)
+    // Max games in the menu.  Each slot costs a manifest plus a
+    // placeholder descriptor whether or not a file fills it, and the
+    // projectors have no PSRAM — every byte of that table is internal RAM
+    // taken from the one Lua state that has to fit beside it.  16 is twice
+    // the stock catalogue, which is room to add without paying for 50.
+    constexpr uint8_t  MAX_GAMES         = 16;
     constexpr uint8_t  RADIO_REPLY_MAX   = 4;    // max queued reply messages per loop
     constexpr uint8_t  RADIO_REPLY_PAYLOAD = 237; // max payload bytes per queued reply (0xF1 carries TotemVM programs)
     constexpr uint8_t  MAX_WINNER_VARS   = 2;    // max entries in a winnerVars[] table (primary + tie-breaker)
@@ -289,6 +431,10 @@ namespace GameDefaults {
     constexpr uint8_t  MAX_PARTICIPANTS         = 28;   // max entries for totems; players use MAX_PLAYER_ID
     constexpr uint32_t TOTEM_BEACON_INTERVAL_MS = 500;  // ms between MSG_TOTEM_BEACON broadcasts
     constexpr uint8_t  MSG_END_GAME             = RadioMsg::MSG_END_GAME;
+    // End screen: how long A must be held, alone, to restart the device.
+    // Longer than the A+B menu chord's long-press on purpose, so the two
+    // cannot be confused while the second key is still on its way down.
+    constexpr uint32_t RESTART_HOLD_MS          = 2000;
 }
 // ---------------------------------------------------------------
 // Lua game engine configuration
@@ -301,15 +447,19 @@ namespace LuaDefaults {
     constexpr uint8_t  MAX_TEXT_LEN    = 16;     // capacity of one text slot (incl. NUL)
     constexpr uint8_t  MAX_VAR_ID      = 20;     // max chars of a var/config id
     constexpr uint8_t  MAX_CFG_NAME    = 13;     // menu label buffer (12 chars + NUL)
+    constexpr uint8_t  MAX_CHOICE_POOL = 32;     // config choices (value + label) per game, all vars
     constexpr uint8_t  MAX_RULES       = 16;     // state-transition rules per game
     constexpr uint8_t  MAX_MSG_RULES   = 24;     // (state, msgType) handler pairs
     constexpr uint8_t  MAX_MONITOR     = 16;     // monitor entries per game
     constexpr uint8_t  MAX_STATES      = 8;      // game states (mask fits uint32)
     constexpr uint8_t  MAX_COUNTDOWNS  = 4;      // vars with countdown_in per game
+    constexpr uint8_t  MAX_HOLD_ACCEPT = 8;      // msgTypes in a game's hold.accept list
     constexpr uint8_t  MAX_GAME_NAME   = 16;     // display name buffer (15 + NUL)
     constexpr uint32_t INSTR_BUDGET    = 200000; // Lua instructions per callback
-    constexpr const char* GAMES_DIR    = "/games";
-    constexpr const char* LIB_DIR      = "/games/lib";
+    constexpr const char* GAMES_DIR    = "/games";        // parent, mkdir only
+    constexpr const char* STOCK_DIR    = "/games/stock";   // firmware-owned, HTTP-unreachable
+    constexpr const char* CUSTOM_DIR   = "/games/custom";  // user rulesets, HTTP read/write
+    constexpr const char* LIB_DIR      = "/games/lib";     // firmware-owned, HTTP-unreachable
 }
 
 // ---------------------------------------------------------------
@@ -348,6 +498,11 @@ namespace TotemDefs {
     constexpr uint8_t MAX_TOTEM_ID    = 254;
     constexpr uint8_t MAX_TOTEMS      = 16;   // IDs 239–254
     constexpr uint8_t MAX_TOTEM_ROLES = 8;    // max totem roles one game declares
+    // Per-totem options (Totems submenu, O key): e.g. which bonus a BONUS
+    // totem gives.  Labels are shared across all of one game's roles.
+    constexpr uint8_t MAX_ROLE_OPTIONS    = 12;  // options one role may declare
+    constexpr uint8_t MAX_OPTION_LABELS   = 24;  // labels one game may declare in total
+    constexpr uint8_t OPTION_LABEL_LEN    = 9;   // 8 chars + null
 
     constexpr uint8_t totemIndex(uint8_t id)   { return MAX_TOTEM_ID - id; }
     constexpr uint8_t idFromIndex(uint8_t idx) { return MAX_TOTEM_ID - idx; }
@@ -378,37 +533,41 @@ namespace TotemDefs {
 // of the totem strip changes; kNumLeds is the single source of truth for
 // strip length (totem_pins.h::TOTEM_NUM_LEDS derives from it).
 //
-// Geometry (rectangle outline + center spine):
-//   short1 = 0,1   long1 = 2,3,4   short2 = 5,6   long2 = 7,8,9
-//   centerline (spine through the middle) = 10,11,12; LED 11 = exact center.
-//   long2 runs antiparallel to long1, so long2's last LED (9) sits beside
-//   long1's first LED (2).
+// Geometry (0-based indices; physical LED number = index + 1):
+//   centerline (spine) = 0,1,2, bottom to top; index 1 = exact center.
+//   right  = 3,4,5  (top to bottom)
+//   bottom = 6,7    (right to left)
+//   left   = 8,9,10 (bottom to top)
+//   top    = 11,12  (left to right)
+//   The perimeter therefore runs as a clockwise loop starting at the top
+//   of the right side.
 // ---------------------------------------------------------------
 namespace TotemLedLayout {
-    constexpr uint8_t kPerimeter[]     = { 0,1,2,3,4,5,6,7,8,9 };
+    constexpr uint8_t kPerimeter[]     = { 3,4,5,6,7,8,9,10,11,12 };
     constexpr uint8_t kPerimeterCount  = sizeof(kPerimeter) / sizeof(kPerimeter[0]);
 
-    constexpr uint8_t kCenterLine[]    = { 10,11,12 };
+    constexpr uint8_t kCenterLine[]    = { 0,1,2 };
     constexpr uint8_t kCenterLineCount = sizeof(kCenterLine) / sizeof(kCenterLine[0]);
 
-    constexpr uint8_t kCenter          = 11;  // single LED, rectangle center
+    constexpr uint8_t kCenter          = 1;  // single LED, rectangle center
 
     // Named sides — kept as documentation of the wiring; no current effect
     // consumes them, but they make the geometry self-describing if a
     // side-anchored effect is added later.
-    constexpr uint8_t kSideShort1[]    = { 0,1 };
-    constexpr uint8_t kSideLong1[]     = { 2,3,4 };
-    constexpr uint8_t kSideShort2[]    = { 5,6 };
-    constexpr uint8_t kSideLong2[]     = { 7,8,9 };
+    constexpr uint8_t kSideRight[]     = { 3,4,5 };
+    constexpr uint8_t kSideBottom[]    = { 6,7 };
+    constexpr uint8_t kSideLeft[]      = { 8,9,10 };
+    constexpr uint8_t kSideTop[]       = { 11,12 };
 
-    // "Rungs" level across the rectangle's width, short1-end to short2-end;
-    // long2 is indexed in reverse because it runs antiparallel to long1.
+    // "Rungs" level across the rectangle's width, bottom to top; the left
+    // side is indexed in reverse because it runs top-ward while the right
+    // side runs bottom-ward.
     // Used by the VerticalScan effect (ping-pong sweep along the length).
-    constexpr uint8_t kStation0[]      = { 0, 1 };
-    constexpr uint8_t kStation1[]      = { 2, 9, 10 };
-    constexpr uint8_t kStation2[]      = { 3, 8, 11 };
-    constexpr uint8_t kStation3[]      = { 4, 7, 12 };
-    constexpr uint8_t kStation4[]      = { 5, 6 };
+    constexpr uint8_t kStation0[]      = { 6, 7 };
+    constexpr uint8_t kStation1[]      = { 0, 5, 8 };
+    constexpr uint8_t kStation2[]      = { 1, 4, 9 };
+    constexpr uint8_t kStation3[]      = { 2, 3, 10 };
+    constexpr uint8_t kStation4[]      = { 11, 12 };
     constexpr uint8_t kStationCount    = 5;
 
     // Strip length.  Derived from the hardware pin header (totem_pins.h,

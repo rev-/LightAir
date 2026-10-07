@@ -1,5 +1,6 @@
 #include "EnlightTestMode.h"
 #include "../config.h"
+#include <ArduinoLog.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -172,6 +173,11 @@ void EnlightTestMode::run() {
             satPct = (raw.totalSamples > 0)
                 ? (uint32_t)(raw.satCount * 100u / raw.totalSamples) : 0u;
             usedLP = _e.usedLowPower();
+            // The switch to low power rewrites the LED buffer between two
+            // cycles; this is what that one gap grew by, for the bench.
+            if (usedLP)
+                Log.infoln("Enlight test: low power, LED buffer rewrite %d us",
+                           (int)_e.lowPowerSwitchUs());
 
             if (res.status == EnlightStatus::PLAYER_HIT &&
                 res.id < PlayerDefs::MAX_PLAYER_ID) {

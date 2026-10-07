@@ -5,7 +5,8 @@
 -- migration; the original is in git history).
 --
 -- Energy is simultaneously ammo and life total: shining costs 1,
--- being lit costs lit_cost, and a passive drain eats 1 energy every
+-- being lit costs lit_cost per unit of the hit's strength (an area
+-- hit: per unit of its band), and a passive drain eats 1 energy every
 -- (10 s / drain_rate).  Reaching 0 puts you out until the timed
 -- respawn.  Eliminating another player refills you by start_energy
 -- (uncapped) and grants a point; draining yourself to 0 costs one.
@@ -17,21 +18,55 @@
 -- always meant.
 -- ================================================================
 
-local std = la.lib("std")
+local std  = la.lib("std")
+local proj = la.lib("projector")
 
 local S   = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg
-local R   = { TAKEN = 1, SHONE = 2, DOWN = 3 }
+-- TAKEN and SHONE are the firmware's (la.hit): its area service reads them.
+local R   = { TAKEN = la.hit.TAKEN, SHONE = la.hit.SHONE, DOWN = 3 }
 
-local PICKUP_RSSI = -57         -- ~2 m: BONUS/MALUS claim gate
+-- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
+-- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
+local PICKUP_RSSI = -55         -- ~2 m: BONUS/MALUS claim gate
 
 -- ---- Private state ------------------------------------------------
 local pending_shone    = false   -- fatal lit received this cycle
-local shone_by         = nil     -- short name of whoever put us down
 local pending_depleted = false   -- drain zeroed energy this cycle
 local respawn_at       = 0
 local last_drain       = 0
 local drain_interval   = 1000
+
+-- Outflow's projector: energy is ammo AND life total, so it never
+-- refills on its own (recharge = "none") — it comes back only by
+-- eliminating someone or by respawning.  The optics are the ones this
+-- game always set by hand.
+--
+-- shared_pool: a powered projector from a BONUS totem draws from this same
+-- pool — the player's life — instead of bringing its own.  Picking one up
+-- heals nothing, holding FAST recharges nothing, and each brings only its
+-- optics, its strength and its feedback.  Going out drops it (proj.strip).
+proj.define{
+  shared_pool = true,
+  vars     = { energy = "energy", spent = "energy_spent", icon = "energy_icon" },
+  profiles = { { id = 0, name = "OUTFLOW",
+                 cycles = 20, cooldown_ms = 20,
+                 cost = 1, max_energy = "start_energy",
+                 recharge = "none", strength = 1 } },
+}
+
+-- This player's starting energy — Outflow's lives.  What a respawn
+-- restores and the S of a BONUS LIFE (energy += S, capped at 2*S); one
+-- resolver for both, so a future per-role value changes it here only.
+local function my_start_energy(vars) return vars.start_energy end
+
+-- What a claimed BONUS / MALUS totem does, picked per totem by the DM.
+-- No lives: LIFE works on energy.  A projector bonus puts it in hand.
+-- Who put us down, for the tray: a player's short name, or "TOTEM" for
+-- a MALUS LIFE.  Declared before the pickup helper, whose hook sets it.
+local shone_by = nil
+local pickup = std.pickup_effect{ proj = proj, start_energy = my_start_energy,
+                                  on_malus_life = function() shone_by = "TOTEM" end }
 
 local function game_over()
   la.show("Game over!", 3000)
@@ -58,16 +93,30 @@ return {
   vars = {
     { id = "energy",       default = 100 },
     { id = "time_left",    default = 900, countdown_in = { S.IN_GAME, S.OUT_GAME } },
+    -- The respawn wait, for the OUT_GAME loading bar: written by
+    -- std.respawn_wait() when the wait starts.
+    { id = "respawn_zero", default = 0 },
+    { id = "respawn_from", default = 0 },
+    { id = "respawn_ms",   default = 0 },
     { id = "points",       default = 100 },   -- start at 100; self-depletion costs 1
     { id = "shone_times",  default = 0   },
     { id = "depletions",   default = 0   },
     { id = "energy_spent", default = 0   },
+    -- The icon of the projector in hand (an la.icons value), written by
+    -- projector.lua and read by the energy cell: FAST, LONG, … replace
+    -- the standard energy glyph while they are the one in use.
+    { id = "energy_icon",  default = la.icons.ENERGY },
   },
 
   monitor = {
-    { var = "energy",       icon = "ENERGY", col = 0, row = 0, states = { S.IN_GAME } },
+    { var = "energy",       icon = "ENERGY", col = 0, row = 0, states = { S.IN_GAME },
+      icon_var = "energy_icon" },
     { var = "points",       icon = "SCORE",  col = 1, row = 0, states = { S.IN_GAME } },
     { var = "time_left",    icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
+    -- Out: a bar filling over the respawn time, from the instant the
+    -- wait began.
+    { var = "respawn_zero", icon = "DOWN",   col = 1, row = 0, states = { S.OUT_GAME },
+      bar = true, bar_at = 0, fill_var = "respawn_ms", start_var = "respawn_from" },
     { var = "shone_times",  icon = "LIFE",   col = 1, row = 1, states = { S.IN_GAME } },
     { var = "game_time",    icon = "TIME",   col = 0, row = 0, states = { S.GAME_END } },
     { var = "points",       icon = "SCORE",  col = 1, row = 0, states = { S.GAME_END } },
@@ -81,14 +130,15 @@ return {
   },
 
   totem_slots = {
-    { role = "BONUS", min = 0, max = 16 },
-    { role = "MALUS", min = 0, max = 16 },
+    -- LIFE (+start_energy, capped at twice it) and the powered
+    -- projectors, which share the life pool (see proj.define above).
+    { role = "BONUS", min = 0, max = 16, options = proj.bonus_options() },
+    { role = "MALUS", min = 0, max = 16, options = std.malus_options() },
   },
   teams = 0,
   time_left_var = "time_left",
 
   on_begin = function(vars)
-    vars.energy    = vars.start_energy
     vars.time_left = vars.game_time
     vars.points       = 100
     vars.shone_times  = 0
@@ -100,7 +150,7 @@ return {
     respawn_at       = 0
     last_drain       = la.now()
     drain_interval   = (vars.drain_rate > 0) and (10000 // vars.drain_rate) or 1000
-    la.shine_config{ cooldown_ms = 20, reps = 20 }
+    proj.reset(vars)              -- fills the pool and pushes the optics
     la.ui("GameStart")
   end,
 
@@ -108,11 +158,14 @@ return {
     [S.IN_GAME] = {
       -- A pickup totem gives itself to whoever answers, so only answer
       -- from arm's length: the claim has to mean "I am standing at it".
-      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
-      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI },
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = function(vars, pkt)
-        if vars.energy > vars.lit_cost then
-          vars.energy = vars.energy - vars.lit_cost
+        -- A hit weighs its strength (STRONG 3, an area hit its band), as
+        -- in every game; here the unit is lit_cost energy, not a life.
+        local cost = vars.lit_cost * std.absorbed(pkt)
+        if vars.energy > cost then
+          vars.energy = vars.energy - cost
           la.show("Lit by " .. la.player_short(pkt.sender), 2000)
           la.ui("GotLit")
           return R.TAKEN
@@ -155,13 +208,14 @@ return {
       action = function(vars)
         vars.shone_times = vars.shone_times + 1
         pending_shone = false
-        respawn_at    = la.now() + vars.respawn_secs * 1000
+        respawn_at    = std.respawn_wait(vars, vars.respawn_secs)
         -- Two persistent lines for the whole wait, credit on top: who put
         -- us down, and what to do about it.  The "Down" cue is the moment
         -- feedback, so no transient line competes for the tray.  Here the way back is the clock,
         -- not a base, so the instruction says so.
         la.show("Wait to respawn", 0)
         la.show("LIT by " .. (shone_by or "?"), 0)
+        proj.strip(vars)            -- going out loses powered projectors and DIM
         la.ui("Down")
       end },
     { from = S.IN_GAME, to = S.OUT_GAME,
@@ -170,10 +224,11 @@ return {
         vars.depletions = vars.depletions + 1
         vars.points     = vars.points - 1
         pending_depleted = false
-        respawn_at       = la.now() + vars.respawn_secs * 1000
+        respawn_at       = std.respawn_wait(vars, vars.respawn_secs)
         -- Nobody to credit: the drain did it.
         la.show("Wait to respawn", 0)
         la.show("Drained out!", 0)
+        proj.strip(vars)            -- going out loses powered projectors and DIM
         la.ui("Down")
       end },
     { from = S.OUT_GAME, to = S.GAME_END,
@@ -182,7 +237,7 @@ return {
     { from = S.OUT_GAME, to = S.IN_GAME,
       when   = function() return la.now() >= respawn_at end,
       action = function(vars)
-        vars.energy = vars.start_energy
+        vars.energy = my_start_energy(vars)
         last_drain  = la.now()
         shone_by    = nil
         la.clear_tray()             -- drop the credit and the instruction
@@ -202,16 +257,12 @@ return {
       end
 
       -- A confirmed lit target → notify it over radio.
-      local target = la.shine_lit()
-      if target then la.send(target, MSG.LIT) end
+      local target = proj.result(vars)
+      if target then la.send(target, MSG.LIT, proj.payload(vars)) end
 
-      -- Shine while the trigger is down.  No recharge in Outflow:
-      -- energy only returns by eliminating someone or respawning.
-      if la.trigger_down(1) and vars.energy > 0 and la.shine() then
-        vars.energy       = vars.energy - 1
-        vars.energy_spent = vars.energy_spent + 1
-        la.ui_enlight(la.shine_ms())
-      end
+      -- Shine while the trigger is down; the projector owns the cost and
+      -- the fact that nothing comes back on its own.
+      proj.tick(vars)
 
       -- Depletion from any cause — unless a fatal lit already claimed
       -- this cycle (the two exits stay mutually exclusive).

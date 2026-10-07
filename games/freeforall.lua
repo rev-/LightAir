@@ -1,9 +1,12 @@
 -- ================================================================
 -- LightAir game: Free For All
 --
--- The reference game file: every idiom of the Lua game format
--- (docs/lua-games-design.md) spelled out in full, with no library
--- calls.  Copy this file to start a new game.
+-- The reference game file: the simplest complete ruleset, with every
+-- section of the Lua game format (docs/lua-games-design.md) commented.
+-- It is built like every other game, on the standard library
+-- (games/lib/std.lua) and the projector (games/lib/projector.lua), so
+-- a fix to a shared mechanic — hit strength, area hits, pickups —
+-- reaches it like the rest.  Copy this file to start a new game.
 --
 -- Every player shines every other player.  Shone players respawn
 -- automatically after respawn_secs.  Most points wins; tie-break
@@ -27,19 +30,51 @@ local S = { IN_GAME = 0, OUT_GAME = 1, GAME_END = 2 }
 local MSG = la.msg          -- MSG.LIT, MSG.SCORE_COLLECT, MSG.BONUS_BEACON, ...
 
 -- Reply sub-types (payload[0] of the 0x11 reply) — game-private.
-local R = { TAKEN = 1, SHONE = 2, DOWN = 3, IMMUNE = 4 }
+-- TAKEN and SHONE are the firmware's (la.hit): its area service reads them.
+local R = { TAKEN = la.hit.TAKEN, SHONE = la.hit.SHONE, DOWN = 3, IMMUNE = 4 }
 
-local IMMUNITY_MS = 3000
-local PICKUP_RSSI = -57     -- ~2 m: BONUS/MALUS claim gate
+-- The standard library: the recurring game patterns (the hit ladder,
+-- immunity, pickups, the respawn bar, the totem programs), built only
+-- out of la.* verbs.  la.lib loads a library once and caches it.
+local std = la.lib("std")
+
+-- Calibrated from measured RSSI-vs-distance (RSSI(d) = -46 - 20*log10(d),
+-- d in metres — fits -60 dBm @ 5 m and -70 dBm @ 16 m).
+local PICKUP_RSSI = -55     -- ~2 m: BONUS/MALUS claim gate
+
+-- The projector is the only route to Enlight, for every ruleset: it owns
+-- the trigger, the energy a beam costs, the recharge, the reach and what a
+-- hit weighs on the wire.  Declaring nothing but the baseline gives one
+-- energy per beam and a full refill after the configured idle, both read
+-- from this game's own config (start_energy, recharge_secs).
+local proj = la.lib("projector")
+proj.define{ vars = { energy = "energy", spent = "energy_spent",
+                      reload = "reload", reload_ms = "reload_ms",
+                      icon = "energy_icon" } }
 
 -- ---- Private game state -----------------------------------------
 -- Anything that is NOT shown on the LCD, NOT edited in the menu and
 -- NOT part of winner election can live as plain Lua locals.
 local respawn_at         = 0      -- la.now() when respawn fires
-local shone_by           = nil    -- short name of whoever put us down
-local lit_at             = {}     -- [senderId] = la.now() of last accepted lit
-local trigger_was_active = false
-local release_at         = 0
+local shone_by           = nil    -- who put us down: a player's short name, or "TOTEM"
+-- After a player's beam lands, the next one from the same player is
+-- refused for 3 s: one burst cannot empty a pool of lives.
+local imm                = std.immunity(3000)
+
+-- This player's starting lives: what on_begin loads, what a respawn
+-- restores, and the S of a BONUS LIFE.  One resolver for all three, so
+-- when players get roles with their own starting lives only this changes.
+local function my_start_lives(vars) return vars.start_lives end
+
+-- What a claimed pickup does.  The DM picks each BONUS / MALUS totem's
+-- effect in the Totems submenu (O key), from the `options` lists in
+-- totem_slots below, and std.pickup_effect applies the one the claimed
+-- totem carries: BONUS LIFE (+S lives, capped at 2*S), a powered
+-- projector, MALUS LIFE (out of lives) or MALUS DIM.  A MALUS LIFE has
+-- no player to credit, so the tray says the totem did it.
+local pickup = std.pickup_effect{ proj = proj, lives = "lives",
+                                  start_lives = my_start_lives,
+                                  on_malus_life = function() shone_by = "TOTEM" end }
 
 return {
   api     = 1,                    -- binding version this file targets
@@ -57,8 +92,8 @@ return {
   config = {
     { id = "start_lives",   name = "Lives",    min = 1,  max = 5,   step = 1,  default = 3   },
     { id = "respawn_secs",  name = "Respawn",  min = 5,  max = 120, step = 5,  default = 30  },
-    { id = "start_energy",  name = "Energy",   min = 10, max = 100, step = 10, default = 50  },
-    { id = "recharge_secs", name = "Recharge", min = 0,  max = 20,  step = 5,  default = 10  },
+    { id = "start_energy",  name = "Energy",   min = 10, max = 60,  step = 5,  default = 30  },
+    { id = "recharge_secs", name = "Recharge", min = 5,  max = 20,  step = 5,  default = 10  },
     { id = "game_time",     name = "Time",     min = 60, max = 900, step = 60, default = 900 },
   },
 
@@ -71,10 +106,24 @@ return {
   -- replaces the hand-rolled tickGameTime() of the C++ rulesets.
   vars = {
     { id = "lives",        default = 3  },
-    { id = "energy",       default = 50 },
+    { id = "energy",       default = 30 },
     { id = "time_left",    default = 900, countdown_in = { S.IN_GAME, S.OUT_GAME } },
+    -- The respawn wait, for the OUT_GAME loading bar: written when
+    -- the wait starts.
+    { id = "respawn_zero", default = 0 },
+    { id = "respawn_from", default = 0 },
+    { id = "respawn_ms",   default = 0 },
     { id = "points",       default = 0  },
     { id = "energy_spent", default = 0  },
+    -- The projector's reload clock, read by the energy cell's bar:
+    -- reload = millis the wait began (0 = not waiting), reload_ms =
+    -- how long it takes.  Both written by projector.lua.
+    { id = "reload",       default = 0 },
+    { id = "reload_ms",    default = 0 },
+    -- The icon of the projector in hand (an la.icons value), written by
+    -- projector.lua and read by the energy cell: FAST, LONG, … replace
+    -- the standard energy glyph while they are the one in use.
+    { id = "energy_icon",  default = la.icons.ENERGY },
     { id = "shone_times",  default = 0  },
   },
 
@@ -82,8 +131,18 @@ return {
   monitor = {
     -- in-game screen
     { var = "lives",       icon = "LIFE",   col = 0, row = 0, states = { S.IN_GAME } },
-    { var = "energy",      icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME } },
+    -- Energy, and — while the pool is empty — a bar filling over the
+    -- recharge.  The projector owns both the duration and the instant
+    -- the wait began, because a refill starts at the trigger's RELEASE,
+    -- not when the pool hit zero.
+    { var = "energy",      icon = "ENERGY", col = 1, row = 0, states = { S.IN_GAME },
+      bar = true, bar_at = 0, fill_var = "reload_ms", start_var = "reload",
+      icon_var = "energy_icon" },
     { var = "time_left",   icon = "TIME",   col = 0, row = 1, states = { S.IN_GAME, S.OUT_GAME } },
+    -- Out: a bar filling over the respawn time, from the instant the
+    -- wait began.
+    { var = "respawn_zero", icon = "DOWN",   col = 1, row = 0, states = { S.OUT_GAME },
+      bar = true, bar_at = 0, fill_var = "respawn_ms", start_var = "respawn_from" },
     { var = "points",      icon = "SCORE",  col = 1, row = 1, states = { S.IN_GAME } },
     -- end-game screen (config vars can be monitored too)
     { var = "game_time",    icon = "TIME",   col = 0, row = 0, states = { S.GAME_END } },
@@ -100,8 +159,9 @@ return {
 
   -- ---- Totem requirements (assigned by the host in the menu) -------
   totem_slots = {
-    { role = "BONUS", min = 0, max = 16 },
-    { role = "MALUS", min = 0, max = 16 },
+    -- options: what the DM can pick per totem with O (see `pickup` above).
+    { role = "BONUS", min = 0, max = 16, options = proj.bonus_options() },
+    { role = "MALUS", min = 0, max = 16, options = std.malus_options() },
   },
   teams = 0,                       -- teamless game
 
@@ -113,17 +173,15 @@ return {
   -- Called by the runner after the (C++-owned) warmup countdown, once
   -- config values have been distributed and applied.
   on_begin = function(vars)
-    vars.lives     = vars.start_lives
-    vars.energy    = vars.start_energy
+    vars.lives     = my_start_lives(vars)
     vars.time_left = vars.game_time
     vars.points        = 0
     vars.energy_spent  = 0
     vars.shone_times   = 0
     respawn_at         = 0
     shone_by           = nil
-    lit_at             = {}
-    trigger_was_active = false
-    release_at         = 0
+    imm.reset()
+    proj.reset(vars)                -- fills the pool and pushes the optics
     la.ui("GameStart")
   end,
 
@@ -134,36 +192,25 @@ return {
   -- (BASE, BONUS, MALUS) hears only the players that acted on it.
   on_message = {
     [S.IN_GAME] = {
-      -- A pickup totem gives itself to whoever answers, so only answer from
-      -- arm's length.  std.pickup_claim does exactly this; spelled out here
-      -- to stay in this file's style.
-      [MSG.BONUS_BEACON] = function(vars, pkt)
-        if pkt.len < 1 or pkt:byte(1) ~= 0 then return end   -- 0 = ready
-        if pkt.rssi < PICKUP_RSSI then return end
-        return la.my_id()
-      end,
-      [MSG.MALUS_BEACON] = function(vars, pkt)
-        if pkt.len < 1 or pkt:byte(1) ~= 0 then return end
-        if pkt.rssi < PICKUP_RSSI then return end
-        return la.my_id()
-      end,
-      [MSG.LIT] = function(vars, pkt)
-        local t = lit_at[pkt.sender]
-        if t and la.now() - t < IMMUNITY_MS then
-          return R.IMMUNE
-        end
-        vars.lives = vars.lives - 1
-        lit_at[pkt.sender] = la.now()
-        if vars.lives > 0 then
-          la.ui("GotLit")
-          return R.TAKEN
-        end
-        -- Last life: this packet is the only place the shiner's id is in
-        -- hand — the state rule that follows sees no packet — so the
-        -- name for the tray is taken here.
-        shone_by = la.player_short(pkt.sender)
-        return R.SHONE          -- state rule below moves us to OUT_GAME
-      end,
+      -- A pickup totem gives itself to whoever answers, so only answer
+      -- from arm's length: the claim has to mean "I am standing at it".
+      -- The answer (this player's id) is what the totem animates and
+      -- starts its cooldown on.
+      [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
+      [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
+      -- A LIT costs its strength in lives (STRONG weighs 3), unless the
+      -- shooter's last beam landed inside the immunity window.  An area hit
+      -- (pkt.area: someone else's SPLASH landing nearby) costs the band's
+      -- strength and ignores the window.  The last life answers SHONE; the
+      -- state rule below moves us out.
+      [MSG.LIT] = std.lit_target{
+        lives = "lives", immunity = imm,
+        reply = { taken = R.TAKEN, shone = R.SHONE, immune = R.IMMUNE },
+        -- This packet is the only place the shiner's id is in hand — the
+        -- state rule that follows sees no packet — so the name for the
+        -- tray is taken here.
+        on_shone = function(_, pkt) shone_by = la.player_short(pkt.sender) end,
+      },
     },
     [S.OUT_GAME] = {
       [MSG.LIT] = function() return R.DOWN end,
@@ -201,13 +248,15 @@ return {
       when   = function(vars) return vars.lives <= 0 end,
       action = function(vars)
         vars.shone_times = vars.shone_times + 1
-        respawn_at = la.now() + vars.respawn_secs * 1000
+        -- Starts the wait and the OUT_GAME bar that fills over it.
+        respawn_at = std.respawn_wait(vars, vars.respawn_secs)
         -- Two persistent lines for the whole wait, credit on top: who put
         -- us down, and what to do about it.  The "Down" cue is the moment
         -- feedback, so no transient line competes for the tray.  Here the way back is the clock,
         -- not a base, so the instruction says so.
         la.show("Wait to respawn", 0)
         la.show("LIT by " .. (shone_by or "?"), 0)
+        proj.strip(vars)            -- going out loses powered projectors and DIM
         la.ui("Down")
       end },
 
@@ -221,9 +270,9 @@ return {
     { from = S.OUT_GAME, to = S.IN_GAME,
       when   = function(vars) return la.now() >= respawn_at end,
       action = function(vars)
-        vars.lives  = vars.start_lives
+        vars.lives  = my_start_lives(vars)
         vars.energy = vars.start_energy
-        lit_at   = {}
+        imm.reset()
         shone_by = nil
         la.clear_tray()             -- drop the credit and the instruction
         la.show("Back in game!", 1000)
@@ -238,73 +287,25 @@ return {
     [S.IN_GAME] = function(vars)
       -- A confirmed lit target → notify it over radio.
       -- Points are only awarded when the target replies R.SHONE.
-      local target = la.shine_lit()          -- player id or nil
-      if target then la.send(target, MSG.LIT) end
+      local target = proj.result(vars)       -- player id or nil
+      if target then la.send(target, MSG.LIT, proj.payload(vars)) end
 
-      -- Fire while the trigger is down and energy remains.
-      local active = la.trigger_down(1)
-      if active and vars.energy > 0 and la.shine() then
-        vars.energy       = vars.energy - 1
-        vars.energy_spent = vars.energy_spent + 1
-        la.ui_enlight(la.shine_ms())
-      end
-
-      -- Release edge starts the recharge cooldown.
-      if trigger_was_active and not active then
-        release_at = la.now()
-      end
-      trigger_was_active = active
-
-      -- Restore full energy once the cooldown has elapsed.
-      if not active and vars.energy < vars.start_energy
-         and la.now() - release_at >= vars.recharge_secs * 1000 then
-        vars.energy = vars.start_energy
-      end
+      -- Trigger, energy, recharge: the projector owns all of it, and its
+      -- baseline profile is the one this ruleset used to spell out here.
+      proj.tick(vars)
     end,
   },
 
   -- ---- Totem behaviour (TotemVM programs, pure data) --------------------
-  -- Totems hold no game files.  Each entry below is a declarative
-  -- state machine that the projector serializes into the single 0xF1
-  -- activation packet; the interpreter is fixed totem firmware.
-  -- (games/lib/std.lua has factories that build these same tables —
-  -- std.totems.bonus() etc.; they are written out here in full as the
-  -- tutorial.)  Model reference: docs/totem-behavior-handshake.md.
-  --
-  -- BONUS: state 1 = READY (idle sparkle, beacon every 2 s; any reply
-  -- claims it), state 2 = COOLDOWN (silent for the configured seconds,
-  -- then back to READY, whose `enter` rule restores the idle look).
+  -- Totems hold no game files.  Each entry is a declarative state machine
+  -- that the projector serializes into the single 0xF1 activation packet;
+  -- the interpreter is fixed totem firmware.  std.totems builds the
+  -- standard roles — std.lua's pickup() is the BONUS / MALUS program
+  -- written out, and docs/totem-behavior-handshake.md is the reference:
+  -- READY (idle animation, a beacon every 2 s, any reply claims it), then
+  -- COOLDOWN for the DM's configured seconds.
   totems = {
-    BONUS = { vm = 1, cfg_default = 30, states = {
-      { -- state 1: READY
-        { enter = true,
-          run = { {"anim", "BonusIdle", {"rgb", 0, 180, 0}} } },
-        { every = 2000,
-          run = { {"bcast", MSG.BONUS_BEACON, 0} } },  -- payload byte 0 = ready
-        { reply = MSG.BONUS_BEACON,
-          run = { {"start", 0}, {"anim", "Bonus"}, {"goto", 2} } },
-      },
-      { -- state 2: COOLDOWN
-        { every = 250,
-          when = { {"elapsed", 0, ">=", {"cfg"}} },  -- {"cfg"} = this role's
-          run = { {"goto", 1} } },                   -- config seconds
-      },
-    } },
-
-    MALUS = { vm = 1, cfg_default = 30, states = {
-      { -- state 1: READY
-        { enter = true,
-          run = { {"anim", "MalusIdle", {"rgb", 200, 0, 0}} } },
-        { every = 2000,
-          run = { {"bcast", MSG.MALUS_BEACON, 0} } },
-        { reply = MSG.MALUS_BEACON,
-          run = { {"start", 0}, {"anim", "Malus"}, {"goto", 2} } },
-      },
-      { -- state 2: COOLDOWN
-        { every = 250,
-          when = { {"elapsed", 0, ">=", {"cfg"}} },
-          run = { {"goto", 1} } },
-      },
-    } },
+    BONUS = std.totems.bonus(),
+    MALUS = std.totems.malus(),
   },
 }

@@ -24,9 +24,9 @@
 // Which LEDs an effect is allowed to touch.  See config.h TotemLedLayout.
 enum class StripZone : uint8_t {
     All,         // every LED on the strip
-    Perimeter,   // the rectangle outline (indices 0–9)
-    CenterLine,  // the spine through the middle (indices 10–12)
-    Center,      // the single center LED (index 11)
+    Perimeter,   // the rectangle outline (indices 3–12)
+    CenterLine,  // the spine through the middle (indices 0–2)
+    Center,      // the single center LED (index 1)
 };
 
 // Footprint + motion primitive.
@@ -39,7 +39,10 @@ enum class StripEffect : uint8_t {
     BlinkFast,    // Blink at a fixed fast period (~150 ms half-cycle).
     Chase,        // a single lit LED roams around the zone's index list.
     Alternate,    // zone split into two interleaved colours, swapping each half-period.
-    Sparse,       // every Nth LED (stride = `density`) lit; twinkles per pulseStyle.
+    Sparse,       // random twinkle: each LED runs its own staggered cycle and
+                  //   lights in ~1 of every `density` of them, so WHICH LEDs
+                  //   shine changes all the time; envelope per pulseStyle.
+                  //   density 1 = every LED, every cycle, in step (a flash).
     VerticalScan, // one cross-rectangle "rung" lit, ping-ponging along the length.
 };
 
@@ -64,7 +67,7 @@ struct StripAnimation {
                                   //   one-shot: total number of cycles to play
                                   //   before yielding to the background.
                                   //   0 = continuous loop / single one-shot cycle.
-    uint8_t         density;      // Sparse stride (every Nth LED); smaller = denser.
+    uint8_t         density;      // Sparse: 1-in-N chance an LED lights per cycle; smaller = denser.
     StripPulseStyle pulseStyle;   // Sparse / brightness envelope shape.
 
     StripAnimation()
@@ -112,4 +115,7 @@ public:
 
     // Advance animation state.  Call every loop tick.
     virtual void update() = 0;
+
+    // True while a one-shot is playing or queued.
+    virtual bool busy() const = 0;
 };

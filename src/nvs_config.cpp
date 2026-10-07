@@ -8,6 +8,9 @@ static const char* TAG = "EnlightNVS";
 #define NVS_GET_U32(h,k,d,def) \
     if(nvs_get_u32(h,k,&(d))!=ESP_OK){(d)=(def); \
     ESP_LOGW(TAG,"%s missing, default %lu",(k),(unsigned long)(def));}
+#define NVS_GET_U8(h,k,d,def) \
+    if(nvs_get_u8(h,k,&(d))!=ESP_OK){(d)=(def); \
+    ESP_LOGW(TAG,"%s missing, default %u",(k),(unsigned)(def));}
 #define NVS_GET_FLOAT(h,k,d,def) \
     {size_t _sz=sizeof(float); float _f; \
     if(nvs_get_blob(h,k,&_f,&_sz)!=ESP_OK){(d)=(def); \
@@ -76,7 +79,6 @@ bool enlight_calib_load(EnlightCalib& cal) {
         NVS_GET_U32  (h, CAL_KEY_RCAL_NEAR,      cal.rcalNear,    0);
         NVS_GET_U32  (h, CAL_KEY_GCAL_NEAR,      cal.gcalNear,    0);
         NVS_GET_U32  (h, CAL_KEY_BCAL_NEAR,      cal.bcalNear,    0);
-        NVS_GET_U32  (h, CAL_KEY_LIMPOW,         cal.limpow,      0);
         NVS_GET_U32  (h, CAL_KEY_PHASE_OFF,      cal.phaseOff,    0);
         NVS_GET_FLOAT(h, CAL_KEY_RFACT,          cal.rfact,       1.0f);
         NVS_GET_FLOAT(h, CAL_KEY_BFACT,          cal.bfact,       1.0f);
@@ -87,14 +89,19 @@ bool enlight_calib_load(EnlightCalib& cal) {
         NVS_GET_U32  (h, CAL_KEY_THRESH_FAR_R,   cal.thresh_far_r,  0);
         NVS_GET_U32  (h, CAL_KEY_THRESH_FAR_G,   cal.thresh_far_g,  0);
         NVS_GET_U32  (h, CAL_KEY_THRESH_FAR_B,   cal.thresh_far_b,  0);
+        NVS_GET_U32  (h, CAL_KEY_REF_FAR_R,      cal.refFarR,       0);
+        NVS_GET_U32  (h, CAL_KEY_REF_FAR_G,      cal.refFarG,       0);
+        NVS_GET_U32  (h, CAL_KEY_REF_FAR_B,      cal.refFarB,       0);
+        NVS_GET_U8   (h, CAL_KEY_REF_DIST,       cal.refDistM,      0);
         nvs_close(h);
     } else {
         cal = {};
-        cal.limpow = 0;
         cal.rfact = cal.bfact = 1.0f;
         cal.nearRatioMax = 1e9f;
         cal.thresh_near_r = cal.thresh_near_g = cal.thresh_near_b = 0;
         cal.thresh_far_r  = cal.thresh_far_g  = cal.thresh_far_b  = 0;
+        cal.refFarR = cal.refFarG = cal.refFarB = 0;
+        cal.refDistM = 0;
         ESP_LOGW(TAG, "Calibration namespace missing -- using sentinels");
     }
     return true;
@@ -110,7 +117,6 @@ bool enlight_calib_save(const EnlightCalib& cal) {
     nvs_set_u32 (h, CAL_KEY_RCAL_NEAR,      cal.rcalNear);
     nvs_set_u32 (h, CAL_KEY_GCAL_NEAR,      cal.gcalNear);
     nvs_set_u32 (h, CAL_KEY_BCAL_NEAR,      cal.bcalNear);
-    nvs_set_u32 (h, CAL_KEY_LIMPOW,         cal.limpow);
     nvs_set_u32 (h, CAL_KEY_PHASE_OFF,      cal.phaseOff);
     nvs_set_blob(h, CAL_KEY_RFACT,          &cal.rfact,        sizeof(float));
     nvs_set_blob(h, CAL_KEY_BFACT,          &cal.bfact,        sizeof(float));
@@ -121,6 +127,10 @@ bool enlight_calib_save(const EnlightCalib& cal) {
     nvs_set_u32 (h, CAL_KEY_THRESH_FAR_R,   cal.thresh_far_r);
     nvs_set_u32 (h, CAL_KEY_THRESH_FAR_G,   cal.thresh_far_g);
     nvs_set_u32 (h, CAL_KEY_THRESH_FAR_B,   cal.thresh_far_b);
+    nvs_set_u32 (h, CAL_KEY_REF_FAR_R,      cal.refFarR);
+    nvs_set_u32 (h, CAL_KEY_REF_FAR_G,      cal.refFarG);
+    nvs_set_u32 (h, CAL_KEY_REF_FAR_B,      cal.refFarB);
+    nvs_set_u8  (h, CAL_KEY_REF_DIST,       cal.refDistM);
     esp_err_t e = nvs_commit(h); nvs_close(h);
     return e == ESP_OK;
 }

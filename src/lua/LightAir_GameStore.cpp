@@ -8,14 +8,24 @@ LightAir_GameStore* LightAir_GameStore::s_instance = nullptr;
 #include <ArduinoLog.h>
 #include <FS.h>
 #include <LittleFS.h>
+#include <esp_heap_caps.h>
+#include <string.h>
 #include "LightAir_LuaGame.h"
 #include "LightAir_GamesBundle.h"
 
-// One shared fully-loaded game (the selected one) + one scratch
-// instance for manifest scanning.  ~50 games cost 50 small manifests,
-// not 50 Lua interpreters.
+// ONE LightAir_LuaGame for both jobs.  A full menu costs a table of small
+// manifests, not a table of Lua interpreters.
+//
+// The boot scan used to have an instance of its own, and it was 8 KB of
+// waste: peekManifest() builds a fresh lua_State, runs the file's top level
+// with la.lib() inert, reads three literal fields and closes the state again
+// — it never touches the descriptor arrays (_slots, _progs, _configVars,
+// _monitorVars, _rules, the registry refs) that are almost all of an
+// instance's size, and it leaves the instance unloaded.  The scan also runs
+// before any game is realized, so this one is idle at the time.  On a board
+// with no PSRAM that second instance was 8 KB of internal RAM held for the
+// life of the device to do nothing.
 static LightAir_LuaGame s_loadedGame;
-static LightAir_LuaGame s_scanner;
 
 /* =========================================================
  *   MOUNT + SEED
@@ -29,35 +39,72 @@ bool LightAir_GameStore::begin() {
     }
     _mounted = true;
     LittleFS.mkdir(LuaDefaults::GAMES_DIR);
+    LittleFS.mkdir(LuaDefaults::STOCK_DIR);
+    LittleFS.mkdir(LuaDefaults::CUSTOM_DIR);
     LittleFS.mkdir(LuaDefaults::LIB_DIR);
     seedDefaults();
     return true;
 }
 
-// True when the file at path exists and its content equals data[0..len).
-static bool fileMatches(const char* path, const unsigned char* data, size_t len) {
-    File f = LittleFS.open(path, "r");
-    if (!f) return false;
-    if ((size_t)f.size() != len) { f.close(); return false; }
-    uint8_t buf[256];
-    size_t  off = 0;
-    while (off < len) {
-        size_t chunk = (len - off < sizeof(buf)) ? (len - off) : sizeof(buf);
-        if (f.read(buf, chunk) != chunk) { f.close(); return false; }
-        if (memcmp(buf, data + off, chunk) != 0) { f.close(); return false; }
-        off += chunk;
-    }
-    f.close();
-    return true;
+// ----------------------------------------------------------------
+// Seeding /games/stock and /games/lib — firmware territory.
+//
+// Neither directory has an HTTP write path (see GameFileServer): the
+// only way anything ever lands there is this function.  So there is
+// nothing a player could have edited to preserve, and every embedded
+// file is simply (re)written on every boot.  A custom ruleset lives in
+// /games/custom instead, which this function never touches — editing a
+// file there is what "the game is a file" actually means, and it
+// survives a firmware update untouched because seeding never looks at
+// that directory at all.
+//
+// Seeding also PRUNES: a file in /games/stock or /games/lib that the
+// bundle no longer carries is deleted (see pruneDir()).  That is how a
+// game the firmware stops shipping — games/custom/*.lua in the repository,
+// uploaded over HTTP only where it is wanted — actually leaves a device.
+// ----------------------------------------------------------------
+// A file in firmware territory that the bundle no longer carries is a game
+// this firmware stopped shipping.  It has to go: nothing else can remove
+// it (no HTTP path reaches these directories), and left in /games/stock it
+// would keep its menu slot AND win the duplicate-typeId check against the
+// copy a stand uploads to /games/custom — the very file meant to replace
+// it.  Removal is collected first and done after the directory walk, so
+// the iterator never runs over a directory it is deleting from.
+static bool isEmbedded(const char* path) {
+    for (const EmbeddedGameFile& ef : kEmbeddedGames)
+        if (strcmp(ef.path, path) == 0) return true;
+    return false;
+}
+
+static void pruneDir(const char* dirPath) {
+    static constexpr uint8_t BATCH = 8;
+    char    doomed[BATCH][64];
+    uint8_t n;
+    do {
+        n = 0;
+        File dir = LittleFS.open(dirPath);
+        if (!dir || !dir.isDirectory()) return;
+        for (File f = dir.openNextFile(); f && n < BATCH; f = dir.openNextFile()) {
+            if (f.isDirectory()) continue;
+            char path[64];
+            snprintf(path, sizeof(path), "%s/%s", dirPath, f.name());
+            f.close();
+            if (!isEmbedded(path)) memcpy(doomed[n++], path, sizeof(path));
+        }
+        dir.close();
+        for (uint8_t i = 0; i < n; i++) {
+            if (LittleFS.remove(doomed[i]))
+                Log.infoln("GameStore: removed %s (no longer shipped)", doomed[i]);
+            else
+                Log.errorln("GameStore: cannot remove %s", doomed[i]);
+        }
+    } while (n == BATCH);   // a full batch may have left more behind
 }
 
 void LightAir_GameStore::seedDefaults() {
+    pruneDir(LuaDefaults::STOCK_DIR);
+    pruneDir(LuaDefaults::LIB_DIR);
     for (const EmbeddedGameFile& ef : kEmbeddedGames) {
-        // Content-exact check: stock filenames are firmware-owned — any
-        // difference (new firmware version OR a local edit) restores the
-        // shipped copy.  Customised games belong under a new filename,
-        // which seeding never touches.
-        if (fileMatches(ef.path, ef.data, ef.len)) continue;
         File f = LittleFS.open(ef.path, "w");
         if (!f) {
             Log.errorln("GameStore: cannot write %s", ef.path);
@@ -65,8 +112,8 @@ void LightAir_GameStore::seedDefaults() {
         }
         size_t n = f.write(ef.data, ef.len);
         f.close();
-        if (n != ef.len) Log.errorln("GameStore: short write on %s", ef.path);
-        else             Log.infoln("GameStore: seeded %s (%d bytes)", ef.path, (int)ef.len);
+        if (n != ef.len)
+            Log.errorln("GameStore: short write on %s", ef.path);
     }
 }
 
@@ -74,19 +121,28 @@ void LightAir_GameStore::seedDefaults() {
  *   MANIFEST SCAN + LAZY REALIZATION
  * ========================================================= */
 
-uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
-    if (!_mounted) return 0;
-    s_instance = this;
-    _count = 0;
+static void logHeadroom(const char* what, const char* path) {
+    Log.infoln("GameStore: %s %s (psram %d B, heap %d B, largest block %d B)",
+               what, path,
+               (int)ESP.getFreePsram(), (int)ESP.getFreeHeap(),
+               (int)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+}
 
-    File dir = LittleFS.open(LuaDefaults::GAMES_DIR);
+// Scans one flat directory of .lua files into _manifests/_count, starting
+// from wherever a previous call (on another directory) left off.  Called
+// once for STOCK_DIR and once for CUSTOM_DIR, stock first: the duplicate-
+// typeId check below then always favours the stock file, so a custom
+// ruleset can never impersonate a stock one, even by reusing its typeId
+// rather than its filename.
+void LightAir_GameStore::scanDir(LightAir_GameManager& mgr, const char* dirPath) {
+    File dir = LittleFS.open(dirPath);
     if (!dir || !dir.isDirectory()) {
-        Log.errorln("GameStore: %s missing", LuaDefaults::GAMES_DIR);
-        return 0;
+        Log.errorln("GameStore: %s missing", dirPath);
+        return;
     }
 
     for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
-        if (f.isDirectory()) continue;                 // skips /games/lib
+        if (f.isDirectory()) continue;
         const char* name = f.name();
         size_t len = strlen(name);
         if (len < 5 || strcmp(name + len - 4, ".lua") != 0) continue;
@@ -96,11 +152,14 @@ uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
         }
 
         Manifest& m = _manifests[_count];
-        snprintf(m.path, sizeof(m.path), "%s/%s", LuaDefaults::GAMES_DIR, name);
+        snprintf(m.path, sizeof(m.path), "%s/%s", dirPath, name);
         f.close();
 
-        if (!s_scanner.peekManifest(m.path, m.name, sizeof(m.name), &m.typeId)) {
+        if (!s_loadedGame.peekManifest(m.path, m.name, sizeof(m.name), &m.typeId)) {
             Log.errorln("GameStore: skipping %s (bad manifest)", m.path);
+            // A scan that drops files one by one has emptied the menu once
+            // already; say what the device had left when it dropped this one.
+            logHeadroom("after failing", m.path);
             continue;
         }
 
@@ -127,17 +186,30 @@ uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
         }
         _count++;
     }
+}
+
+uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager& mgr) {
+    if (!_mounted) return 0;
+    s_instance = this;
+    _count = 0;
+
+    scanDir(mgr, LuaDefaults::STOCK_DIR);
+    scanDir(mgr, LuaDefaults::CUSTOM_DIR);
 
     mgr.setLoadHook(&LightAir_GameStore::realizeHook);
     Log.infoln("GameStore: %d game manifest(s) registered", _count);
     return _count;
 }
 
-bool LightAir_GameStore::realizeHook(LightAir_Game& game) {
-    return s_instance ? s_instance->realize(game) : false;
+bool LightAir_GameStore::realizeHook(LightAir_Game& game,
+                                     char* errOut, size_t errCap) {
+    if (s_instance) return s_instance->realize(game, errOut, errCap);
+    if (errOut && errCap) snprintf(errOut, errCap, "no game store");
+    return false;
 }
 
-bool LightAir_GameStore::realize(LightAir_Game& game) {
+bool LightAir_GameStore::realize(LightAir_Game& game,
+                                 char* errOut, size_t errCap) {
     // Find the manifest owning this placeholder (also accepts a
     // re-realize of an already-filled descriptor).
     const Manifest* m = nullptr;
@@ -146,8 +218,19 @@ bool LightAir_GameStore::realize(LightAir_Game& game) {
     if (!m) return true;                    // not one of ours (native etc.)
 
     if (!s_loadedGame.loaded() || s_loadedGame.typeId() != m->typeId) {
-        Log.infoln("GameStore: loading %s", m->path);
-        if (!s_loadedGame.load(m->path)) return false;
+        // Log the headroom either side of the load.  A ruleset that loads
+        // on the bench and refuses on the device is a memory question
+        // first, and three numbers answer it without a second flash:
+        // whether PSRAM is there at all (the Lua allocator asks for it
+        // first and falls back silently), how much internal RAM is left,
+        // and the largest single block in it — which is what a state built
+        // from thousands of small allocations actually runs out of.
+        logHeadroom("loading", m->path);
+        if (!s_loadedGame.load(m->path)) {
+            if (errOut && errCap) snprintf(errOut, errCap, "%s", s_loadedGame.loadError());
+            return false;
+        }
+        logHeadroom("loaded ", m->path);
     }
     // Copy the full descriptor over the placeholder in place: every
     // pointer inside it targets the shared instance, so the menu's
@@ -165,7 +248,7 @@ bool LightAir_GameStore::realize(LightAir_Game& game) {
 bool LightAir_GameStore::begin() { return false; }
 uint8_t LightAir_GameStore::registerLuaGames(LightAir_GameManager&) { return 0; }
 void LightAir_GameStore::seedDefaults() {}
-bool LightAir_GameStore::realize(LightAir_Game&) { return false; }
-bool LightAir_GameStore::realizeHook(LightAir_Game&) { return false; }
+bool LightAir_GameStore::realize(LightAir_Game&, char*, size_t) { return false; }
+bool LightAir_GameStore::realizeHook(LightAir_Game&, char*, size_t) { return false; }
 
 #endif

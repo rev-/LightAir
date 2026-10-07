@@ -32,6 +32,7 @@
 //   §5  StateBehavior                 — per-state tick bodies
 //   §6  WinnerVar / ScoreTable        — end-game winner election
 //   §7  TotemRequirement / -Program   — totem roles + TotemVM bytes
+//   §7b AreaPolicy                    — area effects (GameRunner's area service)
 //   §8  MenuResult                    — pre-game menu result
 //   §9  struct LightAir_Game          — the descriptor itself
 //
@@ -57,19 +58,36 @@ class LightAir_GameRunner;
 //   CHARS : char* (mutable null-terminated buffer).
 //           Compatible with DisplayCtrl::bindStringVariable.
 //
-// DisplayCtrl also offers bindBarVariable (a value that turns into a
-// filling bar at a trigger value — energy during recharge, the respawn
-// wait).  No descriptor row reaches it yet: that binding is driven by the
-// projector object, not by a monitor row, and is wired up with it.
+//   BAR   : int*, drawn as a number until it reaches a trigger value and
+//           as a filling bar while it sits there — energy during
+//           recharge, the respawn wait.
+//           Compatible with DisplayCtrl::bindBarVariable.
+//
+// A BAR row's timing belongs to whoever owns the wait, not to the
+// display: both the fill duration and the instant the wait began are
+// pointers into game vars, which the projector object keeps current.  The
+// row itself is declarative like any other, because binding sets are
+// built once in GameRunner::begin() and lock on first activation — there
+// is no later moment at which a binding could be added.
 // ----------------------------------------------------------------
-enum class VarType : uint8_t { INT, CHARS };
+enum class VarType : uint8_t { INT, CHARS, BAR };
 
 // ----------------------------------------------------------------
 // ConfigVar — one variable shown and edited in the pre-game config menu.
 //
-// All ConfigVars are integer values.  The menu lets the player
-// adjust the value in increments of step within [min, max].
-// step = 0 is treated as 1 by the config menu.
+// All ConfigVars are integer values, in one of two forms:
+//
+//   numeric (choiceCount == 0): the menu adjusts the value in increments
+//     of step within [min, max]; step = 0 is treated as 1.
+//
+//   choices (choiceCount > 0): the value is one of choiceValues, in the
+//     order declared, and the menu shows the matching choiceLabels entry
+//     in its place ("ON" for 1, "10 min" for 600).  The values need not
+//     be contiguous or sorted.  min/max still bound them, so code that
+//     only clamps stays correct; configChoiceIndex() is the real check.
+//
+// A zero-initialised ConfigVar is the numeric form, so a C++ game that
+// never mentions choices keeps its aggregate initialisers unchanged.
 // ----------------------------------------------------------------
 struct ConfigVar {
     const char* name;   // ≤12 chars; shown in config menu
@@ -77,7 +95,38 @@ struct ConfigVar {
     int         min;
     int         max;
     int         step;   // 0 treated as 1
+    uint8_t     choiceCount;                                   // 0 = numeric
+    const int*  choiceValues;
+    const char (*choiceLabels)[GameDefaults::CONFIG_CHOICE_LABEL_LEN];
 };
+
+// Index of value v in a choices ConfigVar, or -1 when v is not one of
+// them (or the var is numeric).
+inline int configChoiceIndex(const ConfigVar& var, int v) {
+    for (uint8_t i = 0; i < var.choiceCount; i++)
+        if (var.choiceValues[i] == v) return i;
+    return -1;
+}
+
+// The value one press of < (dir -1) or > (dir +1) leads to in the config
+// menu.  A numeric var moves by step within [min, max]; a choices var
+// moves to the neighbouring entry of its list, stopping at either end, and
+// a value that is somehow not in the list starts from the first entry.
+inline int configStepValue(const ConfigVar& var, int dir) {
+    if (var.choiceCount > 0) {
+        int i = configChoiceIndex(var, *var.value);
+        if (i < 0) return var.choiceValues[0];
+        i += dir;
+        if (i < 0) i = 0;
+        if (i >= var.choiceCount) i = var.choiceCount - 1;
+        return var.choiceValues[i];
+    }
+    const int step = var.step ? var.step : 1;
+    int val = *var.value + dir * step;
+    if (val < var.min) val = var.min;
+    if (val > var.max) val = var.max;
+    return val;
+}
 
 // ----------------------------------------------------------------
 // MonitorVar — one variable displayed on the LCD during the game.
@@ -95,18 +144,31 @@ struct ConfigVar {
 struct MonitorVar {
     const char* name;
     VarType     type;
-    int*        asInt;      // non-null when type == INT
+    int*        asInt;      // non-null when type == INT or BAR
     char*       asChars;    // non-null when type == CHARS
     uint32_t    stateMask;  // bit N → display in state N
     IconType    icon;
     uint8_t     col, row;
+    // Optional: when non-null the icon is read through this on every render,
+    // so it can follow runtime state — the energy cell shows whichever
+    // projector is in hand.  Out-of-range values fall back to `icon`.
+    const int*  iconVar;
+    // ---- BAR only ----
+    int         barTrigger; // value at which the bar takes over from the number
+    const int*  barFill;    // live pointer to the fill duration, in ms
+    const int*  barStart;   // live pointer to the wait's start instant, in
+                            // millis; 0 = at the trigger but not yet waiting.
+                            // null = let the display self-start the clock.
+    uint8_t     barWidth;   // 0 = DisplayDefaults::BAR_WIDTH
 
     // ---- factory helpers ----
 
     static MonitorVar Int(const char* name, int* value,
                           uint32_t stateMask, IconType icon,
-                          uint8_t col, uint8_t row) {
+                          uint8_t col, uint8_t row,
+                          const int* iconVar = nullptr) {
         MonitorVar v = {};
+        v.iconVar   = iconVar;
         v.name      = name;
         v.type      = VarType::INT;
         v.asInt     = value;
@@ -114,6 +176,24 @@ struct MonitorVar {
         v.stateMask = stateMask;
         v.icon      = icon;
         v.col       = col;  v.row = row;
+        return v;
+    }
+
+    // A number that becomes a filling bar while it sits at trigger.
+    // fill and start are pointers into game vars kept current by whoever
+    // owns the wait — see the VarType note above.
+    static MonitorVar Bar(const char* name, int* value,
+                          uint32_t stateMask, IconType icon,
+                          uint8_t col, uint8_t row,
+                          int trigger, const int* fill,
+                          const int* start = nullptr, uint8_t width = 0,
+                          const int* iconVar = nullptr) {
+        MonitorVar v = Int(name, value, stateMask, icon, col, row, iconVar);
+        v.type       = VarType::BAR;
+        v.barTrigger = trigger;
+        v.barFill    = fill;
+        v.barStart   = start;
+        v.barWidth   = width;
         return v;
     }
 
@@ -363,12 +443,20 @@ struct ScoreTable {
 //               is serialized into the 0xF1 activation reply, so a
 //               game-configured cooldown reaches the totem.
 //               nullptr = the program's own cfg_default applies.
+// optionCount / optionLabels
+//             — optional per-totem choices the DM picks with O in the
+//               Totems submenu (e.g. which bonus a BONUS totem gives).
+//               The chosen 1-based index travels in the config blob and
+//               is read in game through la.totem_option(id); what an
+//               option *does* is entirely the ruleset's.  0 = none.
 // ----------------------------------------------------------------
 struct LightAir_TotemRequirement {
     uint8_t     roleId;
     uint8_t     minCount;
     uint8_t     maxCount;
     const int*  configSecs;   // optional; points to a game config var
+    uint8_t     optionCount;  // 0 = no per-totem options
+    const char (*optionLabels)[TotemDefs::OPTION_LABEL_LEN];
 };
 
 // ----------------------------------------------------------------
@@ -388,6 +476,59 @@ struct TotemProgramEntry {
     uint8_t        roleId;   // TotemRoleId constant
     uint8_t        len;      // program bytes (≤ TotemVMDefs::MAX_PROG)
     const uint8_t* bytes;
+};
+
+/* ================================================================
+ * §7b AreaPolicy — area effects
+ * ================================================================ */
+
+// ----------------------------------------------------------------
+// An area effect is something that happens at one place and reaches
+// everyone near it: a splashing projector's hit, and later a totem or a
+// game figure.  The MECHANISM is the runner's (LightAir_GameRunner, "area
+// service"): the beacon, its reach graded by RSSI, who is spared, the hit
+// it becomes, the credit.  What a hit DOES stays the ruleset's — an area
+// hit is handed to the current state's own LIT handler, marked as one.
+// A policy is the data in between, declared by the game file or a library
+// (la.area_policy) and identical on every device in the session, so the
+// beacon only has to name it.
+//
+//   id         on the wire (MSG_AREA payload[0]); 1–255
+//   on         what triggers it without game code: a hit from projector
+//              `projector` that the target's ruleset answered TAKEN (LIT,
+//              any hit that landed, the knock-out included) or SHONE alone.
+//              NONE = only explicit emission (la.area_emit).
+//   bands      RSSI floor → magnitude, strongest first: the first band the
+//              beacon's RSSI reaches is the hit's strength.  None reached =
+//              out of the area.
+//   friendly   GAME: the ruleset's own friendly-fire rule decides, judged
+//              against the ORIGINATOR's team.  NEVER: the originator's
+//              teammates are spared before the ruleset is asked.
+//   self       the originator may be caught in their own area.  This flag
+//              alone decides: `friendly` is about the originator's
+//              teammates, never the originator.
+//   credit     a player the area puts out of play credits the originator
+//              (MSG_AREA_CREDIT).
+//   roleTag    the role tag the area hit carries (MSG_LIT payload[2]).
+// ----------------------------------------------------------------
+enum class AreaTrigger  : uint8_t { NONE = 0, LIT = 1, SHONE = 2 };
+enum class AreaFriendly : uint8_t { GAME = 0, NEVER = 1 };
+
+struct AreaBand {
+    int8_t  rssi;        // dBm floor: the beacon must read at least this
+    uint8_t magnitude;   // hit strength in standard hits (>= 1)
+};
+
+struct AreaPolicy {
+    uint8_t      id;
+    AreaTrigger  on;
+    uint8_t      projector;     // meaningful when on != NONE
+    AreaFriendly friendly;
+    bool         self;
+    bool         credit;
+    uint8_t      roleTag;
+    uint8_t      bandCount;
+    AreaBand     bands[AreaDefaults::MAX_BANDS];
 };
 
 /* ================================================================
@@ -534,8 +675,8 @@ struct LightAir_Game {
     const int* gameTimeLeft;
 
     // Called by GameRunner immediately before esp_restart() after the player
-    // presses A+B on the end-game screen.  Use for last-moment display updates
-    // or NVS writes.  nullptr = skip.
+    // holds A (alone) on the end-game screen.  Use for last-moment display
+    // updates or NVS writes.  nullptr = skip.
     void (*onEnd)(LightAir_DisplayCtrl&);
 
     // ---- TotemVM programs (Lua-defined games) ----
@@ -548,4 +689,35 @@ struct LightAir_Game {
     // IDLE — the VM form is the only activation form (the pre-VM short
     // reply and the native totem role runners are retired).
     const TotemProgramEntry* (*totemProgram)(uint8_t roleId);
+
+    // ---- In-game hold (see LightAir_GameHold.h) — all optional ----
+    //
+    // onClockTick: called once per cycle INSTEAD of the state behavior while
+    //   the player is held.  Advances whatever must not stop — the declarative
+    //   countdowns — and nothing else: no input, no optics, no radio.
+    //   nullptr = nothing ticks while held.
+    // holdAccept: msgTypes the ruleset still wants to receive from other
+    //   players while held.  nullptr = all of them.  It can only narrow:
+    //   totem messages are dropped either way.
+    // onHoldEnter / onHoldExit: bracket a hold (a tray line, a cue).  Not
+    //   called on the end screen; onHoldExit runs whenever onHoldEnter did.
+    void (*onClockTick)();
+    const uint8_t* holdAccept;
+    uint8_t        holdAcceptCount;
+    void (*onHoldEnter)(LightAir_DisplayCtrl&, GameOutput&);
+    void (*onHoldExit)(LightAir_DisplayCtrl&, GameOutput&);
+
+    // ---- Player draws (optional) ----
+    // Game vars the DM fills with a random joined player ID when it starts
+    // the match (Virus's first virus).  The DM's device draws, so there is
+    // one answer, and sends it inside MSG_START_COUNTDOWN: every device
+    // that starts the match has it before onBegin.  Never in the menu.
+    int* const* drawnPlayerVars;
+    uint8_t     drawnPlayerCount;
+
+    // ---- Area effects (optional, §7b) ----
+    // The policies this game's area effects follow.  nullptr / 0 = the
+    // game neither emits nor accepts any: MSG_AREA is ignored.
+    const AreaPolicy* areaPolicies;
+    uint8_t           areaPolicyCount;
 };

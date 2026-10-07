@@ -33,15 +33,27 @@ enum class TotemUIEvent : uint8_t {
     BaseIdle,      // base ready: breathing perimeter ring, team colour + rhythm.
     CPIdle,        // control point unclaimed: roaming dot on the perimeter, grey.
     FlagIdle,      // flag at home: breathing vertical scan, team colour + rhythm.
-    BonusIdle,     // bonus ready: slow smooth green sparkle.
-    MalusIdle,     // malus ready: fast hard red flicker (sparse).
+    BonusIdle,     // bonus ready: slow, soft random twinkle (green).
+    MalusIdle,     // malus ready: fast, hard random crackle (red).
 
     FlagMissing,   // flag away from home: faint spine "heartbeat" in flag colour.
     Control,       // CP owned: perimeter wipe settling to a steady ring.
-                   //   cmd.r = 0 or 1  → team index; colour from TeamColors::kColors.
+                   //   cmd.r = 0xFE    → slot-based (team CP games): cmd.g = 0/1 is
+                   //                    a team index (TeamColors::kColors); cmd.g >= 2
+                   //                    is player id = cmd.g + 1 (PlayerColors::kColors).
+                   //   cmd.r = 0xFD    → slot-based (teamless CP games): cmd.g is
+                   //                    ALWAYS player id - 1, never a team index —
+                   //                    player id = cmd.g + 1 unconditionally.  Needed
+                   //                    because a teamless game's low player slots
+                   //                    (id 1, 2) are numerically indistinguishable
+                   //                    from team indices 0/1 under the 0xFE form.
                    //   cmd.r = 0xFF    → player-based; cmd.g = player ID (0–16);
                    //                    colour from PlayerColors::kColors.
     ControlContest,// contested; alternating team colours on the perimeter.
+    ControlScore,  // CP paid a point to its current owner: brief sparkle burst in
+                   //   the owner's colour (same cmd.r encoding as Control above),
+                   //   distinct in shape from Control's steady wipe/fill so "point
+                   //   scored" reads as a discrete event over the steady hold colour.
 
     // ---- Extensibility ----
     Custom1,

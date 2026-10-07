@@ -1,0 +1,243 @@
+# RAM budget — where the internal SRAM goes
+
+The projectors and totems are ESP32-S3 N4 modules (`sketch.yaml` profile
+`ESP32-S3-WROOM-1-N4`): 4 MB flash in the No OTA layout, **no PSRAM**. Every
+allocation the firmware makes — the display bindings, the radio buffers, the
+Lua interpreter, the task stacks — comes out of the same ~512 KB of internal
+SRAM, most of which is already spoken for by the IDF, the WiFi/ESP-NOW stack
+and the FreeRTOS heap before a single LightAir object exists.
+
+This is the survey of what *we* spend, what sizes each item, and what can be
+given back.
+
+---
+
+## Method, and how much to trust the numbers
+
+Sizes below are `sizeof()` **measured on a host build** of the real headers.
+That is exact for the parts that dominate — fixed `char`/`uint8_t` arrays are
+the same width everywhere — and an over-estimate for pointer-heavy structs,
+since a host pointer is 8 bytes against the device's 4. The "device" column
+corrects for that by hand where it matters.
+
+**Not measured here:** the actual `.bss`/`.data` totals and the free heap at
+boot. Those need a target build (`arduino-cli`, `.map`) or the device itself.
+Two log lines exist for that now:
+
+```
+Lua: allocator using internal RAM (N B free internal)
+GameStore: loading /games/x.lua (psram … heap … largest block …)
+```
+
+Treat this document as the map, and those two lines as the ground truth.
+
+---
+
+## 1. Static objects — always resident
+
+Constructed at global scope in `LightAir.ino`, so they cost their full size
+from boot to power-off whether or not the code path that uses them runs.
+
+| Object | host | device (est.) | Sized by |
+|---|---:|---:|---|
+| `LightAir_DisplayCtrl` | 27,016 | **~19,700** | `MAX_SETS = 32` × `MAX_BINDINGS = 8` × 76 B |
+| `LightAir_LuaGame` ×2 | 16,080 | **~14,400** | `MAX_VARS`, `MAX_PROG`, `MAX_MSG_RULES`, `MAX_RULES` |
+| `LightAir_Radio` | 8,032 | ~8,000 | `RADIO_MAX_PAYLOAD = 237` × (`MAX_PENDING = 10` + report 10) |
+| `LightAir_RadioESPNow` | 4,184 | ~4,170 | `ESPNOW_RECV_QUEUE = 16` × 250 B |
+| `LightAir_GameStore` | 4,400 | ~3,200 | `MAX_GAMES = 16` (manifest + placeholder per slot) |
+| `LightAir_UICtrl` | 536 | ~450 | action table |
+| `LightAir_GameRunner` | 472 | ~350 | |
+| `Enlight` | 456 | ~430 | |
+| totem-path globals (idle on a player) | 320 | ~320 | LED strip buffer |
+| input (`InputCtrl` + keypad + 2 buttons) | 320 | ~280 | |
+| `LightAir_GameManager` | 208 | ~130 | `MAX_GAMES` |
+| **Total** | | **~51 KB** | |
+
+Two objects are 2/3 of it, and both are sized far above anything the firmware
+can actually use. See §3.
+
+## 2. Transient peaks — on top of the above
+
+| What | Size | When | Where |
+|---|---:|---|---|
+| Lua state for the selected ruleset | **~55 KB** | while a game is loaded | heap |
+| (the same, before the streaming fix) | ~120 KB | — | heap |
+| `GameOutput output;` | ~2,000 B | **every tick**, `GameRunner::update()` | loop-task stack |
+| OLED frame buffer | 1–2 KB | after `display.begin()` | heap |
+| `EnlightCalibRoutine` / `EnlightTestMode` | 1.2 / 1.4 KB | only while the tool is open | heap |
+| Enlight DMA task stack | 4 KB | player path, from `Enlight::begin()` | task stack |
+| Enlight DMA buffers | **~67 KB** | player path, from boot | heap (DMA-capable) |
+| WiFi AP + `WebServer` | tens of KB | only in Settings → Share games | IDF |
+
+The Enlight buffers are the largest single heap cost on a player, and they
+are not transient: they are allocated at boot and held for the device's life.
+One DMA cycle is 13 PDM periods of 2,400 bytes (31.2 KB) for the LEDs, and
+7,801 two-byte ADC conversions each way (2 × 15.6 KB), plus one stored LED
+period per power (2 × 2.4 KB) — see §3 F for why there are two periods rather
+than two whole LED cycles.
+
+The loop task runs on Arduino's default 8 KB stack, and everything above the
+runner shares it: the ~2 KB `GameOutput` each tick, and — during a game load —
+Lua's recursive-descent parser. That is a second, independent ceiling from the
+heap one, and worth remembering before adding anything large as a local.
+
+The Lua figure is the *whole* cost of a ruleset: compiled functions for the
+game file plus `std.lua` plus `projector.lua`, and the tables and closures they
+build. It is reported per game in the load log.
+
+---
+
+## 3. Where we can spare some
+
+Ranked by size, with what makes each safe or not.
+
+### A. `DisplayDefaults::MAX_SETS` 32 → 9, `MAX_BINDINGS` 8 → 4 · **~16.8 KB** · **not pursued**
+
+Not pursued: F, G and H already bring the heaviest ruleset under the N4's
+ceiling, so the display tables stay as they are.  Kept here for the
+measurements, and for the leak note below, which comes first if this is
+ever reopened.
+
+The largest single object in the firmware, and both dimensions are far above
+their real ceilings.
+
+*Sets.* `GameRunner::begin` creates one binding set per state that has a
+monitor row, plus one empty set to freeze the display after scoring. A Lua
+ruleset may declare at most `LuaDefaults::MAX_STATES = 8` states, so **9 is the
+hard ceiling**, not a guess. Measured need across the whole catalogue:
+
+```
+freeforall 4   teams 4   flag 4   kingofhill 4
+outflow 4      upkeep 4  virus 4  festasportsasso 5
+```
+
+*Bindings per set.* The content area is `SCREEN_HEIGHT − TRAY_HEIGHT` = 34 px
+at `CELL_HEIGHT` = 12, so **two rows of `CELL_COLS` = 2 cells fit on the glass
+— four cells**. Every game in the catalogue uses exactly 4. Eight was never
+displayable.
+
+9 × 4 × 76 B = 2.9 KB, against 19.7 KB today.
+
+> **Do not cut `MAX_SETS` without fixing this first:** `_setCount` is never
+> reset, and `GameRunner::begin()` does not clear the sets it created last
+> time. Today the sketch calls `begin()` once per boot and the end-game
+> restart reboots, so 32 slots hide the leak. At 9 a second `begin()` would run out.
+> Add a `DisplayCtrl::resetBindingSets()` called from `GameRunner::begin`.
+
+### B. Drop the second `LightAir_LuaGame` · **~7.2 KB**
+
+`LightAir_GameStore.cpp` keeps two full instances: `s_loadedGame` and
+`s_scanner`. The scanner only ever calls `peekManifest`, which builds and tears
+down its own `lua_State` and touches none of the 7 KB of descriptor arrays —
+`_slots`, `_progs`, `_configVars`, `_monitorVars`, `_rules`, the ref tables.
+
+The boot scan runs before any game is realized, and `peekManifest` leaves the
+instance unloaded, so `s_loadedGame` can do both jobs. One instance, one
+trampoline slot, ~7.2 KB back.
+
+### C. `ESPNOW_RECV_QUEUE` 16 → 8 · **~2 KB** · **not pursued**
+
+Not pursued, like D: F–H cover the need, so the radio keeps its headroom.
+
+`Entry { uint8_t data[250]; int len; int8_t rssi; }` × 16. Halving it is two
+kilobytes, but this is the buffer that absorbs bursts between `radio.poll()`
+calls and the cost of getting it wrong is dropped packets under load. Measure
+the real high-water mark before touching it.
+
+### D. `RADIO_MAX_PENDING` 10 → 6 · **~2 KB** · **not pursued**
+
+Shrinks both `_pending[]` and `RadioReport::events[]`, each of which holds a
+full 250-byte packet per slot. Same caveat: this is the depth of outstanding
+request/reply pairs, and overflowing it loses replies.
+
+### E. `MAX_GAMES` 50 → 16 · ~6.4 KB · **already taken**
+
+Each menu slot costs a manifest plus a placeholder descriptor whether a file
+fills it or not. Done in this branch.
+
+### F. One Enlight LED buffer instead of two · **26.4 KB** · **taken**
+
+A run plays the LED waveform at full power, and drops to `LOW_POWER_FACTOR`
+for the rest of the run once a cycle saturates.  Each power used to have its
+own whole-cycle DMA buffer, 31.2 KB apiece — yet every buffer was one
+2,400-byte period copied thirteen times.  `EnlightLedWave` now keeps one
+period of each power and one DMA buffer, which the cycle task rewrites from
+the other period when a run changes power: 31.2 + 2 × 2.4 KB against 62.4 KB.
+
+What the DMA sends is byte-for-byte what the two buffers sent; only the moment
+the bytes are written moved.  The rewrite runs in the cycle task, after both
+transfers of a cycle have completed and before either of the next is queued,
+so nothing is reading the buffer and the LED/ADC start sequence is untouched.
+The cost is time, not data:
+
+- **Switch to low power** (mid-run, only on a run that saturates): the
+  rewrite lengthens one gap between two cycles, a gap that already holds the
+  whole Goertzel pass over the previous cycle, and the next cycle discards
+  its first period for settling anyway.  Enlight test mode logs how long it
+  took (`lowPowerSwitchUs()`), so the bench can see what the gap grew by.
+- **Back to full power** (the next run): inside the 2 ms AFE warm-up that
+  every run already waits out, so it costs that run nothing.
+
+The DMA buffer must stay DMA-capable and word-aligned, as `heap_caps_malloc`
+returns it.  Otherwise the SPI driver copies it into a same-sized bounce
+buffer on every transfer — the RAM saved here, asked for again at every cycle.
+
+### G. Libraries without debug information · **~10 KB per load** · **taken**
+
+`la.lib` strips `std.lua` and `projector.lua` of line tables, local names
+and upvalue names straight after compiling them (`stripLuaDebug`,
+`LightAir_LuaGame.cpp`).  Measured on a 32-bit build with the ESP32 heap's
+per-block overhead: −9.6 to −10 KB on every ruleset that loads both.  Errors
+inside a library lose their line (`projector.lua:-1: …`); game files keep
+everything, since their messages are what a player debugs with.
+
+### H. String table at two strings per bucket · **~2 KB per load** · **taken**
+
+A loaded ruleset interns ~600 strings, which at Lua's stock load factor of
+one doubles the bucket array to 1,024 pointers.  `lstring.c` now grows it at
+two per bucket (the shrink threshold in `lgc.c` is unchanged), holding it at
+512: −1.9 KB, chains of two on lookup.
+
+### Rejected: shrinking `RADIO_MAX_PAYLOAD`
+
+237 bytes per packet is what makes the radio structures large, and it looks
+like the obvious cut — it is not. It is set by `TotemVMDefs::MAX_PROG = 225`:
+a totem's whole behaviour program travels inside one 0xF1 activation reply.
+Cutting the payload means cutting what a totem can be told to do. The score
+payload has its own floor too, guarded by a `static_assert` in `config.h`
+against `MAX_WINNER_VARS × MAX_PLAYER_ID`.
+
+### Rejected: shrinking `LuaDefaults::MAX_VARS` / `MAX_MSG_RULES`
+
+Measured headroom is thinner than it looks. Worst case in the catalogue:
+
+| | used | limit |
+|---|---:|---:|
+| config + var slots | 15 | 24 |
+| monitor rows | 10 | 16 |
+| rules | 6 | 16 |
+| states | 5 | 8 |
+
+`festasportsasso` alone accounts for 15 of the 24 slots. There is perhaps 1–2 KB
+here across two instances, and taking it would cap what a new ruleset can
+declare. Not worth it while §A and §B are on the table.
+
+---
+
+## 4. Summary
+
+| | | |
+|---|---|---:|
+| **taken** | E `MAX_GAMES` 50 → 16 | ~6.4 KB static |
+| | F one Enlight LED buffer | 26.4 KB heap |
+| | G libraries without debug information | ~10 KB per load |
+| | H string table at two per bucket | ~2 KB per load |
+| **not pursued** | A display sets, C and D radio queues | (~20.8 KB) |
+| **open** | B drop the second `LightAir_LuaGame` | ~7.2 KB static |
+
+F returns the most and costs no limit at all; G and H come off every load
+of a ruleset that takes both libraries.  On the host model the heaviest
+ruleset (upkeep) now keeps 81.5 KB of Lua, and freeforall, the lightest of
+the std games, 69.0 KB.  What the device actually has left is
+`docs/bench-checklist.md` §1–§2, still owed on hardware: those numbers
+decide whether B is ever needed.

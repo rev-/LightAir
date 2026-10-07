@@ -39,7 +39,7 @@ namespace enc {
 static const char* const kAnimNames[] = {
     "Respawn", "FlagTaken", "FlagReturn", "Bonus", "Malus", "Roster",
     "Idle", "BaseIdle", "CPIdle", "FlagIdle", "BonusIdle", "MalusIdle",
-    "FlagMissing", "Control", "ControlContest",
+    "FlagMissing", "Control", "ControlContest", "ControlScore",
     "Custom1", "Custom2", "Custom3", "Custom4",
 };
 static const uint8_t kAnimCount = sizeof(kAnimNames) / sizeof(*kAnimNames);

@@ -3,13 +3,38 @@
 #include "LightAir_UIOutput.h"
 
 // ----------------------------------------------------------------
+// OpticsOutput — the optical settings the active projector wants, queued
+// for the OUTPUT phase.
+//
+// Reconfiguring Enlight while a measurement is in flight corrupts it, and
+// game logic runs at an arbitrary point inside the LOGIC phase, so the
+// change is applied in phase 3 like every other effect.  A game that
+// switches projector and fires in the same tick therefore fires with the
+// optics it had — which is what a profile's ready_ms models anyway.
+//
+// Note the asymmetry with la.shine(), which is a DIRECT call: starting a
+// measurement must happen on this tick, because its return value decides
+// whether energy is spent.  Configuration is deferred; firing is not.
+// ----------------------------------------------------------------
+struct OpticsOutput {
+    bool     hasCycles   = false;
+    bool     hasCooldown = false;
+    uint16_t cycles      = 0;
+    uint16_t cooldownMs  = 0;
+
+    void setCycles(uint16_t v)   { cycles     = v; hasCycles   = true; }
+    void setCooldown(uint16_t v) { cooldownMs = v; hasCooldown = true; }
+};
+
+// ----------------------------------------------------------------
 // GameOutput — unified output bundle passed to all game callbacks.
 //
-// Bundles RadioOutput (queued outgoing radio messages) and
-// UIOutput (queued UI events) into one argument so callback
-// signatures stay concise and remain extensible.
+// Bundles RadioOutput (queued outgoing radio messages), UIOutput
+// (queued UI events) and OpticsOutput (the active projector's Enlight
+// settings) into one argument so callback signatures stay concise and
+// remain extensible.
 //
-// Both queues are flushed by GameRunner in step 3 (OUTPUT phase)
+// All three are flushed by GameRunner in step 3 (OUTPUT phase)
 // after all rules and behaviors have run.
 //
 // Usage in a StateBehavior::onUpdate:
@@ -37,6 +62,7 @@
 //   }
 // ----------------------------------------------------------------
 struct GameOutput {
-    RadioOutput radio;
-    UIOutput    ui;
+    RadioOutput  radio;
+    UIOutput     ui;
+    OpticsOutput optics;
 };

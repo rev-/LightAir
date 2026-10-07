@@ -37,6 +37,7 @@ public:
     void loop(const StripAnimation& anim) override;
     void stopLoop() override;
     void update() override;
+    bool busy() const override { return _fgCount > 0; }
 
 private:
     CRGB    _leds[MAX_LEDS];

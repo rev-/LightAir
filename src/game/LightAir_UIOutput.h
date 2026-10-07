@@ -13,7 +13,8 @@
 // Available events mirror LightAir_UICtrl::UIEvent:
 //   Down, Up, Lit, Enlight, EndGame, FlagGain, FlagTaken,
 //   FlagReturn, ControlGain, ControlLoss, RoleChange, Stop,
-//   Bonus, Malus, Special1, Special2, Custom1..Custom4
+//   Bonus, Malus, Special1, Special2, BonusProjector, MalusDim,
+//   Custom1..Custom4
 //
 // Example:
 //

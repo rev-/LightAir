@@ -1,6 +1,7 @@
 #pragma once
 #include "../config.h"
 #include "../nvs_config.h"
+#include "EnlightLedWave.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
@@ -18,7 +19,6 @@ static constexpr uint32_t ADC_BYTES_PER_CONV = 2;
 static constexpr uint32_t ADC_PIPELINE_DELAY = 1;
 static constexpr uint32_t ADC_CHANNELS       = 3;
 static constexpr uint32_t ADC_CLKS_PER_CONV  = 16;
-static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 
 // GOERTZ_GRAIN: period_clocks must be a multiple of ADC_CLKS_PER_CONV*ADC_CHANNELS=48
 // so that every period contains an exact integer number of R/G/B ADC triples.
@@ -29,14 +29,39 @@ static constexpr uint32_t PDM_CLKS_PER_BYTE  = 4;
 // ledFreqHz and ledClockHz are chosen accordingly.
 static constexpr uint32_t GOERTZ_GRAIN = ADC_CLKS_PER_CONV * ADC_CHANNELS; // 48
 
-static constexpr float    PDM_AMPLITUDE   = 0.95f;
 static constexpr int32_t  KERN_MAG        = 2048;
+
+// ----------------------------------------------------------------
+// Maximum range a device can resolve, from its own calibration:
+//     Rmax = refDist * (refFar / thresh_far)^(1/EXP)
+// using the strongest channel against its own floor — the device still sees
+// a target while ANY channel is above threshold.  Returns 0 when the step-1
+// reference has not been calibrated.
+//
+// Free function over the calib struct rather than an Enlight method alone, so
+// the calibration routine can report it from the values it has just written
+// without depending on when the live Enlight last loaded its copy.
+// ----------------------------------------------------------------
+inline float enlight_max_range_m(const EnlightCalib& cal) {
+    if (cal.refDistM == 0) return 0.0f;
+    const uint32_t ref[3] = { cal.refFarR,      cal.refFarG,      cal.refFarB      };
+    const uint32_t flr[3] = { cal.thresh_far_r, cal.thresh_far_g, cal.thresh_far_b };
+    float best = 0.0f;
+    for (int i = 0; i < 3; i++) {
+        if (ref[i] == 0 || flr[i] == 0) continue;
+        const float r = (float)cal.refDistM
+                      * powf((float)ref[i] / (float)flr[i],
+                             1.0f / EnlightDefaults::RANGE_FALLOFF_EXP);
+        if (r > best) best = r;
+    }
+    return best;
+}
 
 // Result type
 enum class EnlightStatus : uint8_t {
     IDLE        = 0,  // no run() issued since last poll()
     RUNNING     = 1,  // DMA cycles in progress
-    LOW_POW     = 2,  // rawsum below limpow -- no target
+    LOW_POW     = 2,  // below the calibrated detection floor -- no target
     NO_HIT      = 3,  // power OK, no far hit-box matched
     PLAYER_HIT  = 4,  // far target; id = player index (1-based)
     NEAR        = 5,  // near object; id = near-target colour id
@@ -85,6 +110,11 @@ public:
     uint32_t periodsPerCycle() const { return _periodsPerCycle; }
     bool     usedLowPower()    const { return _useLowPower;     }
 
+    // How long the last run's switch to low power took, in µs: the rewrite of
+    // the LED buffer between two cycles, which is what that one gap grew by.
+    // 0 when the run never switched.  A bench diagnostic (Enlight test mode).
+    uint32_t lowPowerSwitchUs() const { return _lowSwitchUs;    }
+
     // True while a run() is in progress or its result has not yet been consumed by poll().
     // Non-destructive: does not clear the result. Use this for loop conditions.
     bool isActive() const { return _active; }
@@ -94,6 +124,15 @@ public:
     // bus until this goes false (isActive() also covers the cooldown, when the
     // bus is free again).
     bool busy() const { return _active && !_complete; }
+
+    // Throw away the result of the run in progress (or completed but not yet
+    // polled): the next poll() that would deliver it reports NO_HIT instead,
+    // and the cooldown / re-arm sequence runs exactly as after a miss.  No-op
+    // when there is nothing undelivered.  GameRunner calls it on every state
+    // change — a measurement belongs to the state it was fired in, so a beam
+    // still in flight when its shooter is put out must not land as a LIT on
+    // the first tick back in play.  Main-loop only, like poll().
+    void discardResult();
 
     // ---- Analogue front end ------------------------------------------------
     // AFE_ON powers the photodiode front end *and* the battery / NTC divider
@@ -141,10 +180,15 @@ public:
 
     // Set cooldown time, in milliseconds
     void setCooldown(int64_t ms) { _cooldown = ms * 1000; }
+    int64_t cooldownMs() const { return _cooldown / 1000; }
 
     // Set repetitions  = number of DMA cycles before classify.
     // 1 cycle = _periodsPerCycle sine periods (13 at V6R2 defaults = 7.8 ms).
-    void setRepetitions(uint32_t reps) { _repetitions = reps; }
+    // Never zero: _repsRemaining counts down from this and is unsigned, so a
+    // zero-repetition run would wrap past the end-of-run test and never
+    // complete — which poll() can only report as a permanently busy device.
+    void setRepetitions(uint32_t reps) { _repetitions = reps ? reps : 1; }
+    uint32_t repetitions() const { return _repetitions; }
     uint32_t cycleTime() const { return _repetitions*EnlightDefaults::MS_PER_REP; }
 
     // Non-blocking start
@@ -173,6 +217,20 @@ public:
     EnlightColorCoords  colorCoords()  const { return _colorCoords; }
     const EnlightCalib& calib()        const { return _cal; }
 
+    // Estimated distance to the target of the last completed run, in metres.
+    // 0 = unknown: no step-1 reference calibration, or the run found no signal.
+    //
+    // This is an observation, never a gate — Enlight does not reject a
+    // measurement on distance.  Range policy belongs to the projector object
+    // (games/lib/projector.lua), which reads this through la.shine_result().
+    // Computed by classify(), so valid from the poll() that delivers a
+    // non-RUNNING status until the next run().
+    float rangeEstM() const { return _rangeEstM; }
+
+    // Maximum range this device can resolve, from the calibration currently
+    // loaded.  See enlight_max_range_m() above.
+    float maxRangeM() const { return enlight_max_range_m(_cal); }
+
     // Access to the raw ADC DMA buffer from the last completed DMA cycle.
     // Only the last cycle is retained; call before the next run().
     // Buffer layout: interleaved 16-bit big-endian values, 12-bit ADC in
@@ -192,6 +250,21 @@ public:
     // Safe to call outside of an active run().
     void buildGoertzTab(uint32_t phase);
 
+    // Replace the calibration in use.  classify() reads _cal live, so the
+    // copy plus a Goertzel table rebuilt at the new phase is ALL it takes
+    // for a new calibration to take effect — no reboot.  Main loop only,
+    // and never while busy(): the cycle task correlates against the table.
+    // Does not touch NVS; persisting is the caller's decision.
+    void applyCalib(const EnlightCalib& cal);
+
+    // Bring the device to rest: throw away whatever run is in flight or
+    // undelivered, wait for its cycles to finish, and skip any cooldown.
+    // Leaves isActive() false, so the next run() is accepted.  Blocking —
+    // at most one run's duration — and it calls idle() (if given) while it
+    // waits, so a caller servicing a radio loop can keep doing so.  Sets
+    // the cooldown to 0 as a side effect: save cooldownMs() first to keep it.
+    void settle(void (*idle)(void*) = nullptr, void* ctx = nullptr);
+
     // Single source of truth for the FAR kernel formula.
     // Returns KERN_MAG * cos(2π * phaseIdx / gp).  Used by buildGoertzTab()
     // and by EnlightCalibRoutine::computeBestPhase() so both always use the
@@ -209,6 +282,9 @@ private:
     uint32_t    _periodsPerCycle  = 0;
     uint32_t    _adcConvsPerCycle = 0;
 
+    // Set by discardResult(): deliver NO_HIT for the current run.
+    bool       _discard            = false;
+
     //Cooldown
     int64_t    _cooldown           = 0;
     int64_t    _cooldownStart      = 0;
@@ -216,24 +292,28 @@ private:
     //Repetitions
     uint32_t    _repetitions        = 10;
 
+    // millis of the last run() start, for poll()'s stall backstop.
+    int64_t     _runStartUs         = 0;
+
     // Correlator kernel. FAR = goertzTab[idx], NEAR = goertzTab[(idx+_nearOffset)%_goertzPeriod]; no second array.
     int32_t*    _goertzTab  = nullptr;
     uint32_t    _nearOffset = 0;
 
     uint32_t            _activePeriods = 0;  // non-ditched, non-settling periods accumulated this run
     EnlightColorCoords  _colorCoords   = {0.0f, 0.0f};
+    float               _rangeEstM     = 0.0f;  // see rangeEstM(); set by classify()
 
-    // LED DIO SPI
+    // LED DIO SPI.  One DMA buffer for both powers, rewritten by dmaTask
+    // between cycles when a run changes power — see EnlightLedWave.
     spi_device_handle_t _ledDevice    = nullptr;
-    uint8_t*            _ledTxBuf    = nullptr;   // full-power PDM buffer
-    uint8_t*            _ledTxBufLow = nullptr;   // 1/10-amplitude PDM buffer
+    EnlightLedWave      _ledWave;
     size_t              _ledBufBytes = 0;
     spi_transaction_t   _ledTrans    = {};
-    spi_transaction_t   _ledTransLow = {};
 
     // Adaptive power state (reset each run())
     bool      _useLowPower    = false;
     float     _cycleNormScale = 1.0f;  // 1.0 = full power, 10.0 = low-power normalisation
+    uint32_t  _lowSwitchUs    = 0;     // see lowPowerSwitchUs(); written by dmaTask
 
     // ADC SPI
     spi_device_handle_t _adcDevice   = nullptr;
@@ -271,13 +351,20 @@ private:
     struct TaskArgs { Enlight* self; };
     TaskArgs        _taskArgs      = {};
 
-    bool          generateWaveform();                            // allocates both buffers and fills them
-    bool          generateWaveform(uint8_t* buf, float ampScale); // fills one buffer at the given amplitude scale
+    bool          generateWaveform();   // sizes the cycle, allocates the DMA buffers and fills them
     void          buildAdcTxBuffer();
     void          processAdcCycle();
     EnlightResult classify();
     EnlightResult classifyNear();  // stub: {NEAR,0}; extend when near grid defined
-    void          spawnCycle();
+    // farSum is the baseline-subtracted far total for this run; baseScale
+    // normalises it back to one DMA cycle so the estimate is independent of
+    // the repetition count the active projector chose.
+    float         estimateRangeM(float farSum, float baseScale) const;
+    // Start one DMA cycle.  False = the task could not be created, which the
+    // caller must handle rather than ignore — see the note in the .cpp.
+    bool          spawnCycle();
+    // Classify and publish the result of the cycles gathered so far.
+    void          finishRun();
     void          onCycleDone();
     static void   dmaTask(void* arg);
 };

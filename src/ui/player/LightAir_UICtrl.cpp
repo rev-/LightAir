@@ -58,6 +58,10 @@ LightAir_UICtrl::_actionTable[(uint8_t)UIEvent::Count] = {
   // RoleChange
   {{100,100,100,0},3,{2000,2500,3000,0},{120,160,200,0},{ {255,0,255},{0,255,255},{255,255,255},{0,0,0} },2},
 
+  // ProjectorChange — two rising ticks, deliberately quieter than RoleChange:
+  // swapping projector is frequent, and must not drown the combat feedback.
+  {{80,80,0,0},2,{2600,3400,0,0},{110,140,0,0},{ {255,180,0},{255,255,255},{0,0,0},{0,0,0} },2},
+
   // Stop
   {{0,0,0,0},0,{0,0,0,0},{0,0,0,0},{ {0,0,0},{0,0,0},{0,0,0},{0,0,0} },1},
 
@@ -72,6 +76,14 @@ LightAir_UICtrl::_actionTable[(uint8_t)UIEvent::Count] = {
 
   // Special2
   {{100,200,100,0},3,{1500,3500,1500,0},{200,255,200,0},{ {255,255,0},{0,255,255},{255,0,255},{0,0,0} },4},
+
+  // BonusProjector — two quick rising ticks into a long high note, in
+  // projector orange: a different shape from Bonus's green arpeggio (LIFE).
+  {{60,60,60,300},4,{3500,4500,3500,5000},{120,150,120,200},{ {255,180,0},{255,220,0},{255,180,0},{255,255,255} },2},
+
+  // MalusDim — a slow falling slide with the vibration fading out, purple to
+  // dark: the projector going dim.  Distinct from Malus's short red thud (LIFE).
+  {{150,150,150,300},4,{2000,1500,1000,700},{200,150,100,50},{ {160,0,255},{100,0,160},{50,0,80},{0,0,0} },2},
 
   // Custom1
   {{0,0,0,0},0,{0,0,0,0},{0,0,0,0},{ {0,0,0},{0,0,0},{0,0,0},{0,0,0} },2},
@@ -106,6 +118,7 @@ _backgroundRunning(false)
 {
   for (int i = 0; i < 4; i++)
     _customDefined[i] = false;
+  _enlightDefined = false;
 }
 
 // ================= PUBLIC =================
@@ -148,12 +161,59 @@ void LightAir_UICtrl::defineCustomAction(
   _customDefined[ci] = true;
 }
 
+// The declared durations are a SHAPE, not a schedule: scale them so the
+// whole action lasts exactly burstMs.  Boundaries are computed cumulatively
+// rather than per step, so integer rounding cannot drift and the last step
+// lands on burstMs exactly.
+uint16_t LightAir_UICtrl::burstStepMs(const UIAction& action,
+                                      uint8_t step, uint16_t burstMs)
+{
+  const uint8_t n = action.stepCount;
+  if (n == 0 || step >= n) return 0;
+
+  uint32_t total = 0;
+  for (uint8_t i = 0; i < n; i++) total += action.durations[i];
+
+  uint32_t prev, next;
+  if (total == 0) {
+    // No shape declared: split the burst evenly.
+    prev = ((uint32_t)burstMs * step)       / n;
+    next = ((uint32_t)burstMs * (step + 1)) / n;
+  } else {
+    uint32_t acc = 0;
+    for (uint8_t i = 0; i < step; i++) acc += action.durations[i];
+    prev = ((uint32_t)burstMs * acc) / total;
+    next = ((uint32_t)burstMs * (acc + action.durations[step])) / total;
+  }
+
+  const uint32_t d = next - prev;
+  // A zero-length step would stall the ticker, so a note squeezed out by a
+  // very short burst still gets a millisecond.
+  return (uint16_t)(d > 0 ? d : 1);
+}
+
+void LightAir_UICtrl::setEnlightAction(const UIAction* action)
+{
+  if (action) {
+    _enlightAction  = *action;
+    _enlightDefined = true;
+  } else {
+    _enlightDefined = false;
+  }
+}
+
 // ================= RESOLVE =================
 
 const LightAir_UICtrl::UIAction&
 LightAir_UICtrl::resolveAction(UIEvent event)
 {
   uint8_t idx = (uint8_t)event;
+
+  // The active projector may supply its own shine feedback.  Overriding the
+  // Enlight slot (rather than adding an event) keeps executeStep()'s
+  // burst-duration override working, since that is keyed on the event value.
+  if (event == UIEvent::Enlight && _enlightDefined)
+    return _enlightAction;
 
   if (idx >= (uint8_t)UIEvent::Custom1 &&
     idx <= (uint8_t)UIEvent::Custom4)
@@ -351,7 +411,7 @@ void LightAir_UICtrl::executeStep()
 
   uint16_t duration =
   (_current.id == UIEvent::Enlight && _current.extraMs > 0)
-    ? _current.extraMs
+    ? burstStepMs(*_current.action, _currentStep, _current.extraMs)
     : _current.action->durations[_currentStep];
 
   if (_audio)

@@ -1,7 +1,14 @@
 #include "LightAir_GameRunner.h"
+#include "LightAir_AreaEffect.h"
+#include "../enlight/Enlight.h"
 #include <Arduino.h>
 #include <string.h>
 #include <esp_system.h>
+
+// The optical device, constructed by the sketch once NVS calibration is
+// loaded.  The runner only ever applies the optics a game queued during the
+// LOGIC phase; starting and polling measurements stays with the ruleset.
+extern Enlight* enlightPtr;
 
 /* =========================================================
  *   BEGIN — one-time setup
@@ -31,8 +38,13 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     _lastEnlightActiveMs = 0;
     _nextSensorReadMs    = 0;
     _sensorReadPending   = false;
+    _areaSentAt          = 0;
+    _areaSentEver        = false;
 
     // -- Build display binding sets from MonitorVar::stateMask --
+    // From zero: the set table belongs to one ruleset at a time, and a second
+    // begin() in the same boot would otherwise append to the last one's.
+    display.resetBindingSets();
 
     // Pass 1: collect unique state indices that need a binding set.
     for (uint8_t v = 0; v < game.monitorCount; v++) {
@@ -59,8 +71,14 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
             const uint8_t px = var.col * DisplayDefaults::CELL_WIDTH;
             const uint8_t py = var.row * DisplayDefaults::CELL_HEIGHT
                                + 3 * DisplayDefaults::FONT_HEIGHT;
-            if (var.type == VarType::INT)
-                display.bindIntVariable(var.asInt, var.icon, px, py);
+            if (var.type == VarType::BAR)
+                display.bindBarVariable(var.asInt, var.icon, px, py,
+                                        var.barTrigger, var.barFill,
+                                        var.barWidth ? var.barWidth
+                                                     : DisplayDefaults::BAR_WIDTH,
+                                        var.barStart, var.iconVar);
+            else if (var.type == VarType::INT)
+                display.bindIntVariable(var.asInt, var.icon, px, py, var.iconVar);
             else
                 display.bindStringVariable(var.asChars, var.icon, px, py);
         }
@@ -70,9 +88,10 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     _emptyBindingSetId = display.createBindingSet();
     _endExitReady = false;
 
-    // Reset state and activate the initial binding set.
-    *game.currentState = game.initialState;
-    activateStateDisplay(game.initialState);
+    // Reset state and activate the initial binding set.  A new match starts
+    // with no measurement pending, whatever state the last one ended in.
+    if (enlightPtr) enlightPtr->discardResult();
+    enterState(game.initialState);
 
     // Stamp the game's typeId on the radio layer so all outgoing packets
     // carry it and incoming packets from other games are filtered out.
@@ -103,11 +122,17 @@ void LightAir_GameRunner::clearTotems() {
     _totemCount = 0;
 }
 
-void LightAir_GameRunner::addTotem(uint8_t id, uint8_t roleId) {
+void LightAir_GameRunner::addTotem(uint8_t id, uint8_t roleId, uint8_t option) {
     if (_totemCount >= GameDefaults::MAX_PARTICIPANTS) return;
     for (uint8_t i = 0; i < _totemCount; i++)
         if (_totems[i].id == id) return;  // ignore duplicate
-    _totems[_totemCount++] = { id, roleId };
+    _totems[_totemCount++] = { id, roleId, option };
+}
+
+uint8_t LightAir_GameRunner::totemOption(uint8_t id) const {
+    for (uint8_t t = 0; t < _totemCount; t++)
+        if (_totems[t].id == id) return _totems[t].option;
+    return 0;
 }
 
 uint8_t LightAir_GameRunner::totemIdForRole(uint8_t roleId, uint8_t idx) const {
@@ -147,6 +172,20 @@ uint8_t LightAir_GameRunner::teamOf(uint8_t id) const {
  *   UPDATE — one loop iteration
  * ========================================================= */
 
+// Every state change goes through here.  Besides the display, it drops any
+// Enlight measurement still undelivered: a beam belongs to the state it was
+// fired in.  Only in-play states read results (proj.result), so a beam in
+// flight when its shooter went down used to sit in Enlight's result slot for
+// the whole wait and go out as a LIT on the first tick back in play — at
+// whoever it hit seconds earlier, wherever they are now.  Replies are
+// deliberately NOT touched: a SHONE reply arriving after the shooter went
+// down is a point earned while in play.
+void LightAir_GameRunner::enterState(uint8_t s) {
+    if (*_game->currentState != s && enlightPtr) enlightPtr->discardResult();
+    *_game->currentState = s;
+    activateStateDisplay(s);
+}
+
 void LightAir_GameRunner::update() {
     uint32_t loopStart = millis();
 
@@ -185,149 +224,31 @@ void LightAir_GameRunner::update() {
 
     // ---- Step 1: READ ----
     const InputReport& inputs = _input->poll();
+
+    // A+B: the player asks for the tools menu.  Checked before the radio is
+    // polled, so nothing received this cycle is dropped — the hold's own
+    // cycles poll it from here on.
+    if (holdChord(inputs)) {
+        runHold();
+        return;
+    }
+
     const RadioReport& radio  = _radio->poll();
 
     // ---- Step 2: LOGIC ----
     GameOutput output;
 
     if (_scoreActive) {
-        scoreUpdate(inputs, radio, output);
+        scoreRadio(radio, output);
+        scoreInput(inputs);
         _display->update();
         flushOutput(output);
         while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
         return;
     }
 
-    // Step 2a: Infrastructure intercepts — handle before DirectRadioRules.
-    // Marked events are skipped by the DirectRadioRules loop below.
-    bool infraHandled[RADIO_MAX_PENDING] = {};
-
-    // MSG_END_GAME: force scoringState entry on any device that hasn't yet transitioned.
-    for (uint8_t e = 0; e < radio.count; e++) {
-        const RadioEvent& ev = radio.events[e];
-        if (ev.type != RadioEventType::MessageReceived) continue;
-        if (ev.packet.msgType != GameDefaults::MSG_END_GAME) continue;
-        infraHandled[e] = true;
-        if (*_game->currentState != _game->scoringState) {
-            uint8_t prev = *_game->currentState;
-            *_game->currentState = _game->scoringState;
-            activateStateDisplay(_game->scoringState);
-            bool fired = false;
-            for (uint8_t i = 0; i < _game->ruleCount; i++) {
-                const StateRule& r = _game->rules[i];
-                if (r.fromState == prev && r.toState == _game->scoringState) {
-                    if (r.onTransition) r.onTransition(*_display, output);
-                    fired = true;
-                    break;
-                }
-            }
-            if (!fired) output.ui.trigger(LightAir_UICtrl::UIEvent::EndGame);
-        }
-    }
-
-    // MSG_TOTEM_BEACON: reply with the totem's assigned role, the current session
-    // token, and the game's remaining time (see replyToTotemBeacon()).
-    // No reply is sent to non-totem senders or unconfigured totems.
-    for (uint8_t e = 0; e < radio.count; e++) {
-        const RadioEvent& ev = radio.events[e];
-        if (ev.type           != RadioEventType::MessageReceived) continue;
-        if (ev.packet.msgType != RadioMsg::MSG_TOTEM_BEACON)      continue;
-        infraHandled[e] = true;
-        replyToTotemBeacon(ev, output);
-    }
-
-    // Step 2b: DirectRadioRules — handle all incoming MessageReceived events.
-    // Events intercepted above (MSG_END_GAME, MSG_TOTEM_BEACON) are skipped.
-    for (uint8_t e = 0; e < radio.count; e++) {
-        const RadioEvent& ev = radio.events[e];
-        if (ev.type != RadioEventType::MessageReceived) continue;
-        if (infraHandled[e]) continue;
-
-        for (uint8_t i = 0; i < _game->directRadioRuleCount; i++) {
-            const DirectRadioRule& r = _game->directRadioRules[i];
-            if (r.fromState != *_game->currentState) continue;
-            if (r.msgType   != ev.packet.msgType)    continue;
-            if (r.condition && !r.condition(ev.packet)) continue;
-
-            if (r.onReceive) r.onReceive(ev.packet, ev.rssi, *_display, output);
-            // DYNAMIC_REPLY: the callback queued its own reply with a
-            // runtime-decided sub-type (Lua handlers return it).
-            if (r.replySubType != DirectRadioRule::DYNAMIC_REPLY)
-                output.radio.reply(ev.packet, r.replySubType);
-            break;
-        }
-        // No blanket reply for an unmatched message.  Totem beacons are
-        // broadcasts every player in range hears; answering all of them was
-        // pure airtime, and it let an uninterested player's empty reply stand
-        // in for the deliberate one a BASE or BONUS was waiting for.  A reply
-        // now means "this ruleset acted on your beacon", nothing else.
-    }
-
-    // Step 2c: ReplyRadioRules — handle all ReplyReceived and Timeout events.
-    for (uint8_t e = 0; e < radio.count; e++) {
-        const RadioEvent& ev = radio.events[e];
-        if (ev.type != RadioEventType::ReplyReceived &&
-            ev.type != RadioEventType::Timeout) continue;
-
-        uint8_t state = *_game->currentState;
-        for (uint8_t i = 0; i < _game->replyRadioRuleCount; i++) {
-            const ReplyRadioRule& r = _game->replyRadioRules[i];
-            if (!(r.activeInStateMask & (1u << state))) continue;
-            if (r.eventType != ev.type) continue;
-            if (ev.type == RadioEventType::ReplyReceived &&
-                r.replySubType != 0 &&
-                (ev.packet.payloadLen == 0 || ev.packet.payload[0] != r.replySubType)) continue;
-            if (r.condition && !r.condition(ev.packet, ev.original)) continue;
-
-            if (r.onReply) r.onReply(ev.packet, ev.original, ev.rssi, *_display, output);
-            break;
-        }
-    }
-
-    // Step 2d: StateRules — evaluate transitions (first match wins).
-    for (uint8_t i = 0; i < _game->ruleCount; i++) {
-        const StateRule& r = _game->rules[i];
-        if (r.fromState != *_game->currentState) continue;
-        if (r.condition && !r.condition(inputs, radio)) continue;
-
-        *_game->currentState = r.toState;
-        activateStateDisplay(r.toState);
-        if (r.onTransition) r.onTransition(*_display, output);
-        break;
-    }
-
-    // After Step 2d: detect scoringState entry and kick off score collection.
-    if (*_game->currentState == _game->scoringState && !_scoreActive) {
-        _scoreActive      = true;
-        _scoreResultShown = false;
-        _scorePresent     = 0;
-        _scoreSentAt      = 0;
-        _scoreEntryAt     = millis();
-        memset(_scoreSlots, 0, sizeof(_scoreSlots));
-
-        // Record own scores immediately.
-        uint8_t myId = _radio->playerId();
-        if (_expectedPlayerMask & (1u << myId)) {
-            scoreFillSlot(_scoreSlots[myId]);
-            _scorePresent |= (1u << myId);
-        }
-
-        // Flood MSG_END_GAME so devices still in a non-scoring state transition.
-        output.radio.broadcast(GameDefaults::MSG_END_GAME, nullptr, 0, 2);
-        // Flood MSG_TOTEM_ROSTER so any activated totem reverts to stateless.
-        // A single broadcast can be lost, so scoreUpdate() keeps re-sending it
-        // for the duration of the end-game screen (see _rosterSentAt).
-        output.radio.broadcast(RadioMsg::MSG_TOTEM_ROSTER, nullptr, 0, 2);
-        _rosterSentAt = millis();
-        scoreBroadcastFused(output);
-        _scoreSentAt = millis();
-
-        if (_scorePresent == _expectedPlayerMask) {
-            _scoreResultShown = true;
-            postScoreAnnounce();
-            scoreAnnounce();
-        }
-    }
+    logic(inputs, radio, output);           // steps 2a-2d
+    startScoringIfEntered(output);
 
     // Step 2e: StateBehavior — per-state continuous logic.
     for (uint8_t i = 0; i < _game->behaviorCount; i++) {
@@ -345,8 +266,482 @@ void LightAir_GameRunner::update() {
     while ((millis() - loopStart) < GameDefaults::LOOP_MS) {}
 }
 
+// Steps 2a-2d, shared by update() and the reduced cycles of a hold.
+// Held (_held), two things change — everything else is identical, which is
+// the point: a held player is answered by the very same handlers.
+//   * direct rules ignore totem senders, and anything outside the ruleset's
+//     hold.accept list;
+//   * the end-of-match transition keeps its radio but defers its UI cue
+//     (runEndAction()).
+// State rules DO run while held, fed an empty InputReport (the keys belong
+// to the tool).  So the player's state follows from what happens to them —
+// shone to zero lives, a respawn clock, the match clock — and never from
+// what they do.  Freezing the rules instead looks tidier and is wrong: a
+// player shone to zero would stay in play and answer every further LIT with
+// another SHONE, handing out a point per beam and counting lives below zero.
+void LightAir_GameRunner::logic(const InputReport& inputs,
+                                const RadioReport& radio,
+                                GameOutput&        output) {
+    // Step 2a: Infrastructure intercepts — handle before DirectRadioRules.
+    // Marked events are skipped by the DirectRadioRules loop below.
+    bool infraHandled[RADIO_MAX_PENDING] = {};
+
+    // MSG_END_GAME: force scoringState entry on any device that hasn't yet transitioned.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType != GameDefaults::MSG_END_GAME) continue;
+        infraHandled[e] = true;
+        if (*_game->currentState != _game->scoringState) {
+            uint8_t prev = *_game->currentState;
+            enterState(_game->scoringState);
+            const StateRule* match = nullptr;
+            for (uint8_t i = 0; i < _game->ruleCount; i++) {
+                const StateRule& r = _game->rules[i];
+                if (r.fromState == prev && r.toState == _game->scoringState) {
+                    match = &r;
+                    break;
+                }
+            }
+            runEndAction(match, match != nullptr, output);
+        }
+    }
+
+    // MSG_TOTEM_BEACON: reply with the totem's assigned role, the current session
+    // token, and the game's remaining time (see replyToTotemBeacon()).
+    // No reply is sent to non-totem senders or unconfigured totems.
+    // Host infrastructure, not a player action: it runs while held too.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type           != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType != RadioMsg::MSG_TOTEM_BEACON)      continue;
+        infraHandled[e] = true;
+        replyToTotemBeacon(ev, output);
+    }
+
+    // MSG_AREA / MSG_AREA_CREDIT: the area service (see "Area effects").
+    // A beacon becomes a hit for the current state's own LIT handler; a
+    // credit is an area knock-out this device caused, scored like its own.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type != RadioEventType::MessageReceived) continue;
+        if (ev.packet.msgType == RadioMsg::MSG_AREA) {
+            infraHandled[e] = true;
+            areaReceive(ev, output);
+        } else if (ev.packet.msgType == RadioMsg::MSG_AREA_CREDIT) {
+            infraHandled[e] = true;
+            areaCredit(ev, output);
+        }
+    }
+
+    // Step 2b: DirectRadioRules — handle all incoming MessageReceived events.
+    // Events intercepted above (MSG_END_GAME, MSG_TOTEM_BEACON, the area
+    // service's) are skipped.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type != RadioEventType::MessageReceived) continue;
+        if (infraHandled[e]) continue;
+        if (_held && holdDrops(ev.packet.senderId, ev.packet.msgType)) continue;
+
+        // The area flag is local (LightAir_AreaEffect.h): a LIT from the air
+        // is a direct hit, whatever its fifth byte says.
+        RadioPacket direct;
+        const RadioPacket* pkt = &ev.packet;
+        if (areaIsHit(ev.packet)) {
+            direct = ev.packet;
+            direct.payload[4] &= (uint8_t)~AreaDefaults::HIT_FLAG_AREA;
+            pkt = &direct;
+        }
+
+        const DirectRadioRule* r = directRuleFor(*pkt);
+        if (!r) continue;
+        const uint8_t repliesBefore = output.radio.replyCount;
+        if (r->onReceive) r->onReceive(*pkt, ev.rssi, *_display, output);
+        // DYNAMIC_REPLY: the callback queued its own reply with a
+        // runtime-decided sub-type (Lua handlers return it).
+        uint8_t sub = r->replySubType;
+        if (sub != DirectRadioRule::DYNAMIC_REPLY) {
+            output.radio.reply(*pkt, sub);
+        } else {
+            const RadioOutput& ro = output.radio;
+            sub = (ro.replyCount > repliesBefore && ro.replies[repliesBefore].payloadLen)
+                ? ro.replies[repliesBefore].payload[0] : 0;
+        }
+        if (pkt->msgType == RadioMsg::MSG_LIT) areaAfterHit(*pkt, sub, output);
+        // No blanket reply for an unmatched message.  Totem beacons are
+        // broadcasts every player in range hears; answering all of them was
+        // pure airtime, and it let an uninterested player's empty reply stand
+        // in for the deliberate one a BASE or BONUS was waiting for.  A reply
+        // now means "this ruleset acted on your beacon", nothing else.
+    }
+
+    // Step 2c: ReplyRadioRules — handle all ReplyReceived and Timeout events.
+    // The acknowledgement of an area credit is the area service's own
+    // bookkeeping, not an answer the ruleset asked for.
+    for (uint8_t e = 0; e < radio.count; e++) {
+        const RadioEvent& ev = radio.events[e];
+        if (ev.type != RadioEventType::ReplyReceived &&
+            ev.type != RadioEventType::Timeout) continue;
+        if (ev.original.msgType == RadioMsg::MSG_AREA_CREDIT) continue;
+        dispatchReply(ev.type, ev.packet, ev.original, ev.rssi, output);
+    }
+
+    // Step 2d: StateRules — evaluate transitions (first match wins).
+    for (uint8_t i = 0; i < _game->ruleCount; i++) {
+        const StateRule& r = _game->rules[i];
+        if (r.fromState != *_game->currentState) continue;
+        if (r.condition && !r.condition(inputs, radio)) continue;
+
+        enterState(r.toState);
+        if (r.toState == _game->scoringState) runEndAction(&r, true, output);
+        else if (r.onTransition)              r.onTransition(*_display, output);
+        break;
+    }
+}
+
+// A held player takes messages from other players only: every totem
+// action is an answer to a totem's beacon (pickups, CP presence, BASE
+// respawn), so dropping totem senders removes all of them and nothing else.
+// The ruleset's hold.accept list can narrow that further.
+bool LightAir_GameRunner::holdDrops(uint8_t senderId, uint8_t msgType) const {
+    return TotemDefs::isTotemId(senderId) || !holdAccepts(msgType);
+}
+
+bool LightAir_GameRunner::holdAccepts(uint8_t msgType) const {
+    if (!_game->holdAccept) return true;
+    for (uint8_t k = 0; k < _game->holdAcceptCount; k++)
+        if (_game->holdAccept[k] == msgType) return true;
+    return false;
+}
+
+// The current state's handler for this message, or nullptr.
+const DirectRadioRule* LightAir_GameRunner::directRuleFor(const RadioPacket& pkt) const {
+    for (uint8_t i = 0; i < _game->directRadioRuleCount; i++) {
+        const DirectRadioRule& r = _game->directRadioRules[i];
+        if (r.fromState != *_game->currentState) continue;
+        if (r.msgType   != pkt.msgType)          continue;
+        if (r.condition && !r.condition(pkt))    continue;
+        return &r;
+    }
+    return nullptr;
+}
+
+void LightAir_GameRunner::dispatchReply(RadioEventType type, const RadioPacket& reply,
+                                        const RadioPacket& original, int8_t rssi,
+                                        GameOutput& output) {
+    const uint8_t state = *_game->currentState;
+    for (uint8_t i = 0; i < _game->replyRadioRuleCount; i++) {
+        const ReplyRadioRule& r = _game->replyRadioRules[i];
+        if (!(r.activeInStateMask & (1u << state))) continue;
+        if (r.eventType != type) continue;
+        if (type == RadioEventType::ReplyReceived &&
+            r.replySubType != 0 &&
+            (reply.payloadLen == 0 || reply.payload[0] != r.replySubType)) continue;
+        if (r.condition && !r.condition(reply, original)) continue;
+
+        if (r.onReply) r.onReply(reply, original, rssi, *_display, output);
+        break;
+    }
+}
+
 /* =========================================================
- *   TOTEM BEACON REPLY (0xF1) — shared by update() and scoreUpdate()
+ *   Area effects
+ *
+ *   The mechanism of an area effect is the runner's, so it works the same
+ *   for every ruleset, and later for totems: the beacon, its reach, who is
+ *   spared, the hit it becomes, the credit.  What a hit DOES stays the
+ *   ruleset's: an area hit goes to the current state's own LIT handler.
+ *   Policies are the game's data (LightAir_Game.h §7b); the wire format is
+ *   LightAir_AreaEffect's.
+ *
+ *     trigger   a real LIT the ruleset answered TAKEN or SHONE, from a
+ *               projector a policy names, makes THIS player the centre: it
+ *               broadcasts the beacon, crediting the shooter.  At most one
+ *               per EMIT_MIN_GAP_MS.  (A ruleset's own la.area_emit is not
+ *               gated: like la.broadcast, its airtime is the ruleset's.)
+ *     receive   a beacon in reach becomes a LIT from the originator, at the
+ *               band's strength, flagged as an area hit.  The ruleset's
+ *               reply to it is dropped (the originator never sent it), and
+ *               it can never trigger another beacon — no chain reaction.
+ *               The flag is local: a LIT from the air has it cleared.
+ *     credit    a hit the ruleset answered SHONE is reported to the
+ *               originator, whose runner acknowledges it and plays it to
+ *               its ruleset as a SHONE reply to one of its own LITs.
+ * ========================================================= */
+void LightAir_GameRunner::areaAfterHit(const RadioPacket& lit, uint8_t sub,
+                                       GameOutput& output) {
+    if (sub != HitReply::TAKEN && sub != HitReply::SHONE) return;
+    if (lit.payloadLen < 2) return;
+    const AreaPolicy* p = areaForProjector(*_game, lit.payload[1]);
+    if (!p) return;
+    if (p->on == AreaTrigger::SHONE && sub != HitReply::SHONE) return;
+
+    const uint32_t now = millis();
+    if (_areaSentEver && now - _areaSentAt < AreaDefaults::EMIT_MIN_GAP_MS) return;
+    _areaSentEver = true;
+    _areaSentAt   = now;
+    areaBeacon(output.radio, p->id, lit.senderId, teamOf(lit.senderId));
+}
+
+void LightAir_GameRunner::areaReceive(const RadioEvent& ev, GameOutput& output) {
+    const RadioPacket& b = ev.packet;
+    if (b.payloadLen < 3) return;
+    const AreaPolicy* p = areaFind(*_game, b.payload[0]);
+    if (!p) return;
+    const uint8_t origin = b.payload[1];
+    const uint8_t team   = b.payload[2];
+    const uint8_t me     = _radio->playerId();
+
+    // The originator is judged by `self` alone; teammates by `friendly`.
+    if (origin == me) {
+        if (!p->self) return;
+    } else if (p->friendly == AreaFriendly::NEVER && team != 0xFF && team == teamOf(me)) {
+        return;
+    }
+    const uint8_t magnitude = areaMagnitude(*p, ev.rssi);
+    if (magnitude == 0) return;                  // out of the area
+    // An area hit is a LIT, whoever is the centre: hold.accept decides.
+    // Totem senders are dropped while held for their pickups and claims,
+    // which an area hit is not.
+    if (_held && !holdAccepts(RadioMsg::MSG_LIT)) return;
+
+    const RadioPacket hit = areaHit(*p, origin, team, magnitude);
+    const DirectRadioRule* r = directRuleFor(hit);
+    if (!r) return;                              // this state takes no hits
+
+    const uint8_t repliesBefore = output.radio.replyCount;
+    if (r->onReceive) r->onReceive(hit, ev.rssi, *_display, output);
+    uint8_t sub = r->replySubType;
+    if (sub == DirectRadioRule::DYNAMIC_REPLY) {
+        const RadioOutput& ro = output.radio;
+        sub = (ro.replyCount > repliesBefore && ro.replies[repliesBefore].payloadLen)
+            ? ro.replies[repliesBefore].payload[0] : 0;
+    }
+    output.radio.replyCount = repliesBefore;     // an area hit answers nobody
+
+    if (sub == HitReply::SHONE && p->credit && origin != me &&
+        origin > 0 && origin < PlayerDefs::MAX_PLAYER_ID) {
+        const uint8_t credit[2] = { p->id, sub };
+        output.radio.sendTo(origin, RadioMsg::MSG_AREA_CREDIT, credit, sizeof(credit));
+    }
+}
+
+void LightAir_GameRunner::areaCredit(const RadioEvent& ev, GameOutput& output) {
+    const RadioPacket& c = ev.packet;
+    output.radio.reply(c, 0);                    // acknowledged: frees its pending slot
+    if (c.payloadLen < 2 || !areaFind(*_game, c.payload[0])) return;
+
+    // Played to the ruleset as the knocked-out player's SHONE answer to one
+    // of this player's own LITs: each game scores it as it scores a direct
+    // knock-out, and reply.sender names who went down.
+    RadioPacket reply;
+    memset(&reply, 0, sizeof(reply));
+    reply.senderId   = c.senderId;
+    reply.team       = c.team;
+    reply.msgType    = RadioMsg::MSG_LIT | 1;
+    reply.timestamp  = c.timestamp;
+    reply.payloadLen = 1;
+    reply.payload[0] = c.payload[1];
+    RadioPacket original;
+    memset(&original, 0, sizeof(original));
+    original.senderId = _radio->playerId();
+    original.msgType  = RadioMsg::MSG_LIT;
+    dispatchReply(RadioEventType::ReplyReceived, reply, original, ev.rssi, output);
+}
+
+// The transition into the scoring state, by rule or by MSG_END_GAME.
+// `matched`: a rule describes this transition (run its action, if any);
+// otherwise the default EndGame cue plays.
+//
+// Held, the action still runs NOW — it can compute the very winner vars
+// this device is about to broadcast (Virus's clean_secs) — and its radio
+// goes out now, but its UI cue waits for the hold to end, with the end
+// screen it belongs to.  Its tray lines wait too: the tray is paused.
+void LightAir_GameRunner::runEndAction(const StateRule* rule, bool matched,
+                                       GameOutput& output) {
+    GameOutput  local;
+    GameOutput& dst = _held ? local : output;
+    if (matched) { if (rule && rule->onTransition) rule->onTransition(*_display, dst); }
+    else         dst.ui.trigger(LightAir_UICtrl::UIEvent::EndGame);
+    if (!_held) return;
+
+    flushRadio(local);
+    for (uint8_t i = 0; i < local.ui.count; i++) {
+        if (_deferredUi.count >= UI_OUT_MAX) break;
+        _deferredUi.msgs[_deferredUi.count++] = local.ui.msgs[i];
+    }
+    if (local.optics.hasCycles)   _heldOptics.setCycles(local.optics.cycles);
+    if (local.optics.hasCooldown) _heldOptics.setCooldown(local.optics.cooldownMs);
+}
+
+// After Step 2d: detect scoringState entry and kick off score collection.
+// Radio and bookkeeping only; what reaches the screen goes through the tray,
+// which a hold keeps paused until the tool returns.
+void LightAir_GameRunner::startScoringIfEntered(GameOutput& output) {
+    if (*_game->currentState != _game->scoringState || _scoreActive) return;
+
+    _scoreActive      = true;
+    _scoreResultShown = false;
+    _scorePresent     = 0;
+    _scoreSentAt      = 0;
+    _scoreEntryAt     = millis();
+    memset(_scoreSlots, 0, sizeof(_scoreSlots));
+
+    // Record own scores immediately.
+    uint8_t myId = _radio->playerId();
+    if (_expectedPlayerMask & (1u << myId)) {
+        scoreFillSlot(_scoreSlots[myId]);
+        _scorePresent |= (1u << myId);
+    }
+
+    // Flood MSG_END_GAME so devices still in a non-scoring state transition.
+    output.radio.broadcast(GameDefaults::MSG_END_GAME, nullptr, 0, 2);
+    // Flood MSG_TOTEM_ROSTER so any activated totem reverts to stateless.
+    // A single broadcast can be lost, so scoreRadio() keeps re-sending it
+    // for the duration of the end-game screen (see _rosterSentAt).
+    output.radio.broadcast(RadioMsg::MSG_TOTEM_ROSTER, nullptr, 0, 2);
+    _rosterSentAt = millis();
+    scoreBroadcastFused(output);
+    _scoreSentAt = millis();
+
+    if (_scorePresent == _expectedPlayerMask) {
+        _scoreResultShown = true;
+        postScoreAnnounce();
+        scoreAnnounce();
+    }
+}
+
+/* =========================================================
+ *   IN-GAME HOLD — see LightAir_GameHold.h
+ * ========================================================= */
+
+struct LightAir_GameRunner::HoldHostAdapter : LightAir_HoldHost {
+    explicit HoldHostAdapter(LightAir_GameRunner& r) : _r(r) {}
+    void service() override { _r.holdService(); }
+    LightAir_GameRunner& _r;
+};
+
+static bool keyDown(const InputReport& in, char key) {
+    for (uint8_t i = 0; i < in.keyEventCount; i++) {
+        const InputReport::KeyEntry& ke = in.keyEvents[i];
+        if (ke.keypadId != InputDefaults::KEYPAD_ID || ke.key != key) continue;
+        return ke.state == KeyState::PRESSED || ke.state == KeyState::HELD;
+    }
+    return false;
+}
+
+static bool keyHeld(const InputReport& in, char key) {
+    for (uint8_t i = 0; i < in.keyEventCount; i++) {
+        const InputReport::KeyEntry& ke = in.keyEvents[i];
+        if (ke.keypadId != InputDefaults::KEYPAD_ID || ke.key != key) continue;
+        return ke.state == KeyState::HELD;
+    }
+    return false;
+}
+
+// Both keys past the long press.  After a hold the chord stays latched
+// until both are up, so keys still down when the tool returns cannot
+// reopen it at once.
+bool LightAir_GameRunner::holdChord(const InputReport& in) {
+    if (!_holdTool) return false;
+    if (_chordLatched) {
+        if (!keyDown(in, 'A') && !keyDown(in, 'B')) _chordLatched = false;
+        return false;
+    }
+    return keyHeld(in, 'A') && keyHeld(in, 'B');
+}
+
+void LightAir_GameRunner::runHold() {
+    holdBegin();
+    HoldHostAdapter host(*this);
+    _holdTool->runHeld(host);
+    holdEnd();
+}
+
+void LightAir_GameRunner::holdBegin() {
+    _held        = true;
+    _holdLastMs  = 0;
+    _heldOptics  = OpticsOutput();
+    _deferredUi.count = 0;
+
+    // Detach the game from the optics: every la.shine* verb and the optics
+    // flush guard on this handle, so with it unplugged the ruleset cannot
+    // start, read or reconfigure a measurement — the tool has the device.
+    _heldEnlight = enlightPtr;
+    enlightPtr   = nullptr;
+
+    _display->pauseTray();
+
+    _holdHooked = false;
+    if (!_scoreActive && _game->onHoldEnter) {
+        GameOutput o;
+        _game->onHoldEnter(*_display, o);
+        flushOutput(o);
+        _holdHooked = true;
+    }
+}
+
+// One reduced cycle.  Radio in, the shared logic with the held filters, the
+// score exchange if the match is over, declarative clocks — never the
+// keypad (the tool polls it) and never the screen (the tool draws it).
+void LightAir_GameRunner::holdService() {
+    static InputReport s_noInput;            // zero-initialised: no keys, no buttons
+
+    const uint32_t now = millis();
+    if (_holdLastMs != 0 && now - _holdLastMs < GameDefaults::LOOP_MS) return;
+    _holdLastMs = now ? now : 1;
+
+    const RadioReport& radio = _radio->poll();
+    GameOutput output;
+
+    if (_scoreActive) {
+        scoreRadio(radio, output);
+    } else {
+        logic(s_noInput, radio, output);
+        startScoringIfEntered(output);
+        if (!_scoreActive && _game->onClockTick) _game->onClockTick();
+    }
+    flushOutput(output);
+}
+
+void LightAir_GameRunner::holdEnd() {
+    if (_holdHooked && _game->onHoldExit) {
+        GameOutput o;
+        _game->onHoldExit(*_display, o);
+        flushOutput(o);                      // still held: optics are stashed
+    }
+    _holdHooked = false;
+    _held       = false;
+
+    // Plug the optics back in.  A result the tool left behind is not the
+    // game's; the optics the ruleset asked for meanwhile apply now, over
+    // whatever the tool restored.
+    enlightPtr = _heldEnlight;
+    if (enlightPtr) {
+        enlightPtr->discardResult();
+        if (_heldOptics.hasCycles)   enlightPtr->setRepetitions(_heldOptics.cycles);
+        if (_heldOptics.hasCooldown) enlightPtr->setCooldown((int64_t)_heldOptics.cooldownMs);
+    }
+
+    // Back to the game screen — the end screen, if the match ended meanwhile
+    // — with every tray line queued during the hold, full duration each.
+    _display->resumeTray();
+    _display->requestRedraw();
+    if (_ui) {
+        for (uint8_t i = 0; i < _deferredUi.count; i++)
+            _ui->trigger(_deferredUi.msgs[i].event);
+    }
+    _deferredUi.count = 0;
+
+    _chordLatched      = true;
+    _restartDownAt     = 0;
+    _restartSpoiled    = false;
+    _sensorReadPending = false;
+    _nextSensorReadMs  = millis();
+}
+
+/* =========================================================
+ *   TOTEM BEACON REPLY (0xF1) — shared by update() and a hold's cycles
  * ========================================================= */
 
 // Builds the activation reply for one MSG_TOTEM_BEACON event:
@@ -394,9 +789,9 @@ void LightAir_GameRunner::replyToTotemBeacon(const RadioEvent& ev, GameOutput& o
  *   SCORE UPDATE — ongoing scoring phase (runs when _scoreActive)
  * ========================================================= */
 
-void LightAir_GameRunner::scoreUpdate(const InputReport& inputs,
-                                       const RadioReport& radio,
-                                       GameOutput& output) {
+// The radio half: runs every cycle, held or not, so a device busy in a tool
+// still answers the round-robin and the winner is decided on time for all.
+void LightAir_GameRunner::scoreRadio(const RadioReport& radio, GameOutput& output) {
     const uint8_t slotSize = _game->winnerVarCount * 4;
     const uint8_t recSize  = 1 + slotSize;  // id byte + score data
 
@@ -455,22 +850,27 @@ void LightAir_GameRunner::scoreUpdate(const InputReport& inputs,
         scoreAnnounce();
     }
 
-    // A+B chord on end-game screen triggers reboot.
-    if (_endExitReady) {
-        bool aDown = false, bDown = false;
-        for (uint8_t i = 0; i < inputs.keyEventCount; i++) {
-            const InputReport::KeyEntry& ke = inputs.keyEvents[i];
-            if (ke.state == KeyState::PRESSED || ke.state == KeyState::HELD) {
-                if (ke.key == 'A') aDown = true;
-                if (ke.key == 'B') bDown = true;
-            }
-        }
-        if (aDown && bDown) {
-            if (_game->onEnd) _game->onEnd(*_display);
-            _display->update();
-            esp_restart();
-        }
+}
+
+// The keypad half, end screen only: A held ALONE for RESTART_HOLD_MS
+// restarts the device.  "Alone": a B seen at any point of the press spoils
+// it — that press is the A+B menu chord, however the two keys landed.
+void LightAir_GameRunner::scoreInput(const InputReport& inputs) {
+    const bool aDown = keyDown(inputs, 'A');
+    const bool bDown = keyDown(inputs, 'B');
+    if (!_endExitReady || !aDown) {
+        _restartDownAt  = 0;
+        _restartSpoiled = false;
+        return;
     }
+    const uint32_t now = millis();
+    if (_restartDownAt == 0) _restartDownAt = now ? now : 1;
+    if (bDown) _restartSpoiled = true;
+    if (_restartSpoiled || now - _restartDownAt < GameDefaults::RESTART_HOLD_MS) return;
+
+    if (_game->onEnd) _game->onEnd(*_display);
+    _display->update();
+    esp_restart();
 }
 
 /* =========================================================
@@ -599,11 +999,11 @@ void LightAir_GameRunner::scoreAnnounce() const {
     _display->showMessage(msg, 0);
 }
 
-// Arm the A+B exit after winner announcement.
+// Arm the hold-A restart after winner announcement.
 // The GAME_END binding set remains active so monitor vars stay visible
 // alongside the tray messages produced by scoreAnnounce().
 void LightAir_GameRunner::postScoreAnnounce() {
-    _display->showMessage("A+B: Restart");
+    _display->showMessage("Hold A: Restart");
     _endExitReady = true;
 }
 
@@ -622,6 +1022,33 @@ void LightAir_GameRunner::activateStateDisplay(uint8_t state) {
 }
 
 void LightAir_GameRunner::flushOutput(const GameOutput& out) {
+    // Projector optics, before anything else: reconfiguring Enlight while a
+    // measurement is in flight corrupts it, and this is the point in the cycle
+    // where nothing has been started yet.  Values arrive already clamped by
+    // the la.shine_config verb.  Held, the tool owns the device: keep what
+    // the ruleset asked for and apply it when the hold ends.
+    if (_held) {
+        if (out.optics.hasCycles)   _heldOptics.setCycles(out.optics.cycles);
+        if (out.optics.hasCooldown) _heldOptics.setCooldown(out.optics.cooldownMs);
+    } else if (enlightPtr) {
+        if (out.optics.hasCycles)   enlightPtr->setRepetitions(out.optics.cycles);
+        if (out.optics.hasCooldown) enlightPtr->setCooldown((int64_t)out.optics.cooldownMs);
+    }
+
+    flushRadio(out);
+
+    // UI events (skipped if no UICtrl was provided)
+    if (!_ui) return;
+    for (uint8_t i = 0; i < out.ui.count; i++) {
+        const UIOutMsg& m = out.ui.msgs[i];
+        if (m.event == LightAir_UICtrl::UIEvent::Enlight)
+            _ui->triggerEnlight(m.enlightMs);
+        else
+            _ui->trigger(m.event);
+    }
+}
+
+void LightAir_GameRunner::flushRadio(const GameOutput& out) {
     // Radio messages
     for (uint8_t i = 0; i < out.radio.count; i++) {
         const RadioOutMsg& m = out.radio.msgs[i];
@@ -638,15 +1065,5 @@ void LightAir_GameRunner::flushOutput(const GameOutput& out) {
             _radio->replyTo(r.senderId, r.origMsgType, r.origTimestamp, r.payload, r.payloadLen);
         else
             _radio->replyTo(r.senderId, r.origMsgType, r.origTimestamp);
-    }
-
-    // UI events (skipped if no UICtrl was provided)
-    if (!_ui) return;
-    for (uint8_t i = 0; i < out.ui.count; i++) {
-        const UIOutMsg& m = out.ui.msgs[i];
-        if (m.event == LightAir_UICtrl::UIEvent::Enlight)
-            _ui->triggerEnlight(m.enlightMs);
-        else
-            _ui->trigger(m.event);
     }
 }

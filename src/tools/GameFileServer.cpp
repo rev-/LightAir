@@ -90,13 +90,12 @@ uint8_t GameFileServer::stationCount() const {
  *   HELPERS
  * ========================================================= */
 
-// dir=0 → /games, dir=1 → /games/lib
-static const char* dirPath(uint8_t dir) {
-    return dir ? LuaDefaults::LIB_DIR : LuaDefaults::GAMES_DIR;
-}
+// The only directory this server ever touches — /games/stock and
+// /games/lib are firmware territory and unreachable from here.
+static const char* dirPath() { return LuaDefaults::CUSTOM_DIR; }
 
-static void appendFileRows(String& html, uint8_t dir) {
-    File d = LittleFS.open(dirPath(dir));
+static void appendFileRows(String& html) {
+    File d = LittleFS.open(dirPath());
     if (!d || !d.isDirectory()) return;
     for (File f = d.openNextFile(); f; f = d.openNextFile()) {
         if (f.isDirectory()) continue;
@@ -107,16 +106,12 @@ static void appendFileRows(String& html, uint8_t dir) {
         html += name;
         html += "</td><td>";
         html += (unsigned)f.size();
-        html += " B</td><td><a href=\"/dl?d=";
-        html += (int)dir;
-        html += "&f=";
+        html += " B</td><td><a href=\"/dl?f=";
         html += name;
         html += "\">download</a></td><td><form method=\"post\" action=\"/rm\" "
                 "onsubmit=\"return confirm('Delete ";
         html += name;
-        html += "?')\"><input type=\"hidden\" name=\"d\" value=\"";
-        html += (int)dir;
-        html += "\"><input type=\"hidden\" name=\"f\" value=\"";
+        html += "?')\"><input type=\"hidden\" name=\"f\" value=\"";
         html += name;
         html += "\"><button>delete</button></form></td></tr>";
         f.close();
@@ -147,21 +142,17 @@ void GameFileServer::sendIndex() {
         html += "</p>";
         s_note[0] = 0;
     }
-    html += "<p>Download a game from this device, or upload a .lua game "
-            "to it. Stock games are restored by the firmware at boot; "
-            "custom games keep their own filenames.</p>";
+    html += "<p>Download a custom game from this device, or upload one to "
+            "it. Stock games aren't shown here: they're managed by the "
+            "firmware and reset to the shipped version on every boot.</p>";
 
-    html += "<h2>Games</h2><table>";
-    appendFileRows(html, 0);
-    html += "</table><h2>Library</h2><table>";
-    appendFileRows(html, 1);
+    html += "<h2>Custom games</h2><table>";
+    appendFileRows(html);
     html += "</table>";
 
     html += "<h2>Upload</h2><form method=\"post\" action=\"/upload\" "
             "enctype=\"multipart/form-data\">"
             "<input type=\"file\" name=\"file\" accept=\".lua\" required> "
-            "<select name=\"d\"><option value=\"0\">game</option>"
-            "<option value=\"1\">library</option></select> "
             "<button>upload</button></form>";
 
     char foot[96];
@@ -176,13 +167,12 @@ void GameFileServer::sendIndex() {
 
 void GameFileServer::sendDownload() {
     String fn  = _http.arg("f");
-    uint8_t dir = (uint8_t)_http.arg("d").toInt();
-    if (dir > 1 || !safeLuaName(fn.c_str())) {
+    if (!safeLuaName(fn.c_str())) {
         _http.send(400, "text/plain", "Bad file name");
         return;
     }
     char path[64];
-    snprintf(path, sizeof(path), "%s/%s", dirPath(dir), fn.c_str());
+    snprintf(path, sizeof(path), "%s/%s", dirPath(), fn.c_str());
     File f = LittleFS.open(path, "r");
     if (!f) {
         _http.send(404, "text/plain", "No such file");
@@ -197,13 +187,12 @@ void GameFileServer::sendDownload() {
 
 void GameFileServer::handleDelete() {
     String fn  = _http.arg("f");
-    uint8_t dir = (uint8_t)_http.arg("d").toInt();
-    if (dir > 1 || !safeLuaName(fn.c_str())) {
+    if (!safeLuaName(fn.c_str())) {
         _http.send(400, "text/plain", "Bad file name");
         return;
     }
     char path[64];
-    snprintf(path, sizeof(path), "%s/%s", dirPath(dir), fn.c_str());
+    snprintf(path, sizeof(path), "%s/%s", dirPath(), fn.c_str());
     if (LittleFS.remove(path))
         snprintf(s_note, sizeof(s_note), "Deleted %s", fn.c_str());
     else
@@ -219,12 +208,6 @@ void GameFileServer::handleUploadData() {
     if (up.status == UPLOAD_FILE_START) {
         s_upWritten  = 0;
         s_upRejected = false;
-        // The multipart body arrives before the form fields are parsed,
-        // but arg("d") works here because WebServer parses urlencoded
-        // fields of the same form ahead of the file part when the
-        // browser sends them first; fall back to /games otherwise.
-        uint8_t dir = (uint8_t)_http.arg("d").toInt();
-        if (dir > 1) dir = 0;
 
         if (!safeLuaName(up.filename.c_str())) {
             s_upRejected = true;
@@ -232,7 +215,7 @@ void GameFileServer::handleUploadData() {
             return;
         }
         char path[64];
-        snprintf(path, sizeof(path), "%s/%s", dirPath(dir), up.filename.c_str());
+        snprintf(path, sizeof(path), "%s/%s", dirPath(), up.filename.c_str());
         s_upFile = LittleFS.open(path, "w");
         if (!s_upFile) {
             s_upRejected = true;
@@ -273,10 +256,8 @@ void GameFileServer::handleUploadDone() {
     if (s_upRejected) {
         HTTPUpload& up = _http.upload();
         if (safeLuaName(up.filename.c_str())) {
-            uint8_t dir = (uint8_t)_http.arg("d").toInt();
-            if (dir > 1) dir = 0;
             char path[64];
-            snprintf(path, sizeof(path), "%s/%s", dirPath(dir), up.filename.c_str());
+            snprintf(path, sizeof(path), "%s/%s", dirPath(), up.filename.c_str());
             LittleFS.remove(path);
         }
     } else {

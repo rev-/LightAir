@@ -10,12 +10,18 @@
 #                every TotemVM program with the reference encoder.
 #   totemvm    — feeds reference-encoder programs into the real C++
 #                LightAir_TotemVM and asserts the five roles' behaviour.
+#   totemdriver — what a totem handles outside its program: the touch
+#                (MSG_TOTEM_TOUCH) — proximity gate, arrival chaser, reply,
+#                and the program never seeing it.
 #   radio      — LightAir_Radio's reply bookkeeping: every reply to a
 #                broadcast is delivered, a unicast's slot closes on the
 #                first answer, timeouts fire only where they mean something.
 #   strip      — the totem LED strip's one-shot queue: several animations
 #                triggered together play in order instead of replacing
 #                one another.
+#   ledwave    — the optics LED buffer: one DMA buffer holds a whole cycle
+#                of exactly the requested power, rewritten only when the
+#                power changes.
 #   luagame    — loads every real game file through the real
 #                LightAir_LuaGame binding (real Lua 5.5 core) and drives
 #                a scripted FFA session through the synthesized
@@ -36,20 +42,25 @@ LUA_OBJ  := $(patsubst $(ROOT)/src/libs/lua-5.5.0/src/%.c,$(BUILD)/lua/%.o,$(LUA
 
 FW_SRC := $(ROOT)/src/lua/LightAir_LuaGame.cpp \
           $(ROOT)/src/lua/LightAir_LuaKernel.cpp \
+          $(ROOT)/src/lua/LightAir_LuaStrip.cpp \
           $(ROOT)/src/lua/LightAir_TotemEncoder.cpp \
           $(ROOT)/src/lua/LightAir_LuaEngine.cpp \
           $(ROOT)/src/game/LightAir_GameRunner.cpp \
+          $(ROOT)/src/game/LightAir_AreaEffect.cpp \
+          $(ROOT)/src/game/LightAir_ToolsMenu.cpp \
+          $(ROOT)/src/game/LightAir_ConfigBlob.cpp \
           $(ROOT)/src/radio/LightAir_Radio.cpp \
           $(ROOT)/src/input/LightAir_InputCtrl.cpp \
           $(ROOT)/src/input/SpiAdcSensor.cpp \
           $(ROOT)/src/enlight/SpiAdcBus.cpp \
+          $(ROOT)/src/enlight/EnlightLedWave.cpp \
           $(ROOT)/src/ui/player/display/LightAir_DisplayCtrl.cpp \
           $(ROOT)/src/ui/player/LightAir_UICtrl.cpp
 
 PROGS := $(BUILD)/prog_base0.bin
 
-.PHONY: all games totemvm radio strip luagame clean
-all: games totemvm radio strip luagame
+.PHONY: all games totemvm totemdriver radio strip ledwave luagame clean
+all: games totemvm totemdriver radio strip ledwave luagame
 	@echo "ALL HOST TESTS PASS"
 
 games:
@@ -70,6 +81,16 @@ $(BUILD)/test_totemvm: test_totemvm.cpp $(ROOT)/src/totem/LightAir_TotemVM.cpp
 totemvm: $(BUILD)/test_totemvm $(PROGS)
 	$(BUILD)/test_totemvm $(BUILD)
 
+$(BUILD)/test_totemdriver: test_totemdriver.cpp $(ROOT)/src/totem/LightAir_TotemDriver.cpp \
+                       $(ROOT)/src/totem/LightAir_TotemVM.cpp \
+                       $(ROOT)/src/ui/totem/LightAir_TotemUICtrl.cpp \
+                       $(ROOT)/src/radio/LightAir_Radio.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+totemdriver: $(BUILD)/test_totemdriver $(PROGS)
+	$(BUILD)/test_totemdriver $(BUILD)
+
 $(BUILD)/test_radio: test_radio.cpp $(ROOT)/src/radio/LightAir_Radio.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -77,12 +98,20 @@ $(BUILD)/test_radio: test_radio.cpp $(ROOT)/src/radio/LightAir_Radio.cpp
 radio: $(BUILD)/test_radio
 	$(BUILD)/test_radio
 
-$(BUILD)/test_strip: test_strip.cpp $(ROOT)/src/ui/totem/strip/LightAir_LEDStrip_HW.cpp
+$(BUILD)/test_strip: test_strip.cpp $(ROOT)/src/ui/totem/strip/LightAir_LEDStrip_HW.cpp \
+                  $(ROOT)/src/ui/totem/LightAir_TotemUICtrl.cpp
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 strip: $(BUILD)/test_strip
 	$(BUILD)/test_strip
+
+$(BUILD)/test_ledwave: test_ledwave.cpp $(ROOT)/src/enlight/EnlightLedWave.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+ledwave: $(BUILD)/test_ledwave
+	$(BUILD)/test_ledwave
 
 $(BUILD)/test_luagame: test_luagame.cpp $(FW_SRC) $(LUA_OBJ)
 	@mkdir -p $(BUILD)

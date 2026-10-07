@@ -8,8 +8,13 @@ constexpr uint16_t kStatelessPeriod = 2000;
 constexpr uint16_t kBaseIdlePeriod  = 1800;
 constexpr uint16_t kCPIdlePeriod    = 1500;
 constexpr uint16_t kFlagIdlePeriod  = 1800;
-constexpr uint16_t kBonusIdlePeriod = 2500;
-constexpr uint16_t kMalusIdlePeriod =  400;
+// BONUS and MALUS idles must read apart without colour: BONUS is a slow,
+// soft shimmer (each LED fades in and out over 2 s), MALUS a fast, hard
+// crackle (each LED snaps on for 80 ms of a 240 ms cycle).
+constexpr uint16_t kBonusIdlePeriod = 2000;
+constexpr uint16_t kMalusIdlePeriod =  240;
+constexpr uint8_t  kBonusIdleChance = 2;    // ~half the LEDs per cycle
+constexpr uint8_t  kMalusIdleChance = 3;    // ~a third, but 8x as often
 constexpr uint16_t kFlagMissPeriod  = 1500;
 constexpr uint16_t kControlPeriod   = 1500;
 constexpr uint16_t kContestPeriod   =  600;
@@ -17,6 +22,50 @@ constexpr uint16_t kRespawnPeriod   = 1000;   // one full lap of the strip
 
 inline uint16_t periodOr(const TotemUICmd& cmd, uint16_t fallback) {
     return cmd.periodMs ? cmd.periodMs : fallback;
+}
+
+// Shared by Control and ControlScore — both carry the same cmd.r/cmd.g
+// slot-vs-player-vs-team encoding (see TotemUIEvent::Control's doc comment
+// in LightAir_TotemUIOutput.h for what each cmd.r sentinel means).
+void resolveOwnerColor(const TotemUICmd& cmd, uint8_t& r, uint8_t& g, uint8_t& b) {
+    if (cmd.r == 0xFE) {
+        // Slot-based, team CP games: cmd.g = owner slot 0-15.
+        // Slots 0/1 are teams; 2+ map to player id = slot+1.
+        uint8_t slot = cmd.g;
+        if (slot < 2) {
+            r = TeamColors::kColors[slot][0];
+            g = TeamColors::kColors[slot][1];
+            b = TeamColors::kColors[slot][2];
+        } else {
+            uint8_t pid = (uint8_t)(slot + 1);
+            if (pid >= PlayerDefs::MAX_PLAYER_ID) pid = 0;
+            r = PlayerColors::kColors[pid][0];
+            g = PlayerColors::kColors[pid][1];
+            b = PlayerColors::kColors[pid][2];
+        }
+    } else if (cmd.r == 0xFD) {
+        // Slot-based, teamless CP games: cmd.g is ALWAYS player id - 1 —
+        // never a team index, so no small-value special case.  Needed
+        // because a teamless game's slots 0/1 (player id 1, 2) are
+        // otherwise indistinguishable from the 0xFE form's team indices.
+        uint8_t pid = (uint8_t)(cmd.g + 1);
+        if (pid >= PlayerDefs::MAX_PLAYER_ID) pid = 0;
+        r = PlayerColors::kColors[pid][0];
+        g = PlayerColors::kColors[pid][1];
+        b = PlayerColors::kColors[pid][2];
+    } else if (cmd.r == 0xFF) {
+        // Player-based: look up by player ID in cmd.g
+        uint8_t pid = (cmd.g < PlayerDefs::MAX_PLAYER_ID) ? cmd.g : 0;
+        r = PlayerColors::kColors[pid][0];
+        g = PlayerColors::kColors[pid][1];
+        b = PlayerColors::kColors[pid][2];
+    } else {
+        // Team-based: look up by team index in cmd.r
+        uint8_t team = (cmd.r < TeamColors::kCount) ? cmd.r : 0;
+        r = TeamColors::kColors[team][0];
+        g = TeamColors::kColors[team][1];
+        b = TeamColors::kColors[team][2];
+    }
 }
 }  // namespace
 
@@ -110,22 +159,22 @@ void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
         }
 
         case TotemUIEvent::BonusIdle: {
-            // Slow, smooth, sparse green twinkle — "good, soft".
+            // Slow, soft random twinkle over the whole frame — "good".
             StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Sparse,
                                  periodOr(cmd, kBonusIdlePeriod),
                                  0,0,0, StripZone::All, 0,
-                                 /*density*/ 4, StripPulseStyle::Smooth };
+                                 kBonusIdleChance, StripPulseStyle::Smooth };
             _strip.loop(a);
             _rgb.set(cmd.r, cmd.g, cmd.b);
             break;
         }
 
         case TotemUIEvent::MalusIdle: {
-            // Fast, hard, sparse red flicker — "bad, pointy".
+            // Fast, hard random crackle over the whole frame — "bad".
             StripAnimation a = { cmd.r, cmd.g, cmd.b, StripEffect::Sparse,
                                  periodOr(cmd, kMalusIdlePeriod),
                                  0,0,0, StripZone::All, 0,
-                                 /*density*/ 4, StripPulseStyle::Hard };
+                                 kMalusIdleChance, StripPulseStyle::Hard };
             _strip.loop(a);
             _rgb.set(cmd.r, cmd.g, cmd.b);
             break;
@@ -143,36 +192,7 @@ void LightAir_TotemUICtrl::dispatchBackground(const TotemUICmd& cmd) {
 
         case TotemUIEvent::Control: {
             uint8_t r, g, b;
-            if (cmd.r == 0xFE) {
-                // Slot-based (TotemVM): cmd.g = owner slot 0-15.
-                // Slots 0/1 are teams; 2+ map to player id = slot+1.
-                // Keeps the colour policy in the renderer so the VM
-                // needs no arithmetic (docs/totem-behavior-handshake.md).
-                uint8_t slot = cmd.g;
-                if (slot < 2) {
-                    r = TeamColors::kColors[slot][0];
-                    g = TeamColors::kColors[slot][1];
-                    b = TeamColors::kColors[slot][2];
-                } else {
-                    uint8_t pid = (uint8_t)(slot + 1);
-                    if (pid >= PlayerDefs::MAX_PLAYER_ID) pid = 0;
-                    r = PlayerColors::kColors[pid][0];
-                    g = PlayerColors::kColors[pid][1];
-                    b = PlayerColors::kColors[pid][2];
-                }
-            } else if (cmd.r == 0xFF) {
-                // Player-based: look up by player ID in cmd.g
-                uint8_t pid = (cmd.g < PlayerDefs::MAX_PLAYER_ID) ? cmd.g : 0;
-                r = PlayerColors::kColors[pid][0];
-                g = PlayerColors::kColors[pid][1];
-                b = PlayerColors::kColors[pid][2];
-            } else {
-                // Team-based: look up by team index in cmd.r
-                uint8_t team = (cmd.r < TeamColors::kCount) ? cmd.r : 0;
-                r = TeamColors::kColors[team][0];
-                g = TeamColors::kColors[team][1];
-                b = TeamColors::kColors[team][2];
-            }
+            resolveOwnerColor(cmd, r, g, b);
             // Owned point: the roaming dot "catches" and fills the ring solid.
             StripAnimation a = { r, g, b, StripEffect::Wipe,
                                  periodOr(cmd, kControlPeriod),
@@ -246,6 +266,20 @@ void LightAir_TotemUICtrl::dispatchOneShot(const TotemUICmd& cmd) {
                                  /*density*/ 1, StripPulseStyle::Smooth };
             _strip.play(a);
             _rgb.set(0, 255, 0);
+            break;
+        }
+
+        case TotemUIEvent::ControlScore: {
+            // Same burst as Bonus, in the current owner's colour instead of
+            // a fixed green — a discrete "point!" flash layered over
+            // Control's steady wipe/fill, which stays showing underneath.
+            uint8_t r, g, b;
+            resolveOwnerColor(cmd, r, g, b);
+            StripAnimation a = { r, g, b, StripEffect::Sparse, 250,
+                                 0,0,0, StripZone::All, /*cycles*/ 4,
+                                 /*density*/ 1, StripPulseStyle::Smooth };
+            _strip.play(a);
+            _rgb.set(r, g, b);
             break;
         }
 

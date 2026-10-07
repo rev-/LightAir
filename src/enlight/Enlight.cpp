@@ -12,8 +12,8 @@ static const char* TAG = "Enlight";
 
 Enlight::Enlight(const EnlightCalib& cal) : _cal(cal) {}
 Enlight::~Enlight() {
-    heap_caps_free(_ledTxBuf);
-    heap_caps_free(_ledTxBufLow);
+    // The worker holds a pointer to this object, so it has to go first.
+    if (_taskHandle) { vTaskDelete(_taskHandle); _taskHandle=nullptr; }
     heap_caps_free(_adcTxBuf);
     heap_caps_free(_adcRxBuf);
     heap_caps_free(_goertzTab);
@@ -24,7 +24,8 @@ Enlight::~Enlight() {
  *   1. Round frequency to nearest GOERTZ_GRAIN-multiple period.
  *   2. _periodsPerCycle = floor(ENLIGHT_SPI_MAX_DMA_LEN / waveformBytes).
  *      All buffers are sized once. Cycle duration logged at INFO.
- *   3. Sigma-delta PDM for one period; replicate across DMA buffer.
+ *   3. Sigma-delta PDM for one period at each power, replicated across
+ *      the one LED DMA buffer by EnlightLedWave (full power to start).
  *      desired = (0.5+off) + (0.5-off)*PDM_AMP*sin/cos(theta)
  *   4. Fill ADC TX buffer (fixed command stream).
  * ============================================================ */
@@ -55,61 +56,16 @@ bool Enlight::generateWaveform() {
              (unsigned long)_goertzPeriod, (unsigned long)_periodsPerCycle,
              (double)cycleMs, (double)EnlightDefaults::PDM_AMP_OFFSET);
 
-    _ledTxBuf    = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    _ledTxBufLow = (uint8_t*)heap_caps_malloc(_ledBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    const bool ledOk = _ledWave.begin(_periodClocks, _periodsPerCycle,
+                                      EnlightDefaults::LOW_POWER_FACTOR);
     _adcTxBuf    = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
     _adcRxBuf    = (uint8_t*)heap_caps_malloc(_adcBufBytes, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
-    if (!_ledTxBuf || !_ledTxBufLow || !_adcTxBuf || !_adcRxBuf) {
+    if (!ledOk || !_adcTxBuf || !_adcRxBuf) {
         ESP_LOGE(TAG, "DMA alloc failed"); return false;
     }
     memset(_adcRxBuf, 0, _adcBufBytes);
 
-    if (!generateWaveform(_ledTxBuf,    1.0f))                        return false;
-    if (!generateWaveform(_ledTxBufLow, EnlightDefaults::LOW_POWER_FACTOR)) return false;
-
     buildAdcTxBuffer();
-    return true;
-}
-
-bool Enlight::generateWaveform(uint8_t* buf, float ampScale) {
-    if (!buf) return false;
-    const float base = 0.5f + EnlightDefaults::PDM_AMP_OFFSET;
-    const float swing = 0.5f - EnlightDefaults::PDM_AMP_OFFSET;
-    const float twoPiOverT = 2.0f * (float)M_PI / (float)_periodClocks;
-    // SPI output is hardware-inverted: bit=1 → LED OFF, bit=0 → LED ON.
-    // To scale LED power by ampScale, scale the LED signal (1-SPI), not SPI itself:
-    //   SPI = 1 - (1 - base - swing*A*cos) * ampScale
-    // At ampScale=1 this reduces to base + swing*A*cos (identical to full-power).
-    // At ampScale=0.1, average SPI ≈ 0.96 → LED ON ~4% → dim.
-    // Dry-run one full period to find the periodic steady-state accumulator values,
-    // so the real pass starts in-phase with no transient.
-    float acc_far = 0.0f, acc_near = 0.0f;
-    for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
-        for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
-            const float theta = twoPiOverT * (float)(i + j);
-            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
-            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
-            acc_far  += d_far  - (float)((acc_far  >= 0.5f) ? 1u : 0u);
-            acc_near += d_near - (float)((acc_near >= 0.5f) ? 1u : 0u);
-        }
-    }
-    for (uint32_t i = 0; i < _periodClocks; i += PDM_CLKS_PER_BYTE) {
-        uint8_t byte = 0;
-        for (uint32_t j = 0; j < PDM_CLKS_PER_BYTE; j++) {
-            const float theta = twoPiOverT * (float)(i + j);
-            const float d_far  = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * cosf(theta)) * ampScale;
-            const float d_near = 1.0f - (1.0f - base - swing * PDM_AMPLITUDE * sinf(theta)) * ampScale;
-            const uint8_t b_far  = (acc_far  >= 0.5f) ? 1u : 0u;
-            const uint8_t b_near = (acc_near >= 0.5f) ? 1u : 0u;
-            acc_far  += d_far  - (float)b_far;
-            acc_near += d_near - (float)b_near;
-            const uint8_t sh = (uint8_t)(6u - j*2u);
-            byte |= (uint8_t)(b_far << (sh+1u)); byte |= (uint8_t)(b_near << sh);
-        }
-        buf[i / PDM_CLKS_PER_BYTE] = byte;
-    }
-    for (uint32_t r = 1; r < _periodsPerCycle; r++)
-        memcpy(buf + r*_waveformBytes, buf, _waveformBytes);
     return true;
 }
 
@@ -136,6 +92,22 @@ void Enlight::buildGoertzTab(uint32_t phase) {
     if (!_goertzTab) { ESP_LOGE(TAG, "goertzTab alloc failed"); return; }
     for (uint32_t i = 0; i < _goertzPeriod; i++)
         _goertzTab[i] = kernelEntry(_goertzPeriod, i + phase);
+}
+
+void Enlight::applyCalib(const EnlightCalib& cal) {
+    _cal = cal;
+    buildGoertzTab(_cal.phaseOff);
+}
+
+void Enlight::settle(void (*idle)(void*), void* ctx) {
+    setCooldown(0);      // a delivered result then releases the device at once
+    discardResult();
+    while (_active) {
+        poll();          // delivers (and drops) the result once cycles end
+        if (!_active) break;
+        if (idle) idle(ctx);
+        vTaskDelay(1);
+    }
 }
 
 /* ============================================================
@@ -182,23 +154,68 @@ bool Enlight::begin(spi_device_handle_t adcHandle) {
 
     _adcDevice = adcHandle;
 
+    // One LED transaction for both powers: the buffer it points at is
+    // rewritten between cycles when a run changes power (see dmaTask).
     memset(&_ledTrans,0,sizeof(_ledTrans));
-    _ledTrans.tx_buffer=_ledTxBuf;
+    _ledTrans.tx_buffer=_ledWave.dmaBuf();
     _ledTrans.flags=SPI_TRANS_MODE_DIO;
     _ledTrans.length=_ledBufBytes*8;
-    memset(&_ledTransLow,0,sizeof(_ledTransLow));
-    _ledTransLow.tx_buffer=_ledTxBufLow;
-    _ledTransLow.flags=SPI_TRANS_MODE_DIO;
-    _ledTransLow.length=_ledBufBytes*8;
     memset(&_adcTrans,0,sizeof(_adcTrans));
     _adcTrans.tx_buffer=_adcTxBuf;
     _adcTrans.rx_buffer=_adcRxBuf;
     _adcTrans.length=_adcBufBytes*8;
     _adcTrans.rxlength=_adcBufBytes*8;
 
+    // The cycle worker, created ONCE and here — at boot, before LittleFS is
+    // scanned and before any Lua state exists, when internal RAM is both
+    // plentiful and unfragmented.  It then waits on a notification for the
+    // rest of the device's life.
+    //
+    // It used to be created per cycle and deleted at the end of each one:
+    // ten task creations per trigger pull, each needing 4 KB of CONTIGUOUS
+    // internal RAM, each freed only when the idle task next ran.  These
+    // boards have no PSRAM, so once a loaded ruleset had filled the heap
+    // with thousands of small Lua allocations there was no 4 KB block left
+    // and every creation failed — silently, at first, which is a trigger
+    // that appears to work once and then never again.
+    _taskArgs={this};
+    if (xTaskCreatePinnedToCore(dmaTask,"EnlightDMA",4096,&_taskArgs,
+                                configMAX_PRIORITIES-1,&_taskHandle,
+                                EnlightDefaults::TASK_CORE) != pdPASS) {
+        _taskHandle=nullptr;
+        ESP_LOGE(TAG,"cannot create the cycle task");
+        return false;
+    }
+
     ESP_LOGI(TAG,"begin() OK  perCycle=%lu  adcConvs=%lu",
              (unsigned long)_periodsPerCycle,(unsigned long)_adcConvsPerCycle);
     return true;
+}
+
+/* ============================================================
+ *   estimateRangeM()
+ *
+ *   The metric range model.  It lives here because it needs the
+ *   calibration constants and the falloff exponent — physics, not game
+ *   design.  Enlight only ever REPORTS a distance; deciding what counts
+ *   as in range is the projector's business, and stays in Lua.
+ *   (Rmax is enlight_max_range_m() in the header — the calibration
+ *   routine needs it over a calib struct it has just written.)
+ * ============================================================ */
+// NOTE — known flaw, deferred: refFar* (the reference this model is
+// anchored to) is derived in calibration step 2 from step-1 shots that were
+// correlated through the PRE-calibration phase.  On a device whose phase had
+// drifted — the one being recalibrated — the reference comes out low and the
+// distance reported here is biased.  See EnlightCalibRoutine.h.
+float Enlight::estimateRangeM(float farSum, float baseScale) const {
+    const float refSum = (float)_cal.refFarR + (float)_cal.refFarG + (float)_cal.refFarB;
+    if (refSum <= 0.0f || _cal.refDistM == 0) return 0.0f;   // never calibrated
+    if (farSum <= 0.0f || baseScale <= 0.0f)  return 0.0f;   // nothing to measure
+
+    const float perCycle = farSum / baseScale;
+    if (perCycle <= 0.0f) return 0.0f;
+    return (float)_cal.refDistM
+         * powf(refSum / perCycle, 1.0f / EnlightDefaults::RANGE_FALLOFF_EXP);
 }
 
 /* ============================================================
@@ -215,13 +232,27 @@ bool Enlight::run() {
     _arrayiter=_satCount=_activePeriods=0;
     _colorCoords={0.0f,0.0f};
     _resultDelivered = false;
+    _discard         = false;
     _useLowPower    = false;
     _cycleNormScale = 1.0f;
+    _lowSwitchUs    = 0;
     _active=true;
     _firstCycle=true;
+    _runStartUs=esp_timer_get_time();
     gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,1);
     _afeOn=true;
-    spawnCycle();
+    if (!spawnCycle()) {
+        // Only reachable when begin() failed, so the device has no worker at
+        // all.  Leave no trace of the attempt: the caller must be free to try
+        // again, and must not be charged a beam for one that never happened.
+        ESP_LOGE(TAG, "run: no cycle task — begin() did not succeed");
+        if (!_afeHold) {
+            gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
+            _afeOn=false;
+        }
+        _active=false;
+        return false;
+    }
     return true;
 }
 
@@ -229,9 +260,36 @@ EnlightRawMeasure Enlight::rawMeasure() const {
     return { _rout, _gout, _bout, _rnear, _gnear, _bnear, _satCount, _arrayiter };
 }
 
+void Enlight::discardResult() {
+    if (_active && !_resultDelivered) _discard = true;
+}
+
 EnlightResult Enlight::poll() {
     if (!_active) return {EnlightStatus::IDLE,0};
-    if (!_complete) return {EnlightStatus::RUNNING,0};
+    if (!_complete) {
+        // Backstop.  _active is cleared here and nowhere else, so anything
+        // that stops a run from completing — a lost DMA cycle, a transaction
+        // that never returns — would otherwise refuse every future run() for
+        // the rest of the match.  A ruleset spends energy on an accepted
+        // run(), so that reads to a player as a trigger that worked once and
+        // then died.  Give up on a run that has overrun any plausible
+        // duration, say so, and let the next trigger through.
+        //
+        // The limit is generous — an order of magnitude over the expected
+        // duration — because abandoning a run that is still in flight would
+        // let the next one start a second DMA task on the same ADC device.
+        // Past this point the first task is either gone or wedged for good,
+        // and a wedged device is not made worse by trying again.
+        const int64_t limit = (int64_t)cycleTime() * 4000 + 1000000;  // µs
+        if (esp_timer_get_time() - _runStartUs < limit)
+            return {EnlightStatus::RUNNING,0};
+        ESP_LOGE(TAG, "run did not complete within %lld ms — abandoning it",
+                 (long long)(limit / 1000));
+        taskENTER_CRITICAL(&_mux);
+        _latestResult={EnlightStatus::NO_HIT,0};
+        _complete=true;
+        taskEXIT_CRITICAL(&_mux);
+    }
 
     if (!_resultDelivered) {
         EnlightResult r;
@@ -239,6 +297,10 @@ EnlightResult Enlight::poll() {
         r=_latestResult;
         _latestResult={};
         taskEXIT_CRITICAL(&_mux);
+        if (_discard) {                 // see discardResult()
+            r={EnlightStatus::NO_HIT,0};
+            _discard=false;
+        }
         if (_cooldown == 0) {
             _active=false;
         } else {
@@ -465,6 +527,10 @@ EnlightResult Enlight::classify() {
     const float scale = (nd_f > 0.0f) ? ((float)_activePeriods / nd_f) : 1.0f;
     const float baseScale = scale * (float)nCycles;
 
+    // No estimate until this run produces one; a stale value from the previous
+    // run would otherwise be read back through rangeEstM().
+    _rangeEstM = 0.0f;
+
     // Check if total power in all channels is below white-wall diffusing surface reference.
     // thresh_far_* are per-cycle peaks from calibration; scale by baseScale to match
     // the accumulated _rout/_gout/_bout values.
@@ -497,6 +563,16 @@ EnlightResult Enlight::classify() {
         ESP_LOGD(TAG, "NEAR ratio=%.3f", (double)(nearSum / farSum));
         return classifyNear();
     }
+
+    // Distance estimate.  Retroreflector return falls as 1/x^n, so the step-1
+    // reference at a known distance fixes the curve:
+    //     R = refDist * (refSum / measSumPerCycle)^(1/n)
+    // Both sides are baseline-subtracted and per DMA cycle, which is what makes
+    // the ratio independent of the repetition count the active projector chose.
+    // Reported through rangeEstM(); 0 = no reference calibration, or no signal.
+    // This is an OBSERVATION, not a gate: nothing here rejects a measurement on
+    // distance.  Range policy belongs to the projector, in Lua.
+    _rangeEstM = estimateRangeM(farSum, baseScale);
 
     float outr = rout * _cal.rfact, outb = bout * _cal.bfact, outg = (float)gout;
     const float s = outr + outb + outg;
@@ -531,13 +607,38 @@ EnlightResult Enlight::classifyNear() {
 /* ============================================================
  *   spawnCycle() / onCycleDone() / dmaTask()
  * ============================================================ */
-void Enlight::spawnCycle() {
-    _taskArgs={this};
-    xTaskCreatePinnedToCore(dmaTask,"EnlightDMA",4096,&_taskArgs,
-                            configMAX_PRIORITIES-1,&_taskHandle,EnlightDefaults::TASK_CORE);
+// Release the worker for one cycle.  It is already running and blocked on
+// this notification, so nothing is allocated here and this cannot fail for
+// want of memory — which is the whole point of the change (see begin()).
+bool Enlight::spawnCycle() {
+    if (!_taskHandle) return false;          // begin() never succeeded
+    xTaskNotifyGive(_taskHandle);
+    return true;
+}
+
+// End of run: classify what the cycles gathered, hand it to poll(), drop the
+// AFE rail unless a sensor read asked to keep it.  Runs on the dmaTask.
+void Enlight::finishRun() {
+    // Leave the AFE rail up if a caller asked to read the sensors on it;
+    // releaseAfe() drops it once they are done.
+    if (!_afeHold) {
+        gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
+        _afeOn=false;
+    }
+    EnlightResult r=classify();
+    taskENTER_CRITICAL(&_mux);
+    _latestResult=r;
+    _complete=true;
+    taskEXIT_CRITICAL(&_mux);
 }
 
 void Enlight::onCycleDone() {
+    // Stale wake-up: the run this cycle belonged to was already closed out by
+    // poll()'s stall backstop.  Now that the worker outlives a run, a pending
+    // notification can survive one — and decrementing an unsigned zero below
+    // would wrap and spawn cycles forever.
+    if (_repsRemaining == 0) return;
+
     const uint32_t satBefore = _satCount;
     processAdcCycle();
     _repsRemaining--;
@@ -557,35 +658,57 @@ void Enlight::onCycleDone() {
     }
 
     if (_repsRemaining==0) {
-        // Leave the AFE rail up if a caller asked to read the sensors on it;
-        // releaseAfe() drops it once they are done.
-        if (!_afeHold) {
-            gpio_set_level((gpio_num_t)EnlightDefaults::AFE_ON,0);
-            _afeOn=false;
-        }
-        EnlightResult r=classify();
-        taskENTER_CRITICAL(&_mux);
-        _latestResult=r;
-        _complete=true;
-        taskEXIT_CRITICAL(&_mux);
+        finishRun();
         return;
     }
-    spawnCycle();
+    if (!spawnCycle()) {
+        // The chain is broken and nothing will ever set _complete.  Close the
+        // run out on the cycles we did get rather than wedging: a short
+        // measurement is a worse reading, a wedged one is a dead trigger.
+        ESP_LOGE(TAG, "lost the cycle task with %lu reps left; closing the run short",
+                 (unsigned long)_repsRemaining);
+        _repsRemaining=0;
+        finishRun();
+    }
 }
 
+// The cycle worker.  Created once by begin() and never deleted: it sleeps on
+// a notification and runs exactly one DMA cycle per spawnCycle().
+//
+// onCycleDone() calls spawnCycle() for the next cycle of the same run, which
+// notifies this task from inside itself — the notification counter is already
+// 1 by the time the take below runs again, so the loop simply continues.
+//
+// It is also the only writer of the LED buffer.  Both of the previous cycle's
+// transfers have completed by the time the take returns, so nothing is
+// reading the buffer, and the rewrite is finished before either transfer of
+// the next cycle is queued — the LED/ADC start sequence is untouched.
 void Enlight::dmaTask(void* arg) {
     Enlight* s=static_cast<TaskArgs*>(arg)->self;
-    if (s->_firstCycle) {
-        s->_firstCycle=false;
-        const int64_t t0=esp_timer_get_time();
-        while (esp_timer_get_time()-t0 < (int64_t)EnlightDefaults::AFE_STARTUP_MICROS) {}
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+        if (s->_firstCycle) {
+            s->_firstCycle=false;
+            const int64_t t0=esp_timer_get_time();
+            // run() asked for full power, and a run that switched to low power
+            // left that waveform in the buffer.  Putting full power back here
+            // hides the rewrite inside the warm-up the AFE needs anyway.
+            s->_ledWave.select(s->_useLowPower);
+            while (esp_timer_get_time()-t0 < (int64_t)EnlightDefaults::AFE_STARTUP_MICROS) {}
+        } else if (s->_ledWave.holdsLow() != s->_useLowPower) {
+            // onCycleDone() switched the run to low power after a saturated
+            // cycle.  The rewrite lengthens this one gap between cycles, and
+            // the first period of the next cycle is discarded for settling
+            // anyway.  Timed, so the bench can see what the gap grew by.
+            const int64_t t0=esp_timer_get_time();
+            s->_ledWave.select(s->_useLowPower);
+            s->_lowSwitchUs=(uint32_t)(esp_timer_get_time()-t0);
+        }
+        spi_device_queue_trans(s->_ledDevice,&s->_ledTrans,portMAX_DELAY);
+        spi_device_queue_trans(s->_adcDevice,&s->_adcTrans,portMAX_DELAY);
+        spi_transaction_t* r;
+        spi_device_get_trans_result(s->_ledDevice,&r,portMAX_DELAY);
+        spi_device_get_trans_result(s->_adcDevice,&r,portMAX_DELAY);
+        s->onCycleDone();
     }
-    spi_transaction_t& ledTx = s->_useLowPower ? s->_ledTransLow : s->_ledTrans;
-    spi_device_queue_trans(s->_ledDevice,&ledTx,portMAX_DELAY);
-    spi_device_queue_trans(s->_adcDevice,&s->_adcTrans,portMAX_DELAY);
-    spi_transaction_t* r;
-    spi_device_get_trans_result(s->_ledDevice,&r,portMAX_DELAY);
-    spi_device_get_trans_result(s->_adcDevice,&r,portMAX_DELAY);
-    s->onCycleDone();
-    vTaskDelete(NULL);
 }

@@ -26,6 +26,13 @@ void LightAir_DisplayCtrl::begin() {
  *   SET MANAGEMENT
  * ========================================================= */
 
+void LightAir_DisplayCtrl::resetBindingSets() {
+    _setCount     = 0;
+    _selectedSet  = 0;
+    _activeSet    = 0;
+    _pendingClear = true;
+}
+
 uint8_t LightAir_DisplayCtrl::createBindingSet() {
     if (_setCount >= DisplayDefaults::MAX_SETS) return 255;
     _sets[_setCount].count = 0;
@@ -50,7 +57,8 @@ void LightAir_DisplayCtrl::activateBindingSet(uint8_t setId) {
  *   BINDING
  * ========================================================= */
 
-bool LightAir_DisplayCtrl::bindIntVariable(int* variable, IconType icon, uint8_t x, uint8_t y) {
+bool LightAir_DisplayCtrl::bindIntVariable(int* variable, IconType icon, uint8_t x, uint8_t y,
+                                          const int* iconVar) {
     if (y < DisplayDefaults::TRAY_HEIGHT) return false;
 
     BindingSet& set = _sets[_selectedSet];
@@ -59,10 +67,12 @@ bool LightAir_DisplayCtrl::bindIntVariable(int* variable, IconType icon, uint8_t
     VariableBinding& b = set.bindings[set.count++];
     b.variable  = variable;
     b.icon      = icon;
+    b.iconVar   = iconVar;
     b.type      = TYPE_INT;
     b.x         = x;
     b.y         = y;
     b.lastValue = INT32_MIN;
+    b.lastIcon  = -1;
     return true;
 }
 
@@ -72,8 +82,10 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     uint8_t x,
     uint8_t y,
     int triggerValue,
-    const int* fillSecs,
-    uint8_t barWidth
+    const int* fillMs,
+    uint8_t barWidth,
+    const int* startMs,
+    const int* iconVar
 ) {
     if (y < DisplayDefaults::TRAY_HEIGHT) return false;
     if (barWidth == 0 || barWidth > DisplayDefaults::BAR_WIDTH) return false;
@@ -84,15 +96,18 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     VariableBinding& b = set.bindings[set.count++];
     b.variable  = variable;
     b.icon      = icon;
+    b.iconVar   = iconVar;
     b.type      = TYPE_BAR;
     b.x         = x;
     b.y         = y;
     b.trigger   = triggerValue;
-    b.fillSecs  = fillSecs;
+    b.fillMs    = fillMs;
+    b.startMs   = startMs;
     b.fillStart = 0;
     b.filling   = false;
     b.barWidth  = barWidth;
     b.lastValue = INT32_MIN;
+    b.lastIcon  = -1;
     return true;
 }
 
@@ -105,10 +120,12 @@ bool LightAir_DisplayCtrl::bindStringVariable(const char* str, IconType icon, ui
     VariableBinding& b = set.bindings[set.count++];
     b.strVariable = str;
     b.icon        = icon;
+    b.iconVar     = nullptr;
     b.type        = TYPE_STRING;
     b.x           = x;
     b.y           = y;
     b.lastText[0] = '\0';
+    b.lastIcon    = -1;
     return true;
 }
 
@@ -125,9 +142,26 @@ void LightAir_DisplayCtrl::showMessage(const char* text, uint32_t durationMs) {
 
     strncpy(_tray[0].text, text, sizeof(_tray[0].text) - 1);
     _tray[0].text[sizeof(_tray[0].text) - 1] = '\0';
-    _tray[0].expireAt = (durationMs > 0) ? (millis() + durationMs) : 0;
+    // Paused: count from the pause instant, which resumeTray() then shifts
+    // to the resume instant — the line gets its whole duration on screen.
+    const uint32_t from = _trayPaused ? _trayPausedAt : millis();
+    _tray[0].expireAt = (durationMs > 0) ? (from + durationMs) : 0;
     _tray[0].active   = true;
     _tray[0].dirty    = true;
+}
+
+void LightAir_DisplayCtrl::pauseTray() {
+    if (_trayPaused) return;
+    _trayPaused   = true;
+    _trayPausedAt = millis();
+}
+
+void LightAir_DisplayCtrl::resumeTray() {
+    if (!_trayPaused) return;
+    const uint32_t away = millis() - _trayPausedAt;
+    for (uint8_t i = 0; i < DisplayDefaults::TRAY_MAX_MESSAGES; i++)
+        if (_tray[i].active && _tray[i].expireAt > 0) _tray[i].expireAt += away;
+    _trayPaused = false;
 }
 
 void LightAir_DisplayCtrl::clearTray() {
@@ -189,14 +223,19 @@ void LightAir_DisplayCtrl::renderBinding(VariableBinding& b) {
 
 void LightAir_DisplayCtrl::renderInt(VariableBinding& b) {
     int value = *b.variable;
-    if (value == b.lastValue) return;
+    const IconType icon = iconOf(b);
+    // Both have to be watched: a projector switch at unchanged energy moves
+    // the icon and nothing else, and a redraw keyed on the value alone would
+    // leave the old one on the glass.
+    if (value == b.lastValue && (int8_t)icon == b.lastIcon) return;
     b.lastValue = value;
+    b.lastIcon  = (int8_t)icon;
 
     _display.setColor(false);
     _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
     _display.setColor(true);
 
-    drawIcon(b.icon, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
+    drawIcon(icon, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
 
     char buf[12];
     snprintf(buf, sizeof(buf), "%d", value);
@@ -220,10 +259,31 @@ void LightAir_DisplayCtrl::renderBar(VariableBinding& b) {
         b.lastValue = INT32_MIN;      // force the first bar frame to draw
     }
 
-    uint32_t fillMs = b.fillSecs ? (uint32_t)(*b.fillSecs) * 1000u : 0u;
+    const uint32_t fillMs = (b.fillMs && *b.fillMs > 0) ? (uint32_t)*b.fillMs : 0u;
     if (fillMs == 0) return;          // nothing to time — leave the slot as is
 
-    uint32_t elapsed = millis() - b.fillStart;
+    // The owner may know when the wait really began — a projector's recharge
+    // starts on the trigger's release, not when the pool hit zero.  0 there
+    // means "at the trigger, but not yet waiting": draw the bar empty rather
+    // than animating a countdown that has not started.
+    uint32_t start = b.fillStart;
+    if (b.startMs) {
+        if (*b.startMs == 0) {
+            if (b.lastValue == 0) return;
+            b.lastValue = 0;
+            _display.setColor(false);
+            _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH,
+                              DisplayDefaults::CELL_HEIGHT);
+            _display.setColor(true);
+            drawIcon(ICON_HOURGLASS, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
+            drawBar(b.x + DisplayDefaults::ICON_GUTTER, b.y + 2,
+                    b.barWidth, DisplayDefaults::BAR_HEIGHT, 0.0f);
+            return;
+        }
+        start = (uint32_t)*b.startMs;
+    }
+
+    uint32_t elapsed = millis() - start;
     if (elapsed > fillMs) elapsed = fillMs;
 
     // Redraw only when the drawn length would actually change.
@@ -262,8 +322,8 @@ void LightAir_DisplayCtrl::renderString(VariableBinding& b) {
 void LightAir_DisplayCtrl::renderTray() {
     uint32_t now = millis();
 
-    // expire timed-out messages
-    for (uint8_t i = 0; i < DisplayDefaults::TRAY_MAX_MESSAGES; i++) {
+    // expire timed-out messages (their clocks are stopped while paused)
+    for (uint8_t i = 0; i < DisplayDefaults::TRAY_MAX_MESSAGES && !_trayPaused; i++) {
         if (_tray[i].active && _tray[i].expireAt > 0 && now >= _tray[i].expireAt) {
             _tray[i].active = false;
             _tray[i].dirty  = true;
@@ -299,6 +359,13 @@ void LightAir_DisplayCtrl::drawIcon(IconType icon, uint8_t x, uint8_t y) {
     _display.drawBitmap(x, y, 8, 8, getIconBitmap(icon));
 }
 
+IconType LightAir_DisplayCtrl::iconOf(const VariableBinding& b) const {
+    if (!b.iconVar) return b.icon;
+    const int v = *b.iconVar;
+    if (v < 0 || v >= (int)ICON_COUNT) return b.icon;
+    return (IconType)v;
+}
+
 const uint8_t* LightAir_DisplayCtrl::getIconBitmap(IconType icon) {
     switch (icon) {
         case ICON_LIGHT:     return ICON_LIGHT_BITMAP;
@@ -309,6 +376,10 @@ const uint8_t* LightAir_DisplayCtrl::getIconBitmap(IconType icon) {
         case ICON_ROLE:      return ICON_ROLE_BITMAP;
         case ICON_ENERGY:    return ICON_ENERGY_BITMAP;
         case ICON_DOWN:      return ICON_DOWN_BITMAP;
+        case ICON_SPLASH:    return ICON_SPLASH_BITMAP;
+        case ICON_FAST:      return ICON_FAST_BITMAP;
+        case ICON_LONG:      return ICON_LONG_BITMAP;
+        case ICON_STRONG:    return ICON_STRONG_BITMAP;
         default:             return ICON_LIGHT_BITMAP;
     }
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+struct lua_State;
 #include "../game/LightAir_GameOutput.h"
 #include "../input/LightAir_InputTypes.h"
 
@@ -18,9 +19,11 @@
 //   LightAir_TotemEncoder.cpp `totems` table → TotemVM program
 //                             serializer (wire format:
 //                             docs/totem-behavior-handshake.md)
+//   LightAir_LuaStrip.cpp     stripLuaDebug, the one piece that needs
+//                             the Lua core's internal headers
 //
 // Nothing in this header is public API — include it only from those
-// three files.
+// files.
 // ----------------------------------------------------------------
 
 class LightAir_LuaGame;
@@ -62,7 +65,54 @@ struct NamedU8 { const char* name; uint8_t val; };
 int lookupName(const NamedU8* tab, uint8_t n, const char* name);  // -1 = not found
 #define LOOKUP(tab, name) lookupName(tab, sizeof(tab) / sizeof(*tab), name)
 
+// The icon registry, shared across the translation units: LightAir_LuaGame
+// resolves a monitor row's `icon` through it, and LightAir_LuaKernel pushes
+// it whole as la.icons so a projector profile can name the icon its energy
+// cell should carry.  Defined once in LightAir_LuaGame.cpp.
+extern const NamedU8 kIcons[];
+extern const uint8_t kIconCount;
+
 // Totem role name ("BASE", "CP", …) → TotemRoleId constant; -1 if
 // unknown.  Shared by the loader (totem_slots / totems keys) and the
 // la.totem_for_role verb.
 int lookupTotemRole(const char* name);
+
+// ---- Compiling a .lua file off LittleFS -------------------------
+//
+// Both the ruleset (LightAir_LuaGame::load) and its libraries
+// (la.lib) come off LittleFS, and both must be STREAMED into the
+// parser rather than read whole.  A ruleset load compiles three
+// files — the game plus std.lua plus projector.lua, ~65 KB of source
+// — and whole-file buffers are garbage only from the moment the
+// parser is done with them, so all three sat in RAM together, on top
+// of the prototypes they were being turned into.  On a board with
+// PSRAM nobody notices; on one without (the N4 projectors) that is
+// the peak that decides whether a game loads at all, and it is why
+// the one ruleset pulling a single library was the one that worked.
+//
+// Streaming caps the source side at one small block.  Chunk names
+// carry Lua's '@' file marker so errors read "game.lua:52: ..."
+// rather than "[string \"/games/game.lua\"]:52: ...", and the mode is
+// text-only: nothing here ever ships precompiled bytecode, and
+// undumping it is an escape from a sandbox that has already had
+// load/loadfile/dofile taken away.
+//
+// Returns a lua_load status with the message on the stack, exactly
+// like luaL_loadfile.  Host builds read the working directory.
+int loadLuaFile(lua_State* L, const char* path);
+
+// ---- Dropping a library's debug information ---------------------
+//
+// Strips the function on top of the stack — and every function nested
+// in it — of its line table and its local and upvalue names, freeing
+// them.  la.lib calls it on std.lua and projector.lua straight after
+// compiling them: on the N4 projectors that debug information is ~10 KB
+// of the two libraries' cost, held for the whole match, in a heap that
+// decides whether the heavier rulesets load at all.
+//
+// The price is in error messages raised inside a library: they still
+// name the file but lose the line ("projector.lua:-1: attempt to
+// compare number with string"), and lose local-variable names.  Game
+// files are never stripped — they are the code players edit, and the
+// failure screen's "game.lua:52: ..." is the only debugger they have.
+void stripLuaDebug(lua_State* L);
