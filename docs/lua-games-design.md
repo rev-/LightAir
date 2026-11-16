@@ -412,7 +412,9 @@ animations are referenced by name inside those programs.
 **Library verbs** — `la.inbox()` → `msg, sender, team, rssi, b1..b6`: the
 oldest message of the library block (0x20–0x2F: `la.msg.LOCK`,
 `la.msg.TRACE`) that no ruleset handler took, or nothing; reading consumes
-it.  It is how `projector.lua` receives its own messages without a line in
+it.  The acknowledgement of a message this player sent to one player
+(0x28–0x2F, answered by the receiving runner) arrives the same way, as
+type + 1.  It is how `projector.lua` receives its own messages without a line in
 any ruleset (`docs/projector.md` §16); a handler a ruleset declares for
 one of them wins.  `la.bar_mark(start_var, value)` sets the marker of the
 bar that times the wait named by its `start_var` (§14).

@@ -91,11 +91,15 @@ local charge_ready   = nil  -- a charged beam waiting for Enlight to take it
 --   closing  the press ended; deliver at the next result()
 --   deaf     delivered; ignore measurements until the next beam
 --   warned   millis of the last warning sent to the target
-local lock = { target = nil, n = 0, last = 0, closing = false, deaf = false, warned = nil }
+--   acked    ...and whether the target's device said it arrived
+local lock = { target = nil, n = 0, last = 0, closing = false, deaf = false,
+               warned = nil, acked = false }
 -- A lock warns the player it is building on, and keeps warning: this
 -- often while it holds, and the warning stands this long at the target —
 -- longer than the interval, so one lost message does not blink it off.
+-- A warning nobody acknowledged is sent again much sooner.
 local LOCK_WARN_EVERY_MS = 1000
+local LOCK_WARN_RETRY_MS = 300
 local LOCK_WARN_HOLD_MS  = 1500
 
 -- ---- DIM (a MALUS) -----------------------------------------------
@@ -1212,10 +1216,12 @@ end
 --   never taken as less than that.
 --
 --   The target is warned.  From step `warn_at` (default 1, the first
---   beam that lands) the projector broadcasts MSG.LOCK naming the target,
---   and again every second while the lock holds; the target's own
---   projector library shows LOCKED and plays the Locked cue for as long as
---   the warnings keep coming (see tick_inbox).  It never says who.
+--   beam that lands) the projector sends MSG.LOCK to the target alone, and
+--   again every second while the lock holds; the target's device
+--   acknowledges it, and one that was not acknowledged is sent again
+--   after 300 ms.  The target's own projector library shows LOCKED and
+--   plays the Locked cue for as long as the warnings keep coming (see
+--   tick_inbox).  It never says who.
 --   warn_at = 0 is a lock that does not warn — one that restores, say.
 --
 --   vars.lock, when the game declares it, shows the step reached.
@@ -1240,7 +1246,7 @@ local function lock_units(vars, p, from, to)
 end
 
 local function lock_clear(vars)
-  lock.target, lock.n, lock.warned = nil, 0, nil
+  lock.target, lock.n, lock.warned, lock.acked = nil, 0, nil, false
   if var.lock then vars[var.lock] = 0 end
 end
 
@@ -1262,15 +1268,18 @@ function P.result(vars)
   local beam = (p.lock.deliver == "beam")
   if status == "player" and not lock.deaf then
     lit(vars, p)
-    if lock.target ~= id then lock.target, lock.n, lock.warned = id, 0, nil end   -- someone else: start over
+    if lock.target ~= id then                       -- someone else: start over
+      lock.target, lock.n, lock.warned, lock.acked = id, 0, nil, false
+    end
     lock.n    = lock.n + 1
     lock.last = now
     if var.lock then vars[var.lock] = lock.n end
     local warn_at = p.lock.warn_at or 1
     if warn_at > 0 and lock.n >= warn_at
-       and (not lock.warned or now - lock.warned >= LOCK_WARN_EVERY_MS) then
-      lock.warned = now
-      la.broadcast(la.msg.LOCK, id)
+       and (not lock.warned
+            or now - lock.warned >= (lock.acked and LOCK_WARN_EVERY_MS or LOCK_WARN_RETRY_MS)) then
+      lock.warned, lock.acked = now, false
+      la.send(id, la.msg.LOCK)
     end
     if beam then
       shot_units = lock_units(vars, p, lock.n, lock.n)
@@ -1521,12 +1530,17 @@ local function tick_inbox(now)
   local msg, sender, team, rssi, b1, b2, b3 = la.inbox()
   while msg do
     if msg == la.msg.LOCK then
-      if b1 == la.my_id() then
-        -- The cue once per warning: it pulses for as long as the lock holds.
-        locked_until = now + LOCK_WARN_HOLD_MS
+      -- Sent to this player alone, and already acknowledged by the runner.
+      -- A warning sent again because its acknowledgement was lost must not
+      -- play the cue twice: one pulse per interval.
+      if now >= locked_until - (LOCK_WARN_HOLD_MS - LOCK_WARN_RETRY_MS * 2) then
         la.show("LOCKED", LOCK_WARN_HOLD_MS)
         la.ui("Locked")
       end
+      locked_until = now + LOCK_WARN_HOLD_MS
+    elseif msg == la.msg.LOCK + 1 then
+      -- The target's device says our warning arrived.
+      if sender == lock.target then lock.acked = true end
     elseif msg == la.msg.TRACE then
       if trace_for_me(b1, b2, b3) then
         local t = seen[sender]

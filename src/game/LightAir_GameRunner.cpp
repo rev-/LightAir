@@ -361,7 +361,13 @@ void LightAir_GameRunner::logic(const InputReport& inputs,
         if (!r) {
             // No ruleset handler in this state.  A library message is kept
             // for its library; a handler, had there been one, would have won.
-            if (RadioMsg::isLibraryMsg(pkt->msgType)) _inbox.push(*pkt, ev.rssi, millis());
+            if (RadioMsg::isLibraryMsg(pkt->msgType)) {
+                _inbox.push(*pkt, ev.rssi, millis());
+                // Sent to this player alone: say it arrived.  The radio is
+                // what the sender is asking about, not whether the library
+                // has read it yet.
+                if (RadioMsg::isDirectedLibraryMsg(pkt->msgType)) output.radio.reply(*pkt, 0);
+            }
             continue;
         }
         const uint8_t repliesBefore = output.radio.replyCount;
@@ -392,6 +398,12 @@ void LightAir_GameRunner::logic(const InputReport& inputs,
         if (ev.type != RadioEventType::ReplyReceived &&
             ev.type != RadioEventType::Timeout) continue;
         if (ev.original.msgType == RadioMsg::MSG_AREA_CREDIT) continue;
+        // The acknowledgement of a library message goes back to the library
+        // that sent it, through the inbox (as type + 1).  A missing one is
+        // not reported: the library sees that none came.
+        if (ev.type == RadioEventType::ReplyReceived &&
+            RadioMsg::isDirectedLibraryMsg(ev.original.msgType))
+            _inbox.push(ev.packet, ev.rssi, millis());
         dispatchReply(ev.type, ev.packet, ev.original, ev.rssi, output);
     }
 

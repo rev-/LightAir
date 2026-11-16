@@ -1369,6 +1369,10 @@ void LightAir_LuaGame::unload() {
     _progCount = 0;
     _optLabelCount = 0;
     _areaPolicyCount = 0;
+    // The registry went with the state: a reference kept across a reload
+    // would point into the next game's.  A ruleset with no on_reply loaded
+    // after one that had it must not inherit the old table.
+    _replyTabRef = LUA_NOREF;
     for (uint8_t i = 0; i < LuaDefaults::MAX_MONITOR; i++) {
         _barMarks[i]    = 0;
         _barMarkSlot[i] = -1;

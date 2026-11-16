@@ -6,7 +6,7 @@ local clock = 0
 
 la = {
   msg = { LIT = 0x10, SCORE_COLLECT = 0x12, POINT_REPORT = 0x14, AREA = 0x18,
-          TRACE = 0x20, LOCK = 0x22,
+          TRACE = 0x20, LOCK = 0x28,
           FLAG_EVENT = 0x50, CP_BEACON = 0x52, CP_SCORE = 0x54,
           BASE_BEACON = 0x56, FLAG_BEACON = 0x58,
           BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60, TOTEM_TOUCH = 0xF4 },
@@ -1396,32 +1396,34 @@ do
           "the respawn bar's marker did not show and clear, on its own bar alone")
     check(clock - rv.respawn_from >= rv.respawn_ms, "respawn", "the bar was not left full")
 
-    -- Two waits at once: each its own gate, and ONE press goes to one of
-    -- them — the one whose window is open; with none open, the first begun.
+    -- Two waits at once run in parallel and each judges the press itself:
+    -- the one whose window is open passes, the other has missed.
     local a = std.gates{ gates = 1, window_ms = 200, lead_ms = 300, random = rnd }
     local b = std.gates{ gates = 1, window_ms = 200, lead_ms = 300, random = rnd }
-    a.start(0, 4000)                             -- gate at 2000
-    b.start(0, 8000)                             -- gate at 4000
-    local a_done, b_done
-    for t = 0, 12000, 10 do
-      state = (t == 4000) and "pressed" or "off" -- b's window; a is over by then
-      if a.tick(t) and not a_done then a_done = t end
-      if b.tick(t) and not b_done then b_done = t end
+    local function both(press_at)
+      local a_done, b_done
+      for t = 0, 14000, 10 do
+        state = (t == press_at) and "pressed" or "off"
+        if a.tick(t) and not a_done then a_done = t end
+        if b.tick(t) and not b_done then b_done = t end
+      end
+      state = "off"
+      return a_done, b_done
     end
-    check(a_done == 4000 and b_done == 4000, "gates",
-          "a press in the second wait's window did not go to it alone: " ..
+    a.start(0, 4000); b.start(0, 8000)           -- gates at 2000 and at 4000
+    local a_done, b_done = both(2000)
+    check(a_done == 2000 and b_done == 10000, "gates",
+          "a press in the first wait's window: it should pass and the other miss, got " ..
           tostring(a_done) .. "/" .. tostring(b_done))
     a.start(0, 4000); b.start(0, 8000)
-    a_done, b_done = nil, nil
-    for t = 0, 12000, 10 do
-      state = (t == 500) and "pressed" or "off"  -- no window open: one miss, not two
-      if a.tick(t) and not a_done then a_done = t end
-      if b.tick(t) and not b_done then b_done = t end
-    end
-    state = "off"
-    check(a_done == 5000 and b_done == 8000, "gates",
-          "one press outside every window was charged to both waits: " ..
+    a_done, b_done = both(500)
+    check(a_done == 5000 and b_done == 10000, "gates",
+          "a press outside both windows is a miss for both, got " ..
           tostring(a_done) .. "/" .. tostring(b_done))
+    a.start(0, 8000); b.start(0, 8000)           -- both gates at 4000
+    a_done, b_done = both(4000)
+    check(a_done == 4000 and b_done == 4000, "gates",
+          "two windows open together did not both pass on one press")
     la.trigger_state = real_state
   end
 
@@ -1618,17 +1620,25 @@ do
     local function locks()
       local n, last = 0, nil
       for _, m in ipairs(out.radio) do
-        if m[1] == "bcast" and m[2] == la.msg.LOCK then n = n + 1; last = m[3] end
+        if m[1] == "send" and m[3] == la.msg.LOCK then n = n + 1; last = m[2] end
       end
       return n, last
     end
-    -- Hold the trigger on player `id` for `beams` beams of 110 ms.
-    local function hold_on(id, beams)
+    -- Hold the trigger on player `id` for `beams` beams of 110 ms.  The
+    -- target's device acknowledges each warning, unless `deaf`.
+    local acked = 0
+    local function hold_on(id, beams, deaf)
       la.trigger_down = function() return true end
       P.tick(v); clock = clock + 110
       for _ = 1, beams do
         shine_result = { status = "player", id = id, metres = 1, r = 0, ang = 0 }
-        P.result(v); P.tick(v); clock = clock + 110
+        P.result(v)
+        local n = locks()
+        if not deaf and n > acked then
+          inbox[#inbox + 1] = { la.msg.LOCK + 1, id, 1, -50, 0, 0, 0, 0, 0, 0 }
+        end
+        acked = n
+        P.tick(v); clock = clock + 110
       end
       la.trigger_down = function() return false end
       shine_result = { status = "no_hit", id = 0, metres = 0, r = 0, ang = 0 }
@@ -1637,14 +1647,19 @@ do
     end
 
     P.grant(v, 33)
-    out.radio = {}
+    out.radio, acked = {}, 0
     hold_on(5, 1)
     local n, who = locks()
-    check(n == 1 and who == 5, "lock warn", "the first beam that landed did not warn its target")
-    out.radio = {}
+    check(n == 1 and who == 5, "lock warn",
+          "the first beam that landed did not send a warning to its target alone")
+    out.radio, acked = {}, 0
     hold_on(5, 25)                               -- 2.75 s on one target
     check(locks() == 3, "lock warn", locks() .. " warnings in 2.75 s, expected 3 (one a second)")
-    out.radio = {}
+    -- Not acknowledged: sent again after 300 ms, not after a second.
+    out.radio, acked = {}, 0
+    hold_on(5, 9, true)                          -- 1 s, nobody answering
+    check(locks() == 3, "lock warn", locks() .. " unacknowledged warnings in 1 s, expected 3")
+    out.radio, acked = {}, 0
     la.trigger_down = function() return true end
     P.tick(v); clock = clock + 110
     for _, id in ipairs{ 5, 5, 7 } do
@@ -1658,11 +1673,11 @@ do
     P.result(v); P.tick(v); P.result(v); clock = clock + 2000
 
     P.grant(v, 34)
-    out.radio = {}
+    out.radio, acked = {}, 0
     hold_on(5, 12)
     check(locks() == 0, "lock warn", "a lock with warn_at = 0 warned")
     P.grant(v, 35)
-    out.radio = {}
+    out.radio, acked = {}, 0
     hold_on(5, 2)
     check(locks() == 0, "lock warn", "warn_at = 3 warned before the third step")
     hold_on(5, 3)
@@ -1671,15 +1686,18 @@ do
     -- The target: LOCKED for as long as the warnings keep coming, by the
     -- library's tick alone — no handler in any game — and never a name.
     out.ui, out.shows = {}, {}
-    inbox = { { la.msg.LOCK, 9, 1, -50, 4, 0, 0, 0, 0, 0 } }     -- for player 4
-    P.tick(v)
-    check(not P.locked() and #out.ui == 0, "lock warn", "a warning for someone else was taken")
-    inbox = { { la.msg.LOCK, 9, 1, -50, 2, 0, 0, 0, 0, 0 } }     -- for us (player 2)
+    inbox = { { la.msg.LOCK, 9, 1, -50, 0, 0, 0, 0, 0, 0 } }
     P.tick(v)
     check(P.locked() and out.ui[1] == "Locked" and out.shows[1] == "LOCKED", "lock warn",
           "a warning did not show LOCKED and play the cue: " .. tostring(P.locked()) .. " " .. table.concat(out.ui, ",") .. " / " .. table.concat(out.shows, ","))
-    clock = clock + 1000
-    inbox = { { la.msg.LOCK, 9, 1, -50, 2, 0, 0, 0, 0, 0 } }
+    -- A warning sent again because its acknowledgement was lost is not a
+    -- second pulse.
+    clock = clock + 300
+    inbox = { { la.msg.LOCK, 9, 1, -50, 0, 0, 0, 0, 0, 0 } }
+    P.tick(v)
+    check(#out.ui == 1 and P.locked(), "lock warn", "a repeated warning played the cue twice")
+    clock = clock + 700
+    inbox = { { la.msg.LOCK, 9, 1, -50, 0, 0, 0, 0, 0, 0 } }
     P.tick(v)
     check(#out.ui == 2 and P.locked(), "lock warn", "the cue did not pulse with the next warning")
     clock = clock + 1400; P.tick(v)

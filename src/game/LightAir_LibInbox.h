@@ -17,8 +17,10 @@
 //   - Only message types of the library block (RadioMsg::isLibraryMsg).
 //   - A handler the ruleset declares for the type in the current state
 //     WINS: the message goes to it and never reaches the inbox.
-//   - Never answered: library messages are single-hop broadcasts, so
-//     nothing waits for a reply.
+//   - A message sent to one player (RadioMsg::isDirectedLibraryMsg) is
+//     acknowledged by the runner as it arrives, read or not, and the
+//     acknowledgement reaches the SENDER's library through its own inbox
+//     as type + 1.  A broadcast one is never answered.
 //   - Small and lossy on purpose.  It holds the last SIZE messages; a
 //     library that is not ticking (the player is out) loses the oldest,
 //     and one that comes back reads nothing older than MAX_AGE_MS.

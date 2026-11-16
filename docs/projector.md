@@ -670,8 +670,11 @@ repeating — times the profile's strength, and the total is capped at `max`.
 - `vars.lock`, when declared, shows the step reached.
 
 **The target is warned.**  From step `warn_at` — default 1, the first beam
-that lands — the projector broadcasts `MSG_LOCK` naming the target, and
-again every second while the lock holds.  The target's device shows
+that lands — the projector sends `MSG_LOCK` to the target alone, and
+again every second while the lock holds.  The target's device
+**acknowledges** each one, so the shining side knows it arrived: a warning
+that was not acknowledged is sent again after 300 ms rather than a second
+(and does not play the cue twice).  The target's device shows
 `LOCKED` and plays the `Locked` cue (two urgent pips, a hard double buzz,
 magenta) at each one, so it pulses for as long as the lock is on, and stops
 by itself 1.5 s after the last: a released trigger, a broken lock and a
@@ -841,10 +844,12 @@ totem hands out a gated projector.
 
 **One marker per wait.**  A marker belongs to the bar that times that wait
 and shows on no other.  Should two gated waits ever run at once, each has
-its own gate, its own marker and its own bar, and **one press goes to one
-of them**: the wait whose window is open takes it; with none open it is a
-miss for the wait that began first.  The player can speed up only one of
-them at a time.
+its own gate, its own marker and its own bar, side by side on the display.  They
+run in parallel and **each judges a press for itself**: the wait whose
+window is open passes its gate, and one whose window is not open has
+missed.  With one trigger the player speeds up one of them at the other's
+cost — unless both windows happen to be open together, and then both
+pass.
 
 A passed gate moves the wait's start back and a missed one moves it
 forward, so the bar jumps with the wait and always shows what is left.
@@ -967,9 +972,19 @@ tick with `la.inbox()`.
 - **In play only, for free.**  The library reads the inbox from
   `proj.tick`, which a ruleset calls in its in-play states and nowhere
   else.  A player who is out is not warned, with nothing declared.
-- **Never answered.**  Library messages are single-hop broadcasts; a
-  message for one player names them in its payload and the others ignore
-  it.  Nothing waits for a reply and no slot is held.
+- **Two kinds, by number**, because a receiver cannot tell a broadcast from
+  a message sent to it alone.  0x20–0x27 are broadcasts (`MSG_TRACE`) and
+  are never answered: everyone in range hears one, and an answer from each
+  would be pure airtime.  0x28–0x2F are sent to **one** player
+  (`MSG_LOCK`) and are **acknowledged by that player's runner** as they
+  arrive, whether or not its library is reading — so the sender knows the
+  message was received and its pending slot is freed at once.  The
+  acknowledgement comes back to the sender's library through its own
+  inbox, as the message's type + 1.
+- **These are not LITs.**  An effect a beam carries (dim, mute, splash, …)
+  rides inside the LIT itself, and a LIT is always answered by the
+  ruleset.  Library messages are the few things that are not a hit at all:
+  a warning that comes *before* any LIT, a trace repeated by the target.
 - **A new library message needs no firmware change** beyond its name in
   `RadioMsg` and `la.msg`.
 

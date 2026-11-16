@@ -96,9 +96,18 @@ constexpr uint8_t MSG_AREA_CREDIT   = 0x1A;
 // runner keeps the ones no ruleset handler took in the library inbox
 // (src/game/LightAir_LibInbox.h) and the library reads them on its tick, so
 // a ruleset need not know which projectors will turn up on the field.  A
-// handler the ruleset does declare for one wins.  All are single-hop
-// broadcasts and none is answered; a new one needs no firmware change
-// beyond its name here.
+// handler the ruleset does declare for one wins.  A new one needs no
+// firmware change beyond its name here.
+//
+// The block has two halves, because a receiver cannot tell a broadcast
+// from a message sent to it alone:
+//   0x20-0x27  broadcasts, never answered: everyone in range hears one, and
+//              an answer from each would be pure airtime
+//   0x28-0x2F  sent to ONE player, and acknowledged by that player's
+//              runner (sub-type 0) whether or not its library is reading —
+//              so the sender knows it arrived, and its pending slot is
+//              freed at once.  The acknowledgement comes back to the
+//              sender's library through the same inbox, as type + 1.
 
 // Trace: a player a `beacon` beam landed on repeats this for as long as the
 // effect lasts (projector.lua, at most once a second), so that whoever it
@@ -108,16 +117,24 @@ constexpr uint8_t MSG_AREA_CREDIT   = 0x1A;
 //   payload[2] = who may use it: 0 = that player, 1 = their team, 2 = anyone
 constexpr uint8_t MSG_TRACE         = 0x20;
 
+// Next available broadcast in 0x20 block: 0x22
+
 // Lock warning: a projector with a lock (projector.lua, "The lock") tells
-// the player it is building on, at most once a second while it holds.
-//   payload[0] = the player being locked on; everyone else ignores it
-constexpr uint8_t MSG_LOCK          = 0x22;
-// Next available in 0x20 block: 0x24
+// the player it is building on, once a second while it holds — sooner if
+// the last one was not acknowledged.  Sent to that player alone; no payload.
+constexpr uint8_t MSG_LOCK          = 0x28;
+// Next available directed in 0x20 block: 0x2A
 
 constexpr uint8_t LIB_MSG_FIRST     = 0x20;
+constexpr uint8_t LIB_MSG_DIRECTED  = 0x28;   // from here on: sent to one player
 constexpr uint8_t LIB_MSG_LAST      = 0x2F;
+// A library REQUEST (even), of either half.
 inline bool isLibraryMsg(uint8_t t) {
     return t >= LIB_MSG_FIRST && t <= LIB_MSG_LAST && (t & 1) == 0;
+}
+// One the receiver's runner acknowledges.
+inline bool isDirectedLibraryMsg(uint8_t t) {
+    return isLibraryMsg(t) && t >= LIB_MSG_DIRECTED;
 }
 
 // ── 0x50 block: totem-mediated game messages ────────────────────

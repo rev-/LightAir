@@ -293,30 +293,11 @@ end
 -- cfg.label, when given, names each event on the tray ("RELOAD: NOW").
 -- cfg.random(lo, hi) replaces math.random, for a test.
 -- ----------------------------------------------------------------
--- Two gated waits may run at once (a reload during some other wait): each
--- has its own bar and its own marker, and ONE press goes to one of them.
--- The wait whose window is open takes it; with none open it is a miss for
--- the wait that began first.  `live` is every gated wait in progress.
-local live = {}
--- A press is one poll long ("pressed" shows in exactly one), and the wait
--- that took it must be the only one: a miss retires that wait's gate, and
--- the next wait ticked in the same poll must not find itself the owner.
--- Remembered by time as well, so a flag left set by a wait that has since
--- ended cannot swallow a later press.
-local press_used, press_at = false, 0
-
-local function press_owner(now)
-  if press_used and now - press_at < 50 then return nil end
-  local owner
-  for _, g in ipairs(live) do
-    if g.pending() then
-      if g.open(now) then return g end
-      if not owner then owner = g end
-    end
-  end
-  return owner
-end
-
+-- Two gated waits may run at once, each with its own bar and marker.
+-- They run in parallel and each judges a press for itself: the wait whose
+-- window is open passes its gate, and one whose window is not open has
+-- missed — so with one trigger the player speeds up one of them at the
+-- other's cost, unless both windows happen to be open together.
 function std.gates(cfg)
   cfg = cfg or {}
   local want    = cfg.gates or 1
@@ -360,22 +341,9 @@ function std.gates(cfg)
 
   local g = {}
 
-  local function retire()
-    on, idx = false, 0
-    for i = #live, 1, -1 do
-      if live[i] == g then table.remove(live, i) end
-    end
-  end
-
-  -- For press_owner: has this wait a gate left, and is its window open.
-  function g.pending() return on and idx > 0 end
-  function g.open(now)
-    local t = now - t0
-    return on and idx > 0 and t >= centre - window // 2 and t <= centre + window // 2
-  end
+  local function retire() on, idx = false, 0 end
 
   function g.start(anchor, nominal_ms)
-    retire()
     t0, total = anchor, nominal_ms or 0
     misses, extra, again = 0, false, false
     count = want
@@ -384,7 +352,6 @@ function std.gates(cfg)
     if count == 1 and total < math.max(4 * window, 4 * lead) then count = 0 end
     if count < 0 then count = 0 end
     on = total > 0
-    if on then live[#live + 1] = g end
     if count > 0 and on then
       seg = total // count
       arm(1)
@@ -425,9 +392,6 @@ function std.gates(cfg)
         say("NOW")
       end
       local pressed = la.trigger_state(trig) == "pressed"
-      if not pressed then press_used = false
-      elseif press_owner(now) == g then press_used, press_at = true, now
-      else pressed = false end
       if pressed and t >= open and t <= close then
         -- Passed: skip ahead, but never past the end of this segment —
         -- the next gate's lead must still be ahead of us.

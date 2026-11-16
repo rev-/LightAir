@@ -740,7 +740,9 @@ int LightAir_LuaGame::l_bar_mark(lua_State* L) {
 }
 
 // la.inbox() -> msg, sender, team, rssi, b1..b6 — the oldest library
-// message no ruleset handler took (LightAir_LibInbox.h), or nothing.
+// message no ruleset handler took (LightAir_LibInbox.h), or nothing.  The
+// acknowledgement of one this player sent arrives the same way, as the
+// message's type + 1 from whoever it was sent to.
 // Reading consumes it.  For libraries: a ruleset that wants one of these
 // messages declares a handler for it, and then it never gets here.
 static int l_inbox(lua_State* L) {

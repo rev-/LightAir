@@ -1969,11 +1969,36 @@ int main() {
                 CHECK(*got == 1 && *lastMsg == RadioMsg::MSG_LOCK && *lastSender == 3 &&
                       *lastB1 == 2 && *lastRssi == -47,
                       "a library message with no handler reaches la.inbox, sender, RSSI and payload");
-                CHECK(!sentOf(RadioMsg::MSG_LOCK + 1), "a library message is never answered");
+                {
+                    const auto* ack = sentOf(RadioMsg::MSG_LOCK + 1);
+                    CHECK(ack && ack->dstMac[0] != 0xFF && ack->dstMac[5] == 3 &&
+                          ack->pkt.payloadLen == 0,
+                          "a library message sent to one player is acknowledged by the runner");
+                }
+                from(3, 1, RadioMsg::MSG_TRACE, { 9, 0, 2 });
+                CHECK(*got == 2 && !sentOf(RadioMsg::MSG_TRACE + 1),
+                      "a broadcast library message is kept and never answered");
+                *got = 1;
                 from(3, 1, 0x16, { 2 });
                 CHECK(*got == 1, "a message outside the library block is not kept");
                 from(3, 1, RadioMsg::MSG_LOCK + 1, { 2 });
-                CHECK(*got == 1, "a reply type is not a library message");
+                CHECK(*got == 1, "a stray reply nobody asked for is not a library message");
+                {
+                    // The other end: this player warns player 5, whose device
+                    // acknowledges; the acknowledgement reaches la.inbox.
+                    const uint8_t none = 0;
+                    rad7.sendTo(5, RadioMsg::MSG_LOCK, &none, 0);
+                    RadioPacket asked{};
+                    while (tr7.hasSent()) {
+                        const auto e = tr7.popSent();
+                        if (e.pkt.msgType == RadioMsg::MSG_LOCK) asked = e.pkt;
+                    }
+                    tr7.push(5, 0, 1, RadioMsg::MSG_LOCK + 1, 0x42, asked.timestamp, 0, nullptr, 0);
+                    step(run7, tr7);
+                    CHECK(*got == 2 && *lastMsg == RadioMsg::MSG_LOCK + 1 && *lastSender == 5,
+                          "the acknowledgement of a library message reaches the sender's inbox");
+                    *got = 1;
+                }
 
                 // Not read for a while: the newest eight are kept, the old dropped.
                 *drain = 0;
