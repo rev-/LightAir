@@ -1840,6 +1840,11 @@ int main() {
                   "an area hit carries the band's strength and the beacon's role tag and kind");
             CHECK(h.payload[LitPayload::EFFECTS_LO] == 0x02 && h.payload[LitPayload::EFFECTS_HI] == 0,
                   "an area hit carries the policy's effects, never its trigger bit");
+            q.weightless = true;
+            const RadioPacket wl = areaHit(q, 3, 1, 2, 9, 4);
+            CHECK(areaIsHit(wl) && wl.payload[LitPayload::STRENGTH] == 0 &&
+                  wl.payload[LitPayload::EFFECTS_LO] == 0x02,
+                  "a weightless policy's hit weighs nothing and still carries its effects");
         }
         g_millisStep = 1;
         run7.begin(ag, d7, in7, rad7, nullptr);

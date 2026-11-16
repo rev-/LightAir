@@ -1380,6 +1380,181 @@ do
     la.trigger_state = real_state
   end
 
+  -- ---- `<` and `>` switch what is in hand; a chord switches nothing --
+  do
+    clock, shine_busy_until = 0, 0
+    local keys = {}
+    local real_key = la.key_state
+    la.key_state = function(k) return keys[k] or "off" end
+    local P = fresh{ vars = BASE_VARS }
+    local v = mk_vars(50)
+    P.reset(v)
+    la.trigger_down = function() return false end
+    local FAST, LONG = P_STANDARD.FAST.id, P_STANDARD.LONG.id
+    P.grant(v, FAST); P.grant(v, LONG)                         -- BASE, FAST, LONG; LONG in hand
+    local function tap(k)
+      keys[k] = "pressed";  P.tick(v); clock = clock + 10
+      keys[k] = "released"; P.tick(v); clock = clock + 10
+      keys[k] = nil;        P.tick(v); clock = clock + 10
+    end
+    out.shows = {}
+    tap(">")
+    check(P.active_id() == 0, "switch", "> did not step to the next projector (wrapping to BASE)")
+    tap("<")
+    check(P.active_id() == LONG, "switch", "< did not step back")
+    tap("<")
+    check(P.active_id() == FAST and out.shows[#out.shows] == "FAST", "switch",
+          "the projector now in hand was not named on the tray")
+    -- The chord: both down, released one after the other.
+    keys["<"], keys[">"] = "pressed", "pressed"; P.tick(v)
+    keys["<"], keys[">"] = "released", "held";   P.tick(v)
+    keys["<"], keys[">"] = nil, "released";      P.tick(v)
+    keys[">"] = nil;                             P.tick(v)
+    check(P.active_id() == FAST, "switch", "the < + > chord switched projector")
+    tap(">")
+    check(P.active_id() == LONG, "switch", "the keys stayed dead after a chord")
+
+    local Q = fresh{ vars = BASE_VARS, switch_keys = false }
+    Q.reset(v); Q.grant(v, FAST)
+    keys[">"] = "released"; Q.tick(v); keys[">"] = nil
+    check(Q.active_id() == FAST, "switch", "switch_keys = false did not turn the keys off")
+
+    -- A fourth pickup evicts the oldest, and says so.
+    P.reset(v)
+    out.shows = {}
+    P.grant(v, FAST); P.grant(v, LONG); P.grant(v, P_STANDARD.STRONG.id)
+    P.grant(v, P_STANDARD.SPLASH.id)
+    local said = false
+    for _, t in ipairs(out.shows) do if t == "LOST FAST" then said = true end end
+    check(said and not P.owns(FAST), "switch", "an eviction was silent")
+    la.key_state = real_key
+  end
+
+  -- ---- player classes (std.classes) --------------------------------
+  do
+    clock, shine_busy_until = 0, 0
+    local std = la.lib("std")
+    local keys, tstate = {}, "off"
+    local real_key, real_state = la.key_state, la.trigger_state
+    la.key_state     = function(k) return keys[k] or "off" end
+    la.trigger_state = function(n) return n == 1 and tstate or "off" end
+    area_policies = {}
+    local FAST, STRONG = P_STANDARD.FAST.id, P_STANDARD.STRONG.id
+    local P = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 60, name = "HEAL", bonus = false, max_energy = 10,
+                                    effects = { "restore" } } } }
+    local v = mk_vars(20)
+    v.lives, v.start_lives, v.class_name = 4, 4, ""
+    P.reset(v)
+    la.trigger_down = function() return false end
+    local K = std.classes{ proj = P, var = "class_name", list = {
+      { name = "SCOUT", lives_mul = 0.5, cooldown_mul = 0.5, loadout = { FAST } },
+      { name = "TANK", lives_mul = 2, respawn_mul = 1.5, recharge_mul = 2, energy_mul = 0.5,
+        strength_mul = 2, can_pickup = false, loadout = { STRONG }, kind = 8,
+        kinds = { [1] = "immune", [2] = { minus = 1 }, [4] = { mul = 2 } },
+        roles = { [3] = "immune" }, spare_effects = { "dim" }, effects = { "silent" } },
+      { name = "MEDIC", role_tag = 3, loadout = { 60 }, targets = "team",
+        aura = { id = 70, bands = { { -60, 1 } }, to = "team", effects = { "restore" },
+                 every_ms = 100 } },
+    } }
+
+    -- No class: nothing changes.
+    check(K.current() == nil and K.start_lives(v) == 4 and K.respawn_secs(v, 10) == 10
+          and K.can_pickup() and K.targets() == "others" and K.spared() == 0, "class",
+          "a player without a class is not a plain player")
+    check(K.absorb(v, mk_pkt{ payload = { 2, 1, 3 } }, 2) == 2, "class", "no class changed a weight")
+    check(table.concat(K.names(), ",") == "SCOUT,TANK,MEDIC", "class", "the names are not the list's")
+
+    check(K.assign(v, "TANK") and v.class_name == "TANK", "class", "assign by name failed")
+    check(not K.assign(v, "NINJA"), "class", "an unknown class was assigned")
+    check(K.start_lives(v) == 8 and K.respawn_secs(v, 10) == 15, "class",
+          "a TANK's lives and respawn are not 2x and 1.5x")
+    check(not K.can_pickup(), "class", "a class with can_pickup = false can pick up")
+    check(P.active_id() == STRONG, "class", "the loadout's first projector is not in hand")
+    -- STRONG's pool is half the baseline's (10), and the class halves it again.
+    check(P.max_energy(v) == 5 and v.energy == 5, "class",
+          "energy_mul did not shrink the pool to 5: " .. tostring(P.max_energy(v)))
+    local w, kind, role, _, lo = P.payload(v)
+    check(w == 6 and kind == 8 and role == 2 and lo == 128, "class",
+          string.format("a TANK's STRONG beam is %s/%s/%s/%s, expected 6 (3 x2), kind 8, role 2, silent",
+                        tostring(w), tostring(kind), tostring(role), tostring(lo)))
+    -- Going out strips the pickup; the class stays, and equip gives it back.
+    P.strip(v)
+    check(P.active_id() == 0 and P.role_tag() == 2 and P.has_effect("silent"), "class",
+          "going out changed what the player is")
+    K.equip(v)
+    check(P.active_id() == STRONG, "class", "equip did not give the loadout back")
+
+    -- How beams land on a TANK.
+    local function beam(strength, kind, role) return mk_pkt{ payload = { strength, kind, role, 0, 0, 0 } } end
+    check(K.absorb(v, beam(3, 1, 0), 3) == nil, "class", "an immune kind landed")
+    check(K.absorb(v, beam(3, 0, 3), 3) == nil, "class", "an immune role landed")
+    check(K.absorb(v, beam(3, 2, 0), 3) == 2, "class", "minus 1 did not make 3 into 2")
+    check(K.absorb(v, beam(1, 2, 0), 1) == 0, "class", "a reduction went below nothing")
+    check(K.absorb(v, beam(3, 4, 0), 3) == 6, "class", "mul 2 did not make 3 into 6")
+    check(K.absorb(v, beam(3, 6, 0), 3) == 5, "class", "mul then minus is not 3*2-1")
+    check(K.absorb(v, beam(3, 7, 0), 3) == nil, "class", "immune did not win over the rest")
+    check(K.absorb(v, beam(3, 8, 9), 3) == 3, "class", "a kind and a role it has no rule for changed a weight")
+
+    -- Through std.lit_target: immune answers immune, a spared effect does not take.
+    local R = { taken = 1, shone = 2, friend = 3, immune = 4 }
+    local imm = std.immunity(3000)
+    local h = std.lit_target{ lives = "lives", immunity = imm, reply = R, proj = P, classes = K }
+    v.lives = 8
+    check(h(v, mk_pkt{ sender = 5, payload = { 2, 1, 0, 0, 0, 0 } }) == R.immune and v.lives == 8,
+          "class", "std.lit_target let an immune kind through")
+    check(h(v, mk_pkt{ sender = 6, payload = { 2, 2, 0, 0, 2, 0 } }) == R.taken and v.lives == 7,
+          "class", "std.lit_target did not take the class's weight")
+    check(not P.dimmed(), "class", "a spared effect (dim) took on the class")
+    check(h(v, mk_pkt{ sender = 7, payload = { 1, 0, 0, 0, 4, 0 } }) == R.taken and P.muted(),
+          "class", "an effect the class is not spared did not take")
+
+    -- Changing class takes the old one's beam marks away.
+    check(K.assign(v, 3) and K.current().name == "MEDIC", "class", "assign by index failed")
+    w, kind, role, _, lo = P.payload(v)
+    check(P.active_id() == 60 and kind == 0 and role == 3 and lo == 1 and w == 1, "class",
+          "a MEDIC's beam still carries the TANK's kind, effects or strength")
+    check(K.targets() == "team" and K.can_pickup() and K.start_lives(v) == 4, "class",
+          "a MEDIC is not what its table says")
+
+    -- The aura: a policy at load, a pulse a second at most.
+    local a = area_policies[70]
+    check(a and a.effects == 1 and a.friendly == "game" and a.self == false and a.credit == false
+          and a.role_tag == 3 and a.bands[1][2] == 1, "class",
+          "the aura did not reach la.area_policy as declared")
+    out.radio = {}
+    clock = clock + 10000
+    for _ = 1, 25 do K.tick(v); clock = clock + 100 end
+    local pulses = 0
+    for _, m in ipairs(out.radio) do if m[1] == "area" and m[2] == 70 then pulses = pulses + 1 end end
+    check(pulses == 3, "class", pulses .. " aura pulses in 2.5 s, expected 3 (one a second at most)")
+    -- A restoring area reaches the originator's team only.
+    v.lives = 2
+    h(v, mk_pkt{ sender = 9, team = 1, area = true, payload = { 1, 0, 3, 0, 1, 0 } })
+    check(v.lives == 2, "class", "an opponent's restoring aura gave a life")
+    h(v, mk_pkt{ sender = 4, team = 0, area = true, payload = { 1, 0, 3, 0, 1, 0 } })
+    check(v.lives == 3, "class", "a teammate's restoring aura gave nothing")
+    -- A weightless hit takes nothing and still lands its effects.
+    clock = clock + 20000
+    check(h(v, mk_pkt{ sender = 9, team = 1, area = true, payload = { 0, 0, 0, 0, 8, 0 } }) == R.taken
+          and v.lives == 3 and P.exposed(), "class", "a weightless hit took a life or lost its effect")
+
+    -- Picking: < and > step, the trigger confirms.
+    K.reset()
+    out.shows = {}
+    check(not K.pick(v) and out.shows[1] == "CLASS: SCOUT", "class", "the pick screen did not open on the first class")
+    keys[">"] = "released"; K.pick(v); keys[">"] = nil
+    check(v.class_name == "TANK", "class", "> did not step to the next class")
+    keys["<"] = "released"; K.pick(v); K.pick(v); keys["<"] = nil
+    check(v.class_name == "MEDIC", "class", "< did not wrap to the last class")
+    tstate = "pressed"
+    check(K.pick(v) and K.current().name == "MEDIC", "class", "the trigger did not confirm the class shown")
+    tstate = "off"
+    K.reset()
+    check(K.current() == nil, "class", "reset kept a class")
+    la.key_state, la.trigger_state = real_key, real_state
+  end
+
   -- ---- clamps bite at load ---------------------------------------
   do
     local P = fresh{ vars = BASE_VARS,

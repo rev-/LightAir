@@ -607,6 +607,8 @@ int LightAir_LuaGame::l_lib(lua_State* L) {
 //   friendly  = "game" (default) | "never"   who decides about teammates
 //   self      = false (default)              may the originator be caught
 //   credit    = true (default)               knock-outs credit the originator
+//   weightless = false (default)             the hits weigh nothing: only
+//               the policy's effects land on whoever is in the area
 //   role_tag  = 0, kind = 0 (defaults)       what an EMITTED area's hits
 //               carry; a triggered one's carry the triggering beam's
 //
@@ -697,6 +699,7 @@ int LightAir_LuaGame::l_area_policy(lua_State* L) {
 
     lua_getfield(L, 2, "self");   p.self   = lua_toboolean(L, -1) != 0;   lua_pop(L, 1);
     lua_getfield(L, 2, "credit"); p.credit = lua_isnil(L, -1) || lua_toboolean(L, -1); lua_pop(L, 1);
+    lua_getfield(L, 2, "weightless"); p.weightless = lua_toboolean(L, -1) != 0; lua_pop(L, 1);
     p.roleTag = areaByte(L, 2, "role_tag", 0, 255, 0);
     p.kind    = areaByte(L, 2, "kind", 0, 255, 0);
 

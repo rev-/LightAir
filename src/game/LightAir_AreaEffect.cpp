@@ -46,7 +46,7 @@ RadioPacket areaHit(const AreaPolicy& p, uint8_t originator,
     // could start another area, whatever else guards against it.
     const uint16_t effects = (uint16_t)(p.effects & ~p.effect);
     hit.payloadLen = LitPayload::FLAGS + 1;
-    hit.payload[LitPayload::STRENGTH]   = magnitude;
+    hit.payload[LitPayload::STRENGTH]   = p.weightless ? 0 : magnitude;
     hit.payload[LitPayload::KIND]       = kind;
     hit.payload[LitPayload::ROLE_TAG]   = roleTag;
     hit.payload[LitPayload::RSSI_GATE]  = 0;    // the reach was the beacon's

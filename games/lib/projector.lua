@@ -72,6 +72,11 @@ local gate_for     = nil   --   ...and the release it belongs to
 local awaiting_release = false
 local ready_at     = 0     -- millis before which trigger() refuses
 local evicted_name = nil
+-- `<` and `>` step through what the player holds (define{ switch_keys =
+-- false } turns it off).  Both together are a chord some rulesets use, so
+-- a key that was part of one switches nothing.
+local switch_keys  = true
+local chord        = false
 
 -- ---- The beam in flight, and what the press is building ----------
 -- All of this is the shining side's own business: none of it travels,
@@ -98,6 +103,10 @@ local dimmed = false
 -- Why: a MALUS holds it until the player goes out, a `dim` beam until its
 -- time is up.  Dimmed while either says so.
 local dim_hold, dim_until = false, 0
+
+-- ---- What the player's class changes (set_mods) -------------------
+-- Multipliers over every projector the player holds.  1 = no change.
+local mods = { energy = 1, recharge = 1, cooldown = 1, strength = 1 }
 
 -- ---- What beams did to this player --------------------------------
 local mute_until   = 0     -- cannot shine before this
@@ -570,6 +579,7 @@ function P.define(decl)
   var  = cfg.vars or {}
   defs = {}
   shared = cfg.shared_pool and true or false
+  switch_keys = cfg.switch_keys ~= false
   unit = clamp(cfg.game_unit or 1, LIM.game_unit[1], LIM.game_unit[2])
 
   -- The effects table, with this game's retuning.  The bit is the wire's
@@ -696,12 +706,14 @@ local function set_energy(vars, v)  vars[var.energy] = v end
 
 local function max_energy(vars, p)
   local m = val(vars, p.max_energy, 0)
+  if mods.energy ~= 1 and m > 0 then m = math.max(1, math.floor(m * mods.energy + 0.5)) end
   if dimmed and m > 0 then m = math.max(1, m // DIM.energy_div) end
   return m
 end
 
 -- A recharge duration, stretched while dimmed.
 local function stretch(ms)
+  if mods.recharge ~= 1 then ms = math.floor(ms * mods.recharge + 0.5) end
   if dimmed then return ms * DIM.recharge_mul end
   return ms
 end
@@ -711,6 +723,7 @@ end
 -- cooldown when it becomes the one in hand.
 local function cooldown_of(vars, p)
   local c = val(vars, p.cooldown_ms, 0)
+  if mods.cooldown ~= 1 then c = math.floor(c * mods.cooldown + 0.5) end
   if dimmed then
     c = (c > 0) and (c * DIM.cooldown_mul) or DIM.min_cooldown_ms
   end
@@ -800,6 +813,7 @@ local function evict_oldest(vars)
     if slots[i].acquired_at < slots[oldest].acquired_at then oldest = i end
   end
   evicted_name = defs[slots[oldest].id].name or "?"
+  la.show("LOST " .. evicted_name, 2000)      -- it made room for the new one
   P.drop(vars, slots[oldest].id)
 end
 
@@ -900,6 +914,38 @@ function P.set_dim(vars, on)
 end
 
 function P.dimmed() return dimmed end
+
+-- ================================================================
+--   set_mods(vars, { energy = 1, recharge = 1, cooldown = 1, strength = 1 })
+--
+--   What a player's CLASS changes about every projector they hold
+--   (std.classes sets it): a bigger or smaller pool, a slower or faster
+--   recharge, a longer or shorter wait between beams, heavier or lighter
+--   beams.  Multipliers; a missing one is 1.  They stack with DIM, they
+--   survive going out (a class is what the player is), and reset()
+--   clears them.
+-- ================================================================
+function P.set_mods(vars, m)
+  m = m or {}
+  mods.energy   = m.energy   or 1
+  mods.recharge = m.recharge or 1
+  mods.cooldown = m.cooldown or 1
+  mods.strength = m.strength or 1
+  la.shine_config{ cooldown_ms = cooldown_of(vars, active()) }
+  -- A smaller pool cannot hold what a bigger one did.
+  slots[active_idx].energy = get_energy(vars)
+  for i = 1, #slots do
+    local top = max_energy(vars, shared and defs[0] or profile_of(i))
+    if slots[i].energy > top then slots[i].energy = top end
+  end
+  if shared then
+    local top = max_energy(vars, defs[0])
+    if get_energy(vars) > top then set_energy(vars, top) end
+  else
+    set_energy(vars, slots[active_idx].energy)
+  end
+  publish_reload(vars, 0, pool_profile())
+end
 
 -- The pool of the projector in hand — or the shared pool — as it stands
 -- (dimmed or not).
@@ -1002,13 +1048,33 @@ end
 local function cycle(vars, dir)
   if #slots <= 1 then return end
   activate(vars, ((active_idx - 1 + dir) % #slots) + 1)
+  la.show(tostring(active().name or ""), 1000)   -- which one is in hand now
   la.ui("ProjectorChange")
 end
 
 function P.next(vars) cycle(vars,  1) end
 function P.prev(vars) cycle(vars, -1) end
 
--- True once per eviction, for the tray message.  Reading it clears it.
+-- The switch keys, read once per tick.  A switch happens on the key's
+-- RELEASE, and only if the other key was never down with it.
+local function tick_switch(vars)
+  local l, r = la.key_state("<"), la.key_state(">")
+  local l_down = (l == "pressed" or l == "held")
+  local r_down = (r == "pressed" or r == "held")
+  if l_down and r_down then chord = true end
+  if not chord then
+    if l == "released" or l == "released_held" then cycle(vars, -1)
+    elseif r == "released" or r == "released_held" then cycle(vars, 1) end
+  elseif not l_down and not r_down
+         and l ~= "released" and l ~= "released_held"
+         and r ~= "released" and r ~= "released_held" then
+    chord = false
+  end
+end
+
+-- The name of a projector an eviction just dropped, once.  Reading it
+-- clears it.  (The tray already says so; this is for a ruleset that wants
+-- to do more.)
 function P.consume_evicted()
   local n = evicted_name
   evicted_name = nil
@@ -1033,6 +1099,7 @@ function P.reset(vars)
   dimmed         = false
   shot_units, beam_mul = nil, 1
   dim_hold, dim_until = false, 0
+  mods.energy, mods.recharge, mods.cooldown, mods.strength = 1, 1, 1, 1
   mute_until, expose_until, trace.until_ms = 0, 0, 0
   lock.deaf      = false
   role_tag       = 0
@@ -1066,7 +1133,7 @@ end
 
 -- What a beam of the projector in hand weighs, in the game's currency.
 local function strength_of(vars, p)
-  return clamp(math.floor(val(vars, p.strength, 1) * unit + 0.5), 0, 255)
+  return clamp(math.floor(val(vars, p.strength, 1) * unit * mods.strength + 0.5), 0, 255)
 end
 
 -- A beam reached a player: on_lit_refund gives energy back.
@@ -1121,7 +1188,7 @@ local function lock_units(vars, p, from, to)
   for i = from, to do sum = sum + curve_step(p.lock.curve, i) end
   local cap = clamp(p.lock.max or LIM.strength[2], 1, 25) * unit
   if cap > 255 then cap = 255 end
-  return clamp(math.floor(sum * val(vars, p.strength, 1) * unit + 0.5), 0, cap)
+  return clamp(math.floor(sum * val(vars, p.strength, 1) * unit * mods.strength + 0.5), 0, cap)
 end
 
 local function lock_clear(vars)
@@ -1307,8 +1374,12 @@ function P.exposed() return la.now() < expose_until end
 function P.muted()   return la.now() < mute_until end
 function P.traced()  return la.now() < trace.until_ms end
 
-function P.landed(vars, pkt)
-  local m = pkt_fx(pkt)
+-- `spared`, optional: a mask of effects that do not take on this player
+-- (proj.effects_mask{ "dim", "mute" } — a class's own).
+function P.effects_mask(list) return fx_mask(list, "effects_mask") end
+
+function P.landed(vars, pkt, spared)
+  local m = pkt_fx(pkt) & ~(spared or 0)
   if m == 0 then return end
   local now = la.now()
   if m & (1 << fx.dim.bit) ~= 0 then
@@ -1535,6 +1606,7 @@ function P.tick(vars)
   local now    = la.now()
   tick_effects(vars, now)
   expire(vars, now)
+  if switch_keys and #slots > 1 then tick_switch(vars) end
   local p      = active()
   local s      = slots[active_idx]
   local active_trigger = la.trigger_down(1)

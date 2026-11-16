@@ -81,7 +81,18 @@ end
 --   silent           cfg.on_shone should name the shiner with
 --                    proj.shiner(pkt), which hides it
 --
+-- An area hit that restores reaches the originator's own team only (and
+-- the originator, where the policy allows): that is what makes a class's
+-- aura a buff for teammates rather than for whoever stands near.
+--
 -- Without cfg.proj a beam is its strength and nothing else.
+--
+-- ---- Classes ----
+--
+-- With cfg.classes (std.classes below) the player's class has its say
+-- before the hit is taken: a kind or a role it is immune to answers
+-- reply.immune and nothing lands; otherwise the weight is what the class
+-- makes of it, and the effects it is spared do not take.
 --
 -- The returned reply sub-type drives the sender-side on_reply table.
 -- ----------------------------------------------------------------
@@ -90,9 +101,12 @@ function std.absorbed(pkt)
 end
 
 function std.lit_target(cfg)
-  local proj = cfg.proj
+  local proj    = cfg.proj
+  local classes = cfg.classes
   return function(vars, pkt)
     if proj and proj.beam_has(pkt, "restore") then
+      if pkt.area and pkt.sender ~= la.my_id()
+         and (pkt.team == 0xFF or pkt.team ~= la.my_team()) then return end
       local cap = cfg.start_lives and cfg.start_lives(vars) or vars.start_lives or 0
       local l   = vars[cfg.lives] + std.absorbed(pkt)
       if cap > 0 and l > cap then l = cap end
@@ -120,12 +134,17 @@ function std.lit_target(cfg)
       local gate = pkt:byte(4)
       if gate > 0 and pkt.rssi < -gate then return cfg.reply.far end
     end
-    vars[cfg.lives] = vars[cfg.lives] - (proj and proj.weight(vars, pkt) or std.absorbed(pkt))
+    local w = proj and proj.weight(vars, pkt) or std.absorbed(pkt)
+    if classes then
+      w = classes.absorb(vars, pkt, w)
+      if not w then return cfg.reply.immune end
+    end
+    vars[cfg.lives] = vars[cfg.lives] - w
     if vars[cfg.lives] < 0 then vars[cfg.lives] = 0 end
     if windowed then cfg.immunity.mark(pkt.sender) end
     if vars[cfg.lives] > 0 then
-      if proj then proj.landed(vars, pkt) end
-      la.ui("GotLit")
+      if proj then proj.landed(vars, pkt, classes and classes.spared() or nil) end
+      if w > 0 then la.ui("GotLit") end   -- a weightless hit has its effects' own cues
       return cfg.reply.taken
     end
     if cfg.on_shone then cfg.on_shone(vars, pkt) end
@@ -407,6 +426,238 @@ function std.gates(cfg)
   end
 
   return g
+end
+
+-- ----------------------------------------------------------------
+-- Player classes: a few numbers that make a TANK, a MEDIC, a SCOUT.
+--
+--   local classes = std.classes{
+--     proj = proj,                       -- required; after proj.define
+--     var  = "class_name",               -- optional text var for the screen
+--     start_lives = function(vars) return vars.start_lives end,   -- optional
+--     list = {
+--       { name = "SCOUT", lives_mul = 0.5, cooldown_mul = 0.5, loadout = { FAST } },
+--       { name = "TANK",  lives_mul = 2, respawn_mul = 1.5, recharge_mul = 1.5,
+--         can_pickup = false, loadout = { STRONG },
+--         kinds = { [KIND_HEAT] = "immune", [KIND_COLD] = { minus = 1 } },
+--         spare_effects = { "dim" } },
+--       { name = "MEDIC", loadout = { P_HEAL }, targets = "team",
+--         aura = { id = 60, bands = { { -60, 1 } }, to = "team",
+--                  effects = { "restore" }, every_ms = 3000 } },
+--     },
+--   }
+--
+-- A class field, all optional but the name:
+--
+--   name            shown, and what assign() and the menu know it by
+--   role_tag        what its beams say about who is shining; default its
+--                   place in the list (1, 2, …)
+--   lives_mul       starting lives, times this          } or `lives = n`
+--   respawn_mul     the respawn wait, times this
+--   energy_mul, recharge_mul, cooldown_mul, strength_mul
+--                   every projector the player holds (proj.set_mods)
+--   loadout         projector ids given with the class; the first is put
+--                   in hand.  Going out strips what a BONUS could hand out,
+--                   so call classes.equip(vars) when the player comes back.
+--   can_pickup      false: a projector BONUS becomes the LIFE bonus
+--   kind, effects   a kind mask and a list of effects every beam of this
+--                   class carries, whatever is in hand
+--   kinds           how beams of a KIND land: { [mask] = reaction }
+--   roles           how beams from a ROLE land: { [role_tag] = reaction }
+--                   A reaction is "immune", { minus = n } (n standard
+--                   units lighter, never below 0) or { mul = x }.  Immune
+--                   wins; then every mul, then every minus.
+--   spare_effects   effects that do not take on this class
+--   targets         "others" (default), "team" or "all": whom its beams
+--                   are for.  The ruleset asks classes.targets(), since
+--                   only it knows who is an opponent.
+--   aura            an area around the player, repeated while in play
+--                   (classes.tick): { id, bands, to, effects, every_ms,
+--                   weightless, credit }.  `id` is an area policy id of
+--                   the game's choosing.  to = "team" reaches teammates
+--                   (pair it with the restore effect), "others" spares
+--                   them.  At most one pulse a second: an aura is one
+--                   more periodic sender on the channel.
+--
+-- What the ruleset calls:
+--
+--   classes.assign(vars, name_or_index)   the game decides, or the player did
+--   classes.pick(vars)       a selection screen's tick: `<` and `>` step
+--                            through the list, the trigger confirms; true
+--                            once a class has been taken
+--   classes.equip(vars)      give the loadout again (after a respawn)
+--   classes.tick(vars)       from the in-play update: the aura
+--   classes.reset()          from on_begin
+--   classes.current()        the class table, or nil
+--   classes.names()          the names, for a config menu's choices
+--   classes.start_lives(vars)   classes.respawn_secs(vars, secs)
+--   classes.can_pickup()     for std.pickup_effect's projector_ok
+--   classes.targets()        "others" | "team" | "all"
+--
+-- and std.lit_target{ classes = classes, … } for the receiving side
+-- (classes.absorb and classes.spared, for a ruleset's own handler).
+--
+-- Not here: a limit of one class per team.  Enforcing it needs the
+-- players' devices to agree on who took what, which is a protocol, not a
+-- parameter.
+-- ----------------------------------------------------------------
+function std.classes(cfg)
+  assert(cfg and cfg.proj, "std.classes: cfg.proj is required")
+  local proj    = cfg.proj
+  local list    = cfg.list or {}
+  local by_name = {}
+  local current = nil
+  local cursor  = 1
+  local shown   = false
+  local aura_at = 0
+  local unit    = proj.game_unit()
+
+  for i, c in ipairs(list) do
+    assert(type(c.name) == "string", "std.classes: a class needs a name")
+    by_name[c.name] = c
+    if c.role_tag == nil then c.role_tag = i end
+    c.spared  = proj.effects_mask(c.spare_effects)
+    local a = c.aura
+    if a then
+      assert(a.id and a.bands, "std.classes: an aura needs an id and bands")
+      local bands = {}
+      for j, b in ipairs(a.bands) do
+        bands[j] = { b[1], math.min(255, math.max(1, b[2] * unit)) }
+      end
+      la.area_policy(a.id, { bands = bands,
+                             friendly = (a.to == "team") and "game" or "never",
+                             self = false, credit = a.credit or false,
+                             weightless = a.weightless or false,
+                             effects = proj.effects_mask(a.effects),
+                             role_tag = c.role_tag, kind = a.kind or 0 })
+      a.every_ms = math.max(a.every_ms or 2000, 1000)
+    end
+  end
+
+  local K = {}
+
+  local function base_lives(vars)
+    if cfg.start_lives then return cfg.start_lives(vars) end
+    return vars.start_lives or 0
+  end
+
+  function K.current() return current end
+  function K.reset()   current, cursor, shown, aura_at = nil, 1, false, 0 end
+
+  function K.names()
+    local n = {}
+    for i, c in ipairs(list) do n[i] = c.name end
+    return n
+  end
+
+  function K.equip(vars)
+    local c = current
+    if not c or not c.loadout then return end
+    for _, id in ipairs(c.loadout) do proj.give(vars, id) end
+    if c.loadout[1] then proj.select(vars, c.loadout[1], true) end
+  end
+
+  function K.assign(vars, which)
+    local c = type(which) == "number" and list[which] or by_name[which]
+    if not c then return false end
+    -- What the class before this one put on every beam goes with it.
+    if current then
+      if current.kind then proj.set_kind(current.kind, false) end
+      for _, name in ipairs(current.effects or {}) do proj.set_effect(vars, name, false) end
+    end
+    current = c
+    proj.set_role_tag(c.role_tag)
+    proj.set_mods(vars, { energy = c.energy_mul, recharge = c.recharge_mul,
+                          cooldown = c.cooldown_mul, strength = c.strength_mul })
+    if c.kind then proj.set_kind(c.kind, true, true) end
+    for _, name in ipairs(c.effects or {}) do proj.set_effect(vars, name, true, true) end
+    K.equip(vars)
+    if cfg.var then vars[cfg.var] = c.name end
+    aura_at = 0
+    return true
+  end
+
+  function K.pick(vars)
+    if #list == 0 then return true end
+    local l, r = la.key_state("<"), la.key_state(">")
+    local moved = not shown
+    if l == "released" or l == "released_held" then cursor = (cursor - 2) % #list + 1; moved = true end
+    if r == "released" or r == "released_held" then cursor = cursor % #list + 1;       moved = true end
+    if moved then
+      shown = true
+      if cfg.var then vars[cfg.var] = list[cursor].name end
+      la.show("CLASS: " .. list[cursor].name, 0)
+    end
+    if la.trigger_state(1) == "pressed" then
+      shown = false
+      la.clear_tray()
+      return K.assign(vars, cursor)
+    end
+    return false
+  end
+
+  function K.start_lives(vars)
+    local base = base_lives(vars)
+    local c = current
+    if not c then return base end
+    if c.lives then return c.lives end
+    return math.max(1, math.floor(base * (c.lives_mul or 1) + 0.5))
+  end
+
+  function K.respawn_secs(vars, secs)
+    local c = current
+    if not c or not c.respawn_mul then return secs end
+    return math.floor(secs * c.respawn_mul + 0.5)
+  end
+
+  function K.can_pickup() return not current or current.can_pickup ~= false end
+  function K.targets()    return current and current.targets or "others" end
+  function K.spared()     return current and current.spared or 0 end
+
+  -- What a beam weighs for this class: nil = immune.
+  local function react(r, w, minus)
+    if r == "immune" then return nil, minus end
+    if type(r) == "table" then
+      if r.mul   then w = w * r.mul end
+      if r.minus then minus = minus + r.minus * unit end
+    end
+    return w, minus
+  end
+
+  function K.absorb(vars, pkt, w)
+    local c = current
+    if not c then return w end
+    local minus = 0
+    if c.kinds then
+      local kind = proj.kind(pkt)
+      for mask, r in pairs(c.kinds) do
+        if kind & mask ~= 0 then
+          w, minus = react(r, w, minus)
+          if not w then return nil end
+        end
+      end
+    end
+    if c.roles then
+      local r = c.roles[proj.role(pkt)]
+      if r then
+        w, minus = react(r, w, minus)
+        if not w then return nil end
+      end
+    end
+    w = math.floor(w + 0.5) - minus
+    return w > 0 and w or 0
+  end
+
+  function K.tick(vars)
+    local a = current and current.aura
+    if not a then return end
+    local now = la.now()
+    if now < aura_at then return end
+    aura_at = now + a.every_ms
+    la.area_emit(a.id)
+  end
+
+  return K
 end
 
 -- ----------------------------------------------------------------

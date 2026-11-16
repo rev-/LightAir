@@ -516,6 +516,9 @@ struct TotemProgramEntry {
 //              teammates, never the originator.
 //   credit     a player the area puts out of play credits the originator
 //              (MSG_AREA_CREDIT).
+//   weightless the hits weigh nothing (strength 0): the bands still say who
+//              is in the area, but only the policy's effects land — an
+//              aura that dims without taking anything.
 //   roleTag    the role tag and kind an EMITTED area's hits carry
 //   kind       (la.area_emit).  A triggered area's hits carry the
 //              triggering beam's instead, relayed in the beacon.
@@ -536,6 +539,7 @@ struct AreaPolicy {
     AreaFriendly friendly;
     bool         self;
     bool         credit;
+    bool         weightless;
     uint8_t      roleTag;
     uint8_t      kind;
     uint8_t      bandCount;
