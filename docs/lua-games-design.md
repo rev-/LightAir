@@ -411,9 +411,11 @@ animations are referenced by name inside those programs.
 
 **Area effects** — `la.area_policy(id, spec)` declares one, while the game
 loads (a later call is refused): `bands = { { rssi, strength }, ... }`
-(1–4, required), an optional trigger `projector = id, on = "lit" | "shone"`,
+(1–4, required), an optional trigger `effect = mask, on = "lit" | "shone"` (a bit of
+the LIT's effects word), `effects` (what a bystander's hit carries),
 `friendly = "game" | "never"`, `self` (default false), `credit` (default
-true), `role_tag`.  The mechanism is the runner's — beacon, reach, who is
+true), `weightless` (the hits land their effects and weigh nothing),
+`role_tag` and `kind` (what an emitted area's hits carry).  The mechanism is the runner's — beacon, reach, who is
 spared, the hit, the knock-out's credit — and the hit goes to the state's
 own LIT handler with `pkt.area` set (see `docs/projector.md` §5).
 `projector.lua` declares a profile's `area` this way, so no game file

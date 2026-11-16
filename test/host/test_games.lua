@@ -801,6 +801,9 @@ do
     check(P.payload(v) == 30, "unit", "STRONG does not weigh 30 at game_unit 10")
     check(P.grant(v, 21) and P.payload(v) == 5 and math.type(P.payload(v)) == "integer",
           "unit", "half a standard unit is not 5 at game_unit 10")
+    P.grant(v, P_STANDARD.SPLASH.id)
+    check(select(6, P.payload(v)) == 1 and select(5, P.payload(v)) == 0, "unit",
+          "the standard SPLASH's beam does not carry the splash effect (bit 8) and nothing else")
     check(P.grant(v, 20), "unit", "a fine-only profile is not known to a fine game")
     check(P.units(2)(v) == 20 and P.game_unit() == 10, "unit", "proj.units is not n * game_unit")
     local s = area_policies[P_STANDARD.SPLASH.id]

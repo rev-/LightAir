@@ -128,6 +128,28 @@ since the totem's antenna and the player's body move it.
 
 ---
 
+## 6. The new LIT layout, switching, and the gate cues
+
+Everything else on the `projectors` branch is unused by the stock games
+(`docs/parked-features.md` §3) and has nothing to bench until a game
+declares it.  These do:
+
+| # | What | How | Expect |
+|---|---|---|---|
+| 6.1 | Mixed firmware | One device on the old firmware, one on the new, same game | Hits still land (byte 1 is the strength in both).  SPLASH from the OLD device does not splash on the new one, and the other way round: the area trigger moved from byte 2 to an effect bit.  **Flash every device.** |
+| 6.2 | SPLASH still splashes | New firmware everywhere; repeat 3.1–3.3 | As before |
+| 6.3 | Virus still infects | Repeat 5.1 | A virus's beam infects; a clean player's does not |
+| 6.4 | Switching | Pick up two projectors; tap `>` and `<` | The tray names the one in hand, the energy icon follows, `ProjectorChange` plays; in FestaSportSasso the `<`+`>` chord restarts and switches nothing |
+| 6.5 | Eviction | Pick up a fourth projector | Tray `LOST <oldest>` |
+| 6.6 | Gate cues | A test profile with `gates = { gates = 2 }` and a `mark_var` on the energy row; empty the pool | `GateOpen` is felt and heard without looking; the brackets appear on the bar about 0.3 s before the window and go with it; a press inside plays `GatePassed` and the bar jumps forward; a press outside plays `GateMissed` and it jumps back; three misses play `GateRestart` |
+| 6.7 | Gate timing | Same; ten reloads, pressing on the cue | Record how many are passed at `window_ms = 250`.  If fewer than about seven, the window or the lead is too short for the loop's latency. |
+
+Bring back: whether the marker's two brackets are readable on the glass at
+arm's length, and the free heap after loading the heaviest game (§ below)
+— the libraries grew by an estimated 6–7 KB.
+
+---
+
 ## Data to collect while there
 
 Not pass/fail — these calibrate the host memory model used to size the next

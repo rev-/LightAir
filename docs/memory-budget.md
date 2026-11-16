@@ -40,7 +40,7 @@ from boot to power-off whether or not the code path that uses them runs.
 
 | Object | host | device (est.) | Sized by |
 |---|---:|---:|---|
-| `LightAir_DisplayCtrl` | 29,064 | **~21,700** | `MAX_SETS = 32` × `MAX_BINDINGS = 8` × 84 B (a bar's marker added a pointer and the value last drawn: +8 B a binding, ~2 KB — one more reason for §3 A) |
+| `LightAir_DisplayCtrl` | 27,016 + marker | **~21,700** | `MAX_SETS = 32` × `MAX_BINDINGS = 8` × 84 B on the device (a bar's marker added a pointer and the value last drawn: +8 B a binding, ~2 KB — one more reason for §3 A; the host figure was not re-measured) |
 | `LightAir_LuaGame` ×2 | 16,080 | **~14,400** | `MAX_VARS`, `MAX_PROG`, `MAX_MSG_RULES`, `MAX_RULES` |
 | `LightAir_Radio` | 8,032 | ~8,000 | `RADIO_MAX_PAYLOAD = 237` × (`MAX_PENDING = 10` + report 10) |
 | `LightAir_RadioESPNow` | 4,184 | ~4,170 | `ESPNOW_RECV_QUEUE = 16` × 250 B |
@@ -80,6 +80,11 @@ The loop task runs on Arduino's default 8 KB stack, and everything above the
 runner shares it: the ~2 KB `GameOutput` each tick, and — during a game load —
 Lua's recursive-descent parser. That is a second, independent ceiling from the
 heap one, and worth remembering before adding anything large as a local.
+
+**The libraries grew** with the game unit, effects, gates and classes
+(`docs/parked-features.md` §3): +10.3 KB per loaded game on a 64-bit host
+with the libraries stripped, an estimated 6–7 KB on the device.  The
+~55 KB above predates that and has not been re-measured on hardware.
 
 The Lua figure is the *whole* cost of a ruleset: compiled functions for the
 game file plus `std.lua` plus `projector.lua`, and the tables and closures they

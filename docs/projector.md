@@ -531,6 +531,13 @@ the menu's 8 characters, and `proj.bonus_id(label)` maps them back.
 
 A projector bonus is `grant`ed: given at full energy and put in hand.
 `max_owned` still applies, so it may evict the oldest powered projector.
+The tray says which (`LOST FAST`).
+
+**Switching.**  `<` and `>` step through what the player holds, on the
+key's release, and the tray names the one now in hand.  Both keys together
+are a chord some rulesets use (FestaSportSasso's restart), so a key that
+was part of one switches nothing.  A switch costs the new projector's
+`ready_ms`.  `proj.define{ switch_keys = false }` turns the keys off.
 
 **A shared pool: when the pool is the player's life.** In Outflow energy is
 ammo and life at once, so a projector bringing its own pool would swap the
@@ -836,3 +843,68 @@ It writes the vars `std.respawn_wait` writes, and with `gates = 0` it is
 `std.respawn_wait` and nothing else.  A game that also shows the wait as a
 number (`countdown_in`) will see the two disagree once a gate is passed:
 the bar is the truth.
+
+
+---
+
+## 15. Player classes
+
+`std.classes` (in `games/lib/std.lua`, where every field is listed) makes a
+class out of a few numbers:
+
+```lua
+local classes = std.classes{ proj = proj, var = "class_name", list = {
+  { name = "SCOUT", lives_mul = 0.5, cooldown_mul = 0.5, loadout = { FAST } },
+  { name = "TANK",  lives_mul = 2, respawn_mul = 1.5, recharge_mul = 1.5,
+    can_pickup = false, loadout = { STRONG },
+    kinds = { [KIND_HEAT] = "immune", [KIND_COLD] = { minus = 1 } },
+    spare_effects = { "dim" } },
+  { name = "MEDIC", loadout = { P_HEAL }, targets = "team",
+    aura = { id = 60, bands = { { -60, 1 } }, to = "team",
+             effects = { "restore" }, every_ms = 3000 } },
+} }
+```
+
+| What a class sets | Fields |
+|---|---|
+| how much it takes | `lives_mul` or `lives`, `respawn_mul` |
+| its projectors | `energy_mul`, `recharge_mul`, `cooldown_mul`, `strength_mul` (`proj.set_mods`), `loadout`, `can_pickup` |
+| what its beams say | `role_tag` (default: its place in the list), `kind`, `effects` |
+| how beams land on it | `kinds = { [mask] = reaction }`, `roles = { [role_tag] = reaction }`, `spare_effects` |
+| whom it shines | `targets = "others" | "team" | "all"` |
+| what it radiates | `aura` |
+
+- **A reaction** is `"immune"`, `{ minus = n }` (n standard units lighter,
+  never below nothing) or `{ mul = x }`.  A kind is a mask, so one beam can
+  match several: immune wins, then every `mul`, then every `minus`.  With
+  1 to 5 lives only `"immune"` and a `minus` are worth using; fractions
+  need a fine game (§3).
+- **Resistances are per kind, not per projector**, because no projector id
+  travels (§3).  With 8 kind bits, that is a real limit on how finely a
+  class can discriminate — and it keeps the table readable.
+- **A medic needs no mechanism of its own**: it is a class whose loadout is
+  a projector carrying `restore`, with `targets = "team"`.  The ruleset
+  asks `classes.targets()` when it decides whether to send a LIT, since
+  only it knows who is an opponent.
+- **A class is what the player is**: its role tag, kind, effects and
+  multipliers survive going out.  Its loadout does not if a BONUS could
+  hand it out (`proj.strip`), so the ruleset calls `classes.equip(vars)`
+  when the player comes back.
+- **The aura** rides the area service: a policy declared at load, emitted
+  from `classes.tick(vars)` at most once a second.  `to = "team"` with
+  `restore` is a buff — a restoring area reaches the originator's team
+  only — and `to = "others"` spares teammates.  `weightless = true` lands
+  the effects and takes nothing.  Each aura is one more periodic sender on
+  the channel.
+
+**Choosing.**  Each player picks at the start — a state whose update calls
+`classes.pick(vars)`: `<` and `>` step through the list, the trigger
+confirms — or the game assigns (`classes.assign(vars, name)`).
+
+**The receiving side** is `std.lit_target{ proj = proj, classes = classes }`.
+A kind or a role the class is immune to answers `reply.immune`.
+
+**Not built.**  A limit of one class per team needs the devices to agree on
+who took what — a protocol, not a parameter.  The engineer's own totem is
+on hold: a totem is a separate device running a TotemVM program, and
+whether one can be bound to an owner has not been looked into.
