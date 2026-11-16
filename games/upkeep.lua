@@ -273,10 +273,10 @@ return {
       [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = std.lit_target{
-        lives = "lives", immunity = imm, friendly = friendly,
+        lives = "lives", immunity = imm, proj = proj, friendly = friendly,
         reply = { taken = R.TAKEN, shone = R.SHONE,
                   friend = R.FRIEND, immune = R.IMMUNE },
-        on_shone = function(_, pkt) shone_by = la.player_short(pkt.sender) end,
+        on_shone = function(_, pkt) shone_by = proj.shiner(pkt) end,
       },
       [MSG.CP_BEACON] = cp_beacon_handler(true),
       [MSG.CP_SCORE]  = cp_score_handler,

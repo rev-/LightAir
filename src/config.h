@@ -89,7 +89,16 @@ constexpr uint8_t MSG_AREA          = 0x18;
 // answered one of its own LITs with SHONE — so each game scores an area
 // knock-out exactly as it scores a direct one.
 constexpr uint8_t MSG_AREA_CREDIT   = 0x1A;
-// Next available in 0x10 block: 0x1C
+
+// Trace: a player a `beacon` beam landed on repeats this, single-hop, for
+// as long as the effect lasts (games/lib/projector.lua, at most once a
+// second), so that whoever it is meant for can follow them by its RSSI.
+//   payload[0] = the player whose beam started it
+//   payload[1] = that player's team (0xFF = none)
+//   payload[2] = who may use it: 0 = that player, 1 = their team, 2 = anyone
+// The firmware only carries it; what a reading means is the ruleset's.
+constexpr uint8_t MSG_TRACE         = 0x1C;
+// Next available in 0x10 block: 0x1E
 
 // ── 0x50 block: totem-mediated game messages ────────────────────
 // Messages that travel between a player and a totem (not player→player).

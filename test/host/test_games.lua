@@ -6,6 +6,7 @@ local clock = 0
 
 la = {
   msg = { LIT = 0x10, SCORE_COLLECT = 0x12, POINT_REPORT = 0x14, AREA = 0x18,
+          TRACE = 0x1C,
           FLAG_EVENT = 0x50, CP_BEACON = 0x52, CP_SCORE = 0x54,
           BASE_BEACON = 0x56, FLAG_BEACON = 0x58,
           BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60, TOTEM_TOUCH = 0xF4 },
@@ -1078,6 +1079,130 @@ do
           "the cooldown went " .. table.concat(pushed, ",") .. ", expected 300,200,100,…")
     check(pushed[#pushed] == 400, "spinup", "the release did not wind the cooldown back")
     la.shine_config = real_config
+  end
+
+  -- ---- effects at the receiver -----------------------------------
+  do
+    clock, shine_busy_until = 100000, 0
+    local std = la.lib("std")
+    local P = fresh{ vars = BASE_VARS,
+                     effects = { dim = { ms = 4000 }, beacon = { every_ms = 10, ms = 3000, to = "team" } } }
+    local v = mk_vars(20)
+    v.lives, v.start_lives = 3, 5
+    P.reset(v)
+    la.trigger_down = function() return false end
+    local R = { taken = 1, shone = 2, friend = 3, immune = 4 }
+    local imm = std.immunity(3000)
+    local shone_name
+    local h = std.lit_target{ lives = "lives", immunity = imm, reply = R, proj = P,
+                              friendly = function(pkt) return pkt.team == 0 end,
+                              on_shone = function(_, pkt) shone_name = P.shiner(pkt) end }
+    -- A beam: strength, then the names of the effects it carries.
+    local function beam(strength, effects, f)
+      local m = 0
+      for _, name in ipairs(effects or {}) do m = m | (1 << P.effect(name).bit) end
+      f = f or {}
+      f.msg, f.payload = la.msg.LIT, { strength, 0, 0, 0, m & 0xFF, m >> 8, 0, 0 }
+      return mk_pkt(f)
+    end
+
+    -- restore: given, from a teammate, capped at the starting lives.
+    check(h(v, beam(1, { "restore" }, { sender = 4, team = 0 })) == R.taken and v.lives == 4,
+          "restore", "a teammate's restore beam did not give a life")
+    check(h(v, beam(3, { "restore" }, { sender = 4, team = 0 })) == R.taken and v.lives == 5,
+          "restore", "restore went past the starting lives, or was stopped by the window")
+    v.lives = 8
+    h(v, beam(1, { "restore" }, { sender = 4, team = 0 }))
+    check(v.lives == 8, "restore", "restore took lives from a player above the cap")
+    v.lives = 5
+
+    -- ignore_immunity: neither refused by the window nor opening one.
+    check(h(v, beam(1, {}, { sender = 7 })) == R.taken and v.lives == 4, "immunity", "set-up")
+    check(h(v, beam(1, {}, { sender = 7 })) == R.immune, "immunity", "set-up: the window is open")
+    check(h(v, beam(1, { "ignore_immunity" }, { sender = 7 })) == R.taken and v.lives == 3,
+          "immunity", "ignore_immunity was stopped by the window")
+    check(h(v, beam(1, { "ignore_immunity" }, { sender = 9 })) == R.taken and
+          h(v, beam(1, {}, { sender = 9 })) == R.taken, "immunity",
+          "an ignore_immunity beam opened a window of its own")
+    v.lives = 5
+
+    -- expose: the next beam weighs twice, once.
+    h(v, beam(1, { "expose" }, { sender = 11 }))
+    check(v.lives == 4 and P.exposed(), "expose", "the beam did not expose")
+    h(v, beam(1, {}, { sender = 12 }))
+    check(v.lives == 2 and not P.exposed(), "expose",
+          "an exposed player lost " .. (4 - v.lives) .. ", expected 2, once")
+    h(v, beam(1, {}, { sender = 13 }))
+    check(v.lives == 1, "expose", "exposure outlived the beam that used it")
+    v.lives = 5
+
+    -- mute: no shining until it passes.
+    h(v, beam(1, { "mute" }, { sender = 14 }))
+    la.trigger_down = function() return true end
+    for _ = 1, 20 do P.tick(v); clock = clock + 100 end         -- 2 s
+    check(v.energy == 20 and P.muted(), "mute", "a muted player shone")
+    clock = clock + 1100
+    P.tick(v)
+    check(v.energy == 19, "mute", "mute never passed")
+    la.trigger_down = function() return false end
+    P.tick(v)
+
+    -- dim: for its time, and a MALUS DIM outlasts it.
+    clock = clock + 20000; P.tick(v)
+    h(v, beam(1, { "dim" }, { sender = 15 }))
+    check(P.dimmed() and P.max_energy(v) == 10, "dim", "a dim beam did not dim")
+    clock = clock + 4100; P.tick(v)
+    check(not P.dimmed(), "dim", "a dim beam's effect did not pass after its time")
+    P.set_dim(v, true)
+    h(v, beam(1, { "dim" }, { sender = 16 }))
+    clock = clock + 4100; P.tick(v)
+    check(P.dimmed(), "dim", "a dim beam running out lifted a MALUS DIM")
+    P.set_dim(v, false)
+    check(not P.dimmed(), "dim", "lifting DIM did not lift it")
+    v.lives = 5
+
+    -- siphon: energy leaves.
+    clock = clock + 20000; P.tick(v)
+    local e0 = v.energy
+    h(v, beam(1, { "siphon" }, { sender = 17 }))
+    check(v.energy == e0 - 5, "siphon", "siphon took " .. (e0 - v.energy) .. ", expected 5")
+
+    -- beacon: a trace, at most once a second whatever the game asks, told
+    -- to nobody on this screen, ended by going out.
+    out.radio, out.shows = {}, {}
+    h(v, beam(1, { "beacon" }, { sender = 5, team = 1 }))
+    check(#out.shows == 0, "beacon", "the traced player was told")
+    for _ = 1, 25 do P.tick(v); clock = clock + 100 end         -- 2.5 s
+    local n, last = 0, nil
+    for _, m in ipairs(out.radio) do
+      if m[1] == "bcast" and m[2] == la.msg.TRACE then n = n + 1; last = m end
+    end
+    check(n == 3, "beacon", n .. " traces in 2.5 s, expected 3 (one a second, the first at once)")
+    check(last and last[3] == 5 and last[4] == 1 and last[5] == 1, "beacon",
+          "a trace does not carry the shiner, their team and who it is for")
+    P.strip(v)
+    out.radio = {}
+    for _ = 1, 15 do P.tick(v); clock = clock + 100 end
+    check(#out.radio == 0 and not P.traced(), "beacon", "going out did not end the trace")
+    -- Who may use one: the shiner, their team, or anyone.
+    local function tr(shiner, team, to)
+      return P.trace(mk_pkt{ sender = 8, rssi = -50, payload = { shiner, team, to } })
+    end
+    check(tr(2, 0, 0) == 8 and tr(4, 0, 0) == nil, "beacon", "a trace for its shiner alone")
+    check(tr(4, 0, 1) == 8 and tr(5, 1, 1) == nil, "beacon", "a trace for the shiner's team")
+    check(select(2, tr(5, 1, 2)) == -50, "beacon", "a trace for anyone, with its RSSI")
+
+    -- silent: the shiner is not named; an area hit keeps the policy's effects.
+    v.lives = 1
+    h(v, beam(1, { "silent" }, { sender = 18 }))
+    check(shone_name == "?", "silent", "a silent beam named its shiner: " .. tostring(shone_name))
+    v.lives = 1
+    h(v, beam(1, {}, { sender = 19 }))
+    check(shone_name == "P19", "silent", "an ordinary beam did not name its shiner")
+    check(P.kind(mk_pkt{ payload = { 1, 6, 9 } }) == 6 and P.role(mk_pkt{ payload = { 1, 6, 9 } }) == 9
+          and P.kind(mk_pkt{ payload = {} }) == 0, "beam", "kind and role tag are not bytes 2 and 3")
+    local ok = pcall(function() fresh{ vars = BASE_VARS, effects = { blind = {} } } end)
+    check(not ok, "effects", "retuning an unknown effect loaded")
   end
 
   -- ---- clamps bite at load ---------------------------------------

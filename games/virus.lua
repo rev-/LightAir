@@ -339,7 +339,7 @@ return {
       [MSG.LIT] = function(vars, pkt)
         if la.now() < safe_until then return R.SAFE end
         pending_down = true
-        downed_by    = la.player_short(pkt.sender)
+        downed_by    = proj.shiner(pkt)
         return viral(pkt) and R.VDOWN or R.SHONE
       end,
       [MSG_INFECTED] = function(vars, pkt)

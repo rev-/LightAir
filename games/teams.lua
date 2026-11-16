@@ -166,10 +166,10 @@ return {
       [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = std.lit_target{
-        lives = "lives", immunity = imm, friendly = friendly,
+        lives = "lives", immunity = imm, proj = proj, friendly = friendly,
         reply = { taken = R.TAKEN, shone = R.SHONE,
                   friend = R.FRIEND, immune = R.IMMUNE },
-        on_shone = function(_, pkt) shone_by = la.player_short(pkt.sender) end,
+        on_shone = function(_, pkt) shone_by = proj.shiner(pkt) end,
       },
       [MSG.POINT_REPORT] = function(vars, pkt)
         if la.team_of(pkt.sender) == my_team then

@@ -60,6 +60,7 @@ static const NamedU8 kMsgConsts[] = {
     { "SCORE_COLLECT", RadioMsg::MSG_SCORE_COLLECT },
     { "POINT_REPORT",  RadioMsg::MSG_POINT_REPORT },
     { "AREA",          RadioMsg::MSG_AREA },
+    { "TRACE",         RadioMsg::MSG_TRACE },
     { "FLAG_EVENT",    RadioMsg::MSG_FLAG_EVENT },
     { "CP_BEACON",     RadioMsg::MSG_CP_BEACON },
     { "CP_SCORE",      RadioMsg::MSG_CP_SCORE },

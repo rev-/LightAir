@@ -42,6 +42,7 @@ end
 --                 friend = R.FRIEND, immune = R.IMMUNE },
 --       friendly = function(pkt) ... end,   -- optional; true = reject
 --       on_shone = function(vars, pkt) ... end,  -- optional; last life lost
+--       proj = proj,                        -- optional; see "Effects"
 --   } } }
 --
 -- on_shone runs on the hit that empties the lives counter, while the
@@ -64,6 +65,24 @@ end
 -- it loose.  A refusal answers `far` rather than going silent — an
 -- unexplained miss reads as broken hardware.
 --
+-- ---- Effects ----
+--
+-- With cfg.proj (the projector library) the handler honours what a beam
+-- carries besides its strength (docs/projector.md §13):
+--
+--   restore          the strength is GIVEN: lives go up, to this player's
+--                    starting lives at most (cfg.start_lives(vars), default
+--                    vars.start_lives), from anyone and inside any
+--                    immunity window.  Answers reply.restored, or taken.
+--   ignore_immunity  the window neither refuses the beam nor is opened
+--   expose           a beam landing on an exposed player weighs more
+--   dim, mute, expose, siphon, beacon
+--                    applied when the hit lands and the player stays in
+--   silent           cfg.on_shone should name the shiner with
+--                    proj.shiner(pkt), which hides it
+--
+-- Without cfg.proj a beam is its strength and nothing else.
+--
 -- The returned reply sub-type drives the sender-side on_reply table.
 -- ----------------------------------------------------------------
 function std.absorbed(pkt)
@@ -71,7 +90,17 @@ function std.absorbed(pkt)
 end
 
 function std.lit_target(cfg)
+  local proj = cfg.proj
   return function(vars, pkt)
+    if proj and proj.beam_has(pkt, "restore") then
+      local cap = cfg.start_lives and cfg.start_lives(vars) or vars.start_lives or 0
+      local l   = vars[cfg.lives] + std.absorbed(pkt)
+      if cap > 0 and l > cap then l = cap end
+      -- Never downward: a LIFE bonus may have taken the player above it.
+      if l > vars[cfg.lives] then vars[cfg.lives] = l end
+      la.ui("Bonus")
+      return cfg.reply.restored or cfg.reply.taken
+    end
     -- An area hit whose originator is this player got here only because
     -- its policy allows self-hits (self = true): that flag is the whole
     -- rule, so friendly fire does not get a second say.
@@ -81,7 +110,8 @@ function std.lit_target(cfg)
     -- window and opens one.  An area hit (pkt.area — the firmware's area
     -- service, from someone else's beam landing nearby) neither checks it
     -- nor marks it.
-    if not pkt.area and cfg.immunity.active(pkt.sender) then return cfg.reply.immune end
+    local windowed = not pkt.area and not (proj and proj.beam_has(pkt, "ignore_immunity"))
+    if windowed and cfg.immunity.active(pkt.sender) then return cfg.reply.immune end
     -- Only gate when the game has somewhere to report the refusal.  A
     -- silent decline is the worst failure this game can have — the shooter
     -- aimed, hit, and saw nothing — so the gate is available exactly to
@@ -90,10 +120,11 @@ function std.lit_target(cfg)
       local gate = pkt:byte(4)
       if gate > 0 and pkt.rssi < -gate then return cfg.reply.far end
     end
-    vars[cfg.lives] = vars[cfg.lives] - std.absorbed(pkt)
+    vars[cfg.lives] = vars[cfg.lives] - (proj and proj.weight(vars, pkt) or std.absorbed(pkt))
     if vars[cfg.lives] < 0 then vars[cfg.lives] = 0 end
-    if not pkt.area then cfg.immunity.mark(pkt.sender) end
+    if windowed then cfg.immunity.mark(pkt.sender) end
     if vars[cfg.lives] > 0 then
+      if proj then proj.landed(vars, pkt) end
       la.ui("GotLit")
       return cfg.reply.taken
     end

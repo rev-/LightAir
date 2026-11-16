@@ -89,6 +89,14 @@ local lock = { target = nil, n = 0, last = 0, closing = false, deaf = false }
 local DIM = { energy_div = 2, recharge_mul = 2, cooldown_mul = 2,
               min_cooldown_ms = 250 }
 local dimmed = false
+-- Why: a MALUS holds it until the player goes out, a `dim` beam until its
+-- time is up.  Dimmed while either says so.
+local dim_hold, dim_until = false, 0
+
+-- ---- What beams did to this player --------------------------------
+local mute_until   = 0     -- cannot shine before this
+local expose_until = 0     -- the next beam weighs more until this
+local trace = { until_ms = 0, next_ms = 0, shiner = 0, team = 0xFF }
 
 -- ---- The game's unit ----------------------------------------------
 -- define{ game_unit = n }: what ONE standard unit of strength is worth in
@@ -179,12 +187,15 @@ local FX = {
   mute            = { bit = 2, ms = 3000 },      -- the receiver cannot shine
   expose          = { bit = 3, ms = 5000, mul = 2 }, -- the next beam weighs more
   siphon          = { bit = 4, amount = 5 },     -- energy leaves the receiver
-  beacon          = { bit = 5, ms = 20000, every_ms = 1000 },
+  beacon          = { bit = 5, ms = 20000, every_ms = 1000, to = "all" },
   ignore_immunity = { bit = 6 },
   silent          = { bit = 7 },                 -- the receiver is not told who
   splash          = { bit = 8 },                 -- the standard SPLASH area
 }
 local FX_FIRST_FREE, FX_LAST = 9, 15
+-- A traced player repeats a radio message; this is as often as it may.
+local TRACE_MIN_MS = 1000
+local TRACE_TO     = { shiner = 0, team = 1, all = 2 }
 local fx = {}              -- name -> resolved entry, filled by define()
 
 local function fx_mask(list, who)
@@ -570,6 +581,11 @@ function P.define(decl)
     end
   end
 
+  if fx.beacon.every_ms < TRACE_MIN_MS then fx.beacon.every_ms = TRACE_MIN_MS end
+  if not TRACE_TO[fx.beacon.to] then
+    error("projector: effect beacon: to must be \"shiner\", \"team\" or \"all\"", 0)
+  end
+
   local base = {}
   for k, v in pairs(BASELINE) do base[k] = v end
   defs[0] = base
@@ -837,8 +853,8 @@ end
 --   (A profile with no cooldown gets DIM.min_cooldown_ms instead.)
 --   A ruleset lifts it when the player goes out of the game.
 -- ================================================================
-function P.set_dim(vars, on)
-  on = on and true or false
+local function dim_apply(vars)
+  local on = dim_hold or la.now() < dim_until
   if on == dimmed then return end
   dimmed = on
   local p = active()
@@ -856,6 +872,12 @@ function P.set_dim(vars, on)
     set_energy(vars, slots[active_idx].energy)
   end
   publish_reload(vars, 0, pool_profile())
+end
+
+function P.set_dim(vars, on)
+  dim_hold = on and true or false
+  if not dim_hold then dim_until = 0 end    -- lifting it lifts a beam's too
+  dim_apply(vars)
 end
 
 function P.dimmed() return dimmed end
@@ -936,6 +958,7 @@ end
 -- ================================================================
 function P.strip(vars)
   P.set_dim(vars, false)
+  mute_until, expose_until, trace.until_ms = 0, 0, 0
   kind_on, fx_on = kind_on & kind_sticky, fx_on & fx_sticky
   -- Whatever a press was building is gone with the player.
   lock.target, lock.n, lock.closing = nil, 0, false
@@ -987,6 +1010,8 @@ function P.reset(vars)
   evicted_name   = nil
   dimmed         = false
   shot_units, beam_mul = nil, 1
+  dim_hold, dim_until = false, 0
+  mute_until, expose_until, trace.until_ms = 0, 0, 0
   lock.deaf      = false
   role_tag       = 0
   kind_on, kind_sticky = 0, 0
@@ -1205,6 +1230,117 @@ end
 function P.effect(name) return fx[name] end
 
 -- ================================================================
+--   The receiving side.
+--
+--   A LIT handler reads a beam through these, so a ruleset never spells
+--   out a payload offset:
+--
+--     proj.beam_has(pkt, "restore")   does the beam carry this effect
+--     proj.kind(pkt), proj.role(pkt)  the beam's kind mask and role tag
+--     proj.shiner(pkt)                who shone, for the tray: a short
+--                                     name, or "?" for a silent beam
+--     proj.weight(vars, pkt)          what it weighs HERE, in game units:
+--                                     its strength, more while exposed
+--     proj.landed(vars, pkt)          the hit landed and the player is
+--                                     still in play: apply dim, mute,
+--                                     expose, siphon, beacon
+--
+--   std.lit_target{ proj = proj, ... } does all of it; a ruleset with its
+--   own LIT handler calls weight() and landed() itself.  restore,
+--   ignore_immunity and silent are read by the handler (they change what
+--   a hit IS), and splash by the firmware.
+--
+--   The timed effects are run by tick(), so they only pass while the
+--   player is in play, and strip() ends them all: going out is a clean
+--   slate.
+-- ================================================================
+local function pkt_fx(pkt)
+  if not pkt.len or pkt.len < 6 then return 0 end
+  return pkt:byte(5) | (pkt:byte(6) << 8)
+end
+
+function P.beam_has(pkt, name)
+  local e = fx[name]
+  return e ~= nil and (pkt_fx(pkt) & (1 << e.bit)) ~= 0
+end
+
+function P.kind(pkt) return (pkt.len and pkt.len >= 2) and pkt:byte(2) or 0 end
+function P.role(pkt) return (pkt.len and pkt.len >= 3) and pkt:byte(3) or 0 end
+
+function P.shiner(pkt)
+  if P.beam_has(pkt, "silent") then return "?" end
+  return la.player_short(pkt.sender)
+end
+
+function P.weight(vars, pkt)
+  local w = (pkt.len and pkt.len >= 1) and pkt:byte(1) or 1
+  if la.now() < expose_until then
+    expose_until = 0                       -- one beam, then it is used up
+    w = math.floor(w * fx.expose.mul + 0.5)
+  end
+  return w
+end
+
+function P.exposed() return la.now() < expose_until end
+function P.muted()   return la.now() < mute_until end
+function P.traced()  return la.now() < trace.until_ms end
+
+function P.landed(vars, pkt)
+  local m = pkt_fx(pkt)
+  if m == 0 then return end
+  local now = la.now()
+  if m & (1 << fx.dim.bit) ~= 0 then
+    dim_until = now + fx.dim.ms
+    dim_apply(vars)
+    la.show("DIMMED", 2000)
+    la.ui("MalusDim")
+  end
+  if m & (1 << fx.mute.bit) ~= 0 then
+    mute_until = now + fx.mute.ms
+    la.show("MUTED", 2000)
+    la.ui("Malus")
+  end
+  if m & (1 << fx.expose.bit) ~= 0 then
+    expose_until = now + fx.expose.ms
+    la.show("EXPOSED", 2000)
+    la.ui("Malus")
+  end
+  if m & (1 << fx.siphon.bit) ~= 0 then
+    local e = get_energy(vars) - fx.siphon.amount
+    set_energy(vars, e > 0 and e or 0)
+  end
+  -- Nothing is shown for a beacon: being traced is not something the
+  -- traced player is told.
+  if m & (1 << fx.beacon.bit) ~= 0 then
+    trace.until_ms = now + fx.beacon.ms
+    trace.next_ms  = now
+    trace.shiner   = pkt.sender
+    trace.team     = pkt.team or 0xFF
+  end
+end
+
+-- A received MSG.TRACE, for the ruleset that tracks with it:
+--   [MSG.TRACE] = function(vars, pkt)
+--     local who, rssi = proj.trace(pkt)      -- nil when not meant for us
+-- `who` is the traced player (the sender), and rssi how near they are.
+function P.trace(pkt)
+  if not pkt.len or pkt.len < 3 then return nil end
+  local shiner, team, to = pkt:byte(1), pkt:byte(2), pkt:byte(3)
+  if to == TRACE_TO.shiner and shiner ~= la.my_id() then return nil end
+  if to == TRACE_TO.team and shiner ~= la.my_id()
+     and (team == 0xFF or team ~= la.my_team()) then return nil end
+  return pkt.sender, pkt.rssi
+end
+
+local function tick_effects(vars, now)
+  if dimmed and not dim_hold and now >= dim_until then dim_apply(vars) end
+  if now < trace.until_ms and now >= trace.next_ms then
+    trace.next_ms = now + fx.beacon.every_ms
+    la.broadcast(la.msg.TRACE, trace.shiner, trace.team, TRACE_TO[fx.beacon.to])
+  end
+end
+
+-- ================================================================
 --   Recharge
 -- ================================================================
 local function tick_recharge(vars, p, now)
@@ -1346,6 +1482,7 @@ end
 -- ================================================================
 function P.tick(vars)
   local now    = la.now()
+  tick_effects(vars, now)
   expire(vars, now)
   local p      = active()
   local s      = slots[active_idx]
@@ -1377,6 +1514,7 @@ function P.tick(vars)
   local cost = val(vars, p.cost, 1)
   if want
      and now >= ready_at
+     and now >= mute_until                  -- a `mute` beam landed
      and now >= (s.hot_until or 0)         -- overheated: this projector only
      and not s.drop_at
      and get_energy(vars) >= cost

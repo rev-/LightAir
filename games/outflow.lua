@@ -163,10 +163,20 @@ return {
       [MSG.LIT] = function(vars, pkt)
         -- A hit weighs its strength (STRONG 3, an area hit its band), as
         -- in every game; here the unit is lit_cost energy, not a life.
-        local cost = vars.lit_cost * std.absorbed(pkt)
+        -- A `restore` beam gives that energy instead, up to the pool.
+        if proj.beam_has(pkt, "restore") then
+          local e = vars.energy + vars.lit_cost * std.absorbed(pkt)
+          local m = proj.max_energy(vars)
+          if e > m then e = m end
+          if e > vars.energy then vars.energy = e end
+          la.ui("Bonus")
+          return R.TAKEN
+        end
+        local cost = vars.lit_cost * proj.weight(vars, pkt)
         if vars.energy > cost then
           vars.energy = vars.energy - cost
-          la.show("Lit by " .. la.player_short(pkt.sender), 2000)
+          proj.landed(vars, pkt)        -- dim, mute, expose, siphon, beacon
+          la.show("Lit by " .. proj.shiner(pkt), 2000)
           la.ui("GotLit")
           return R.TAKEN
         end
@@ -174,7 +184,7 @@ return {
         pending_shone = true
         -- The packet is the only place the shiner's id is in hand; the
         -- transition below puts it on the tray for the whole wait.
-        shone_by      = la.player_short(pkt.sender)
+        shone_by      = proj.shiner(pkt)
         return R.SHONE
       end,
     },

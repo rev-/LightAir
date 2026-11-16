@@ -675,3 +675,77 @@ the curve has room: with 3 to 5 lives, `fib` is out by the fifth step.
 | `lifetime_ms` | a pickup dropped that long after it was given; a re-grant restocks both |
 | `on_lit_refund` | energy back for each beam that reaches a player, capped at the pool |
 | `self_cost = { var, amount, floor }` | each beam also costs `amount` of any game var, and is refused if that would take it below `floor` (default 0); `amount = proj.units(1)` for a var counted in the game's units |
+
+---
+
+## 13. Effects: what a beam does at the receiver
+
+Each effect is one bit of the LIT's 16-bit effects word (§3), so stacking
+costs nothing on the wire.  A profile lists the ones it always carries, and
+anything may switch one on or off at run time for whatever is in hand — a
+power-up, a rule, a key:
+
+```lua
+{ id = 20, name = "FROST", effects = { "dim", "mute" } }
+
+proj.set_effect(vars, "silent", true)          -- lost on going out
+proj.set_effect(vars, "silent", true, true)    -- sticky: what the player IS
+proj.set_effect(vars, "silent", false)
+```
+
+| Bit | Effect | At the receiver |
+|---|---|---|
+| 0 | `restore` | the strength is given, not taken: up to the starting lives (the pool in Outflow), from anyone, inside any immunity window |
+| 1 | `dim` | dimmed for `ms` (5 s); a MALUS DIM outlasts it |
+| 2 | `mute` | cannot shine for `ms` (3 s) |
+| 3 | `expose` | the next beam within `ms` (5 s) weighs `mul` (2×), once |
+| 4 | `siphon` | loses `amount` (5) energy — pair it with `on_lit_refund` for the shiner's gain |
+| 5 | `beacon` | repeats `MSG_TRACE` every `every_ms` for `ms` (20 s); see below |
+| 6 | `ignore_immunity` | the immunity window neither refuses the beam nor is opened by it |
+| 7 | `silent` | the receiver is not told who shone: `proj.shiner(pkt)` returns `"?"` |
+| 8 | `splash` | triggers the standard area (§5) — read by the firmware |
+| 9–15 | | areas a game's own profiles declare, in id order |
+
+**What an effect does is this table's, not the beam's.**  The wire carries
+a bit; the duration or amount is looked up locally, and every device runs
+the same file.  A power-up can therefore add an effect but not retune it —
+a stronger variant is another entry.  A game retunes one for everybody:
+
+```lua
+proj.define{ effects = { dim = { ms = 8000 }, beacon = { to = "team" } } }
+```
+
+**Only receiver-side effects are here.**  A lock, a charge, a fire mode
+(§12) are the shining side's and send nothing but a strength.
+
+**Who applies them.**  `std.lit_target{ proj = proj, … }` does.  A ruleset
+with its own LIT handler reads the beam through the library, never by
+offset: `proj.beam_has(pkt, name)`, `proj.kind(pkt)`, `proj.role(pkt)`,
+`proj.shiner(pkt)`, `proj.weight(vars, pkt)` (the strength, more while
+exposed) and `proj.landed(vars, pkt)` (apply the timed ones — call it when
+the hit landed and the player stays in play).
+
+**They pass only in play.**  `proj.tick` runs the clocks, and `proj.strip`
+ends them all: going out is a clean slate, a trace included.
+
+**`silent` hides less than it sounds.**  It removes the name from the
+receiver's tray.  The shiner's own shine cue is still audible to anyone
+nearby (it is the profile's `shine_action`, tunable separately) and the
+end-of-game scores still credit the points.
+
+### The beacon effect and `MSG_TRACE`
+
+A traced player broadcasts `MSG_TRACE [shiner, shiner's team, to]`,
+single-hop, at most **once a second** however a game retunes it — one
+traced player is one more periodic sender on the channel.  `to` is who may
+use it: `"shiner"`, `"team"` or `"all"`.  Nothing is shown to the traced
+player.  A ruleset that tracks with it handles the message itself:
+
+```lua
+[MSG.TRACE] = function(vars, pkt)
+  local who, rssi = proj.trace(pkt)    -- nil when it is not meant for us
+end
+```
+
+The firmware only carries it; what a reading means (a distance bar, a
+count of seconds near someone) is the ruleset's.

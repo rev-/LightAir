@@ -204,12 +204,12 @@ return {
       -- strength and ignores the window.  The last life answers SHONE; the
       -- state rule below moves us out.
       [MSG.LIT] = std.lit_target{
-        lives = "lives", immunity = imm,
+        lives = "lives", immunity = imm, proj = proj,
         reply = { taken = R.TAKEN, shone = R.SHONE, immune = R.IMMUNE },
         -- This packet is the only place the shiner's id is in hand — the
         -- state rule that follows sees no packet — so the name for the
         -- tray is taken here.
-        on_shone = function(_, pkt) shone_by = la.player_short(pkt.sender) end,
+        on_shone = function(_, pkt) shone_by = proj.shiner(pkt) end,
       },
     },
     [S.OUT_GAME] = {
