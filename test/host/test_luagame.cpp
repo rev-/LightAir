@@ -1802,7 +1802,7 @@ int main() {
               "victim: a hit the game refuses (immune) bursts nothing");
         from(4, 0, RadioMsg::MSG_LIT, { 1, 0, 0, 0, 0, 1 });
         CHECK(*al == 3 && !sentOf(RadioMsg::MSG_AREA), "victim: a teammate's refused hit bursts nothing");
-        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0, 0xFF, 0xFE }); // every effect but splash
+        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0, 0xFE, 0xFE }); // every effect but splash (and restore)
         CHECK(*al == 2 && !sentOf(RadioMsg::MSG_AREA), "victim: a beam without the area's effect bursts nothing");
         g_millis += 3100;                                         // every window closed
         *al = 1;
