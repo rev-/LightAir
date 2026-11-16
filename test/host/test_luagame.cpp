@@ -983,6 +983,9 @@ int main() {
             int* reloadMs   = slotOf(bd, "reload_ms");
             CHECK(reload == owned->barStart, "start_var resolved to the reload slot");
             CHECK(reloadMs == owned->barFill, "fill_var resolved to the reload_ms slot");
+            CHECK(owned->barMark && owned->barMark == slotOf(bd, "reload_mark"),
+                  "mark_var resolved to the reload_mark slot");
+            CHECK(selfT->barMark == nullptr, "no mark_var: a bar without a marker");
             if (reload && reloadMs && owned->barStart && owned->barFill) {
                 *reload = 4321;
                 *reloadMs = 7000;
@@ -992,6 +995,68 @@ int main() {
                 CHECK(false, "bar fixture vars reachable through the descriptor");
             }
         }
+    }
+
+    // ---- 15a. A bar's marker is drawn while its var holds one ----
+    // The owner (std.gates) decides when the marker shows; the display only
+    // draws it, as two brackets above and below the stretch it covers, and
+    // redraws when the marker changes although the fill has not moved.
+    {
+        struct RecDisplay : LightAir_Display {
+            struct R { uint8_t x, y, w, h; };
+            std::vector<R> fills;
+            void clear() override {}
+            void setColor(bool on) override { color = on; }
+            void fillRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h) override {
+                if (color) fills.push_back({ x, y, w, h });
+            }
+            void drawRect(uint8_t, uint8_t, uint8_t, uint8_t) override {}
+            void drawBitmap(uint8_t, uint8_t, uint8_t, uint8_t, const uint8_t*) override {}
+            void print(uint8_t, uint8_t, const char*) override {}
+            uint16_t textWidth(const char*) override { return 0; }
+            void flush() override {}
+            bool color = true;
+        } rec;
+        LightAir_DisplayCtrl dc(rec);
+        int value = 0, fill = 10000, start = 0, mark = 0;
+        const uint8_t y  = DisplayDefaults::TRAY_HEIGHT;
+        const uint8_t bx = DisplayDefaults::ICON_GUTTER;
+        const uint8_t bw = DisplayDefaults::BAR_WIDTH;
+        const uint8_t set = dc.createBindingSet();
+        dc.selectBindingSet(set);
+        CHECK(dc.bindBarVariable(&value, ICON_ENERGY, 0, y, 0, &fill, bw, &start, nullptr, &mark),
+              "a bar binds with a marker var");
+        dc.activateBindingSet(set);
+        g_millis = 700000; start = (int)g_millis;
+        dc.update();
+        auto brackets = [&]() {                  // the marker's two brackets, if drawn
+            std::vector<RecDisplay::R> b;
+            for (const auto& f : rec.fills)
+                if (f.h == 2 && (f.y == y || f.y == y + 2 + DisplayDefaults::BAR_HEIGHT)) b.push_back(f);
+            return b;
+        };
+        CHECK(brackets().empty(), "no marker value: no marker drawn");
+        rec.fills.clear();
+        mark = LightAir_DisplayCtrl::barMark(500, 100);          // the bar's middle tenth
+        dc.update();
+        const auto b = brackets();
+        CHECK(b.size() == 2, "a marker is two brackets, redrawn although the fill has not moved");
+        if (b.size() == 2) {
+            CHECK(b[0].x == bx + bw / 2 && b[0].w == bw / 10 && b[1].x == b[0].x && b[1].w == b[0].w,
+                  "the marker covers the stretch of the bar its var names");
+            CHECK(b[0].y == y && b[1].y == y + 2 + DisplayDefaults::BAR_HEIGHT,
+                  "one bracket above the bar and one below");
+        }
+        rec.fills.clear();
+        mark = LightAir_DisplayCtrl::barMark(999, 1);            // a sliver at the very end
+        dc.update();
+        const auto e = brackets();
+        CHECK(e.size() == 2 && e[0].w == 2 && e[0].x + e[0].w == bx + bw,
+              "a marker is never narrower than 2 px and never leaves the bar");
+        rec.fills.clear();
+        mark = 0;
+        dc.update();
+        CHECK(brackets().empty(), "the marker goes when its var is cleared");
     }
 
     // ---- 15b. Config choices: a list of values, each with its label ----

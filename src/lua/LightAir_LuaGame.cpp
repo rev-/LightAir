@@ -787,11 +787,28 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
                     lua_pop(L, 1);
                 }
 
+                // mark_var is optional: the var a gated wait (std.gates)
+                // publishes its marker in, drawn over the bar while it holds
+                // one.
+                const int* markPtr = nullptr;
+                char markId[LuaDefaults::MAX_VAR_ID];
+                lua_getfield(L, e, "mark_var");
+                if (lua_isstring(L, -1)) {
+                    lua_pop(L, 1);
+                    fieldStr(L, e, "mark_var", markId, sizeof(markId), true);
+                    int ms = findSlot(markId);
+                    if (ms < 0 || _slots[ms].isText)
+                        luaL_error(L, "monitor bar mark_var '%s' invalid", markId);
+                    markPtr = &_slots[ms].val;
+                } else {
+                    lua_pop(L, 1);
+                }
+
                 _monitorVars[monitorCount] = MonitorVar::Bar(
                     _slots[slot].id, &_slots[slot].val, mask, (IconType)icon, col, row,
                     (int)fieldInt(L, e, "bar_at", 0, false),
                     &_slots[fillSlot].val, startPtr,
-                    (uint8_t)fieldInt(L, e, "width", 0, false), iconVarPtr);
+                    (uint8_t)fieldInt(L, e, "width", 0, false), iconVarPtr, markPtr);
             } else if (_slots[slot].isText) {
                 _monitorVars[monitorCount] = MonitorVar::Str(
                     _slots[slot].id, _slots[slot].text, mask, (IconType)icon, col, row);

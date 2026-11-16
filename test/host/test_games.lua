@@ -1205,6 +1205,181 @@ do
     check(not ok, "effects", "retuning an unknown effect loaded")
   end
 
+  -- ---- gates: the reload mini-game (std.gates) ---------------------
+  do
+    local std = la.lib("std")
+    local state = "off"
+    local real_state = la.trigger_state
+    la.trigger_state = function(n) return n == 2 and state or "off" end
+    -- No jitter unless a case asks for it: the gate sits mid-segment.
+    local jitter = 0
+    local function rnd(lo, hi) return jitter end
+    local function run(g, from, to, press_at)
+      local done_at
+      for t = from, to, 10 do
+        state = (press_at and t == press_at) and "pressed" or "off"
+        if g.tick(t) and not done_at then done_at = t end
+      end
+      state = "off"
+      return done_at
+    end
+
+    -- Unpressed: exactly the nominal time, and no penalty for looking away.
+    out.ui, out.shows = {}, {}
+    local g = std.gates{ gates = 1, window_ms = 200, lead_ms = 300, random = rnd, label = "RELOAD" }
+    g.start(1000, 4000)
+    check(g.count() == 1 and g.active() and g.from() == 1000, "gates", "the wait did not start")
+    check(run(g, 1000, 6000) == 5000, "gates", "an unpressed wait did not last the nominal time")
+    check(out.ui[1] == "GateOpen" and #out.ui == 1, "gates",
+          "an unpressed gate played " .. table.concat(out.ui, ","))
+    check(out.shows[1] == "RELOAD: NOW", "gates", "the gate did not name itself on the tray")
+
+    -- The marker: nothing until the lead, then the window's place on the bar.
+    g.start(1000, 4000)
+    run(g, 1000, 2590)                          -- window 2900..3100, lead from 2600
+    check(g.mark() == 0, "gates", "the marker showed before its lead")
+    run(g, 2600, 2600)
+    local m = g.mark()
+    check((m & 0xFFFF) - 1 == 475 and (m >> 16) == 50, "gates",
+          "the marker is at " .. ((m & 0xFFFF) - 1) .. "/" .. (m >> 16) .. " thousandths, expected 475/50")
+    run(g, 2610, 3200)
+    check(g.mark() == 0, "gates", "the marker outlived its window")
+
+    -- Passed: the rest of the segment is skipped.
+    out.ui = {}
+    g.start(1000, 4000)
+    check(run(g, 1000, 6000, 3000) == 3000, "gates", "a passed single gate did not end the wait at once")
+    check(out.ui[2] == "GatePassed", "gates", "passing played " .. tostring(out.ui[2]))
+    local half = std.gates{ gates = 2, window_ms = 200, lead_ms = 300, reward_pct = 50, random = rnd }
+    half.start(0, 8000)                          -- gates at 2000 and 6000
+    check(run(half, 0, 9000, 2000) == 6000, "gates",
+          "one gate of two passed at half reward did not save a quarter of the wait")
+
+    -- Missed once: a quarter of the nominal time more.
+    out.ui = {}
+    g.start(1000, 4000)
+    check(run(g, 1000, 8000, 1500) == 6000, "gates", "one miss did not cost a quarter of the nominal time")
+    check(out.ui[1] == "GateMissed", "gates", "missing played " .. tostring(out.ui[1]))
+    -- ...and a press with no gate left is nothing.
+    g.start(1000, 4000)
+    check(run(g, 1000, 8000, 4000) == 5000, "gates", "a press after the gate went by changed the wait")
+
+    -- Two misses: a gate more, with its segment.  Three: start over, once.
+    local three = std.gates{ gates = 3, window_ms = 200, lead_ms = 300, random = rnd }
+    local function presses(g2, list)
+      local done_at
+      for t = 0, 60000, 10 do
+        state = list[t] and "pressed" or "off"
+        if g2.tick(t) and not done_at then done_at = t end
+      end
+      state = "off"
+      return done_at
+    end
+    three.start(0, 9000)                         -- gates at 1500, 4500, 7500
+    check(three.count() == 3, "gates", "three gates did not fit 9 s")
+    -- miss #1 at 500 (+2250), miss #2 near the second gate's segment start.
+    check(presses(three, { [500] = true, [6000] = true }) == 9000 + 2250 + 3000, "gates",
+          "two misses did not cost a quarter and one more segment")
+    out.ui = {}
+    three.start(0, 9000)
+    local t3 = presses(three, { [100] = true, [200] = true, [300] = true })
+    check(t3 == 300 + 9000, "gates", "three misses did not start the wait over: done at " .. tostring(t3))
+    local restarts = 0
+    for _, e in ipairs(out.ui) do if e == "GateRestart" then restarts = restarts + 1 end end
+    check(restarts == 1, "gates", "the restart cue played " .. restarts .. " times")
+    three.start(0, 9000)
+    local t6 = presses(three, { [100] = true, [200] = true, [300] = true,
+                                [1000] = true, [4000] = true, [7000] = true })
+    check(t6 and t6 < 30000, "gates", "misses after the restart never let the wait end")
+
+    -- Jitter moves the gate by up to two windows, and stays in the segment.
+    jitter = 400
+    g.start(0, 4000)
+    check(run(g, 0, 5000, 2400) == 2400, "gates", "a gate moved two windows late was not where it should be")
+    jitter = 0
+
+    -- Too many gates for the time are cut down; too short a wait has none.
+    local many = std.gates{ gates = 8, window_ms = 200, lead_ms = 300, random = rnd }
+    many.start(0, 5000)
+    check(many.count() == 2, "gates", many.count() .. " gates in 5 s, expected 2")
+    many.start(0, 600)
+    check(many.count() == 0 and run(many, 0, 2000) == 600, "gates",
+          "a wait too short for a gate is not a plain wait")
+
+    -- ---- the projector: gates on the recharge wait ----
+    clock, shine_busy_until = 0, 0
+    local GV = { energy = "energy", spent = "energy_spent", reload = "reload",
+                 reload_ms = "reload_ms", reload_mark = "reload_mark" }
+    local P = fresh{ vars = GV,
+                     profiles = { { id = 50, name = "GATED", max_energy = 1,
+                                    recharge = "refill", recharge_delay_ms = 4000,
+                                    gates = { gates = 1, window_ms = 200, lead_ms = 300,
+                                              random = rnd } },
+                                  { id = 51, name = "PLAIN", max_energy = 1,
+                                    recharge = "refill", recharge_delay_ms = 4000 } } }
+    local v = mk_vars(50)
+    v.reload, v.reload_ms, v.reload_mark = 0, 0, 0
+    P.reset(v)
+    la.trigger_down = function() return false end
+    -- Fire the one beam, release, and wait; returns how long the refill took.
+    local function reload(id, press_after)
+      clock = clock + 20000
+      P.grant(v, id)
+      la.trigger_down = function() return true end
+      P.tick(v); clock = clock + 10
+      la.trigger_down = function() return false end
+      P.tick(v)                                  -- the release: the wait begins
+      local t0, marked = clock, false
+      for _ = 1, 1000 do
+        clock = clock + 10
+        state = (press_after and clock - t0 == press_after) and "pressed" or "off"
+        P.tick(v)
+        if v.reload_mark ~= 0 then marked = true end
+        if v.energy == 1 then break end
+      end
+      state = "off"
+      return clock - t0, marked
+    end
+    local plain = reload(51)
+    check(plain == 4000, "gates", "a profile without gates refilled in " .. plain .. " ms, expected 4000")
+    local idle, marked = reload(50)
+    check(idle == 4000, "gates", "a gated reload nobody pressed took " .. idle .. " ms, expected 4000")
+    check(marked and v.reload_mark == 0, "gates",
+          "the bar's marker never showed, or was left showing after the reload")
+    local quick = reload(50, 2000)
+    check(quick == 2000, "gates", "a gated reload passed at its gate took " .. quick .. " ms, expected 2000")
+    local slow = reload(50, 500)
+    check(slow == 5000, "gates", "a gated reload missed took " .. slow .. " ms, expected 5000")
+
+    -- ---- the respawn wait, gated ----
+    clock = 500000
+    local rv = { respawn_zero = 1, respawn_from = 0, respawn_ms = 0, respawn_mark = 0 }
+    local plainR = std.respawn_gates{}
+    plainR.start(rv, 4)
+    clock = clock + 3990
+    check(not plainR.done(), "respawn", "a plain respawn wait ended early")
+    clock = clock + 10
+    check(plainR.done(), "respawn", "a plain respawn wait did not end on time, untouched by tick()")
+
+    local gr = std.respawn_gates{ gates = 1, window_ms = 200, lead_ms = 300,
+                                  random = rnd, mark = "respawn_mark" }
+    local start = clock
+    gr.start(rv, 4)
+    local ended, saw_mark
+    for _ = 1, 600 do
+      clock = clock + 10
+      state = (clock - start == 2000) and "pressed" or "off"
+      if rv.respawn_mark ~= 0 then saw_mark = true end
+      if gr.tick(rv) and not ended then ended = clock - start end
+    end
+    state = "off"
+    check(ended == 2000 and gr.done(), "respawn", "a gated respawn passed at its gate took " ..
+          tostring(ended) .. " ms, expected 2000")
+    check(saw_mark and rv.respawn_mark == 0, "respawn", "the respawn bar's marker did not show and clear")
+    check(clock - rv.respawn_from >= rv.respawn_ms, "respawn", "the bar was not left full")
+    la.trigger_state = real_state
+  end
+
   -- ---- clamps bite at load ---------------------------------------
   do
     local P = fresh{ vars = BASE_VARS,

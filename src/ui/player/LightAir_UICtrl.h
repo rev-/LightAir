@@ -41,6 +41,12 @@ public:
     Special2,
     BonusProjector,   // a BONUS totem handed over a powered projector
     MalusDim,         // a MALUS totem dimmed the projector
+    // A timed wait with gates (std.gates: the reload and respawn mini-game,
+    // and anything else built on it).
+    GateOpen,         // a gate's marker appeared: press inside its window
+    GatePassed,       // pressed inside the window
+    GateMissed,       // pressed outside it
+    GateRestart,      // too many misses: the wait starts over
     Custom1,
     Custom2,
     Custom3,

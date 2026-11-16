@@ -47,6 +47,7 @@ static const char* const kUIEventNames[] = {
     "ProjectorChange", "Stop",
     "Bonus", "Malus", "Special1", "Special2",
     "BonusProjector", "MalusDim",
+    "GateOpen", "GatePassed", "GateMissed", "GateRestart",
     "Custom1", "Custom2", "Custom3", "Custom4",
 };
 static const uint8_t kUIEventCount = sizeof(kUIEventNames) / sizeof(*kUIEventNames);

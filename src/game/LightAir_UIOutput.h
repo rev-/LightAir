@@ -14,6 +14,7 @@
 //   Down, Up, Lit, Enlight, EndGame, FlagGain, FlagTaken,
 //   FlagReturn, ControlGain, ControlLoss, RoleChange, Stop,
 //   Bonus, Malus, Special1, Special2, BonusProjector, MalusDim,
+//   GateOpen, GatePassed, GateMissed, GateRestart,
 //   Custom1..Custom4
 //
 // Example:

@@ -749,3 +749,90 @@ end
 
 The firmware only carries it; what a reading means (a distance bar, a
 count of seconds near someone) is the ruleset's.
+
+
+---
+
+## 14. Gates: the reload and respawn mini-game
+
+A wait the player can shorten by pressing the **secondary trigger** at the
+right moment.  The engine is `std.gates` (in `games/lib/std.lua`, where the
+rules are spelled out); the projector's recharge and the respawn wait are
+its first two users, and anything with a bar to wait out can be a third.
+
+```lua
+-- a profile: gates on the recharge wait
+gates = { gates = 2, window_ms = 250, lead_ms = 300, reward_pct = 50, penalty_pct = 25 }
+```
+
+**With no `gates` — the default — nothing changes**: the wait is the release
+plus `recharge_delay_ms`, exactly as §9 describes.  With them, that delay
+(stretched while dimmed) is the **nominal time**, and everything else is
+derived from it.
+
+- The wait is cut into as many equal segments as there are gates, one gate
+  in each: a window of `window_ms` (never less than 150 ms) around the
+  middle of its segment.
+- **Each gate is moved at random**, by up to two windows either way, drawn
+  afresh every time, so it can be neither learnt nor automated.
+- **The marker shows only shortly before the gate**: `lead_ms` before the
+  window opens, until it closes.  That is also when `GateOpen` plays, so a
+  player watching the field gets it by ear and by hand.
+- **Not pressing costs nothing.**  The wait lasts the nominal time.  The
+  mini-game is an offer; a rule that punished looking away would make it
+  an obligation, and would make DIM (which doubles the wait) brutal.
+
+| Press | Result |
+|---|---|
+| inside the window | the gate is passed: `reward_pct` of its segment is skipped (50 = the rest of it, so one gate passed ends the wait at about half) |
+| outside it, 1st miss | the wait grows by `penalty_pct` of the nominal time |
+| 2nd miss | one more gate is added at the end, with its segment |
+| 3rd miss | the whole wait starts over — **once** |
+| later misses | as the first |
+
+Each gate can be missed only once and a press with no gate left is
+ignored, so the worst case is bounded.
+
+**Room.**  A segment has to hold its jitter and the marker's lead (ten
+windows, or four leads).  Gates that do not fit the nominal time are cut
+down when the wait starts; a wait too short for even one is a plain wait.
+
+### What the player gets
+
+Four UI events, each with sound, light and vibration, usable by anything:
+`GateOpen` (one sharp high tick and a firm buzz), `GatePassed` (two rising
+notes, green), `GateMissed` (a low flat buzz, amber), `GateRestart` (three
+falling notes, red).  With `label = "RELOAD"` (the projector's default) each
+is also named on the tray: `RELOAD: NOW`, `OK`, `MISSED`, `AGAIN`.
+
+**The bar's marker.**  A bar row may name a `mark_var`; while that var holds
+a marker the display draws two brackets over the stretch of the bar it
+covers.  The owner decides when it shows, the display only draws it:
+
+```lua
+proj.define{ vars = { ..., reload = "reload", reload_ms = "reload_ms",
+                      reload_mark = "reload_mark" } }
+vars    = { ..., { id = "reload_mark", default = 0 } }
+monitor = { { var = "energy", ..., bar = true, bar_at = 0, fill_var = "reload_ms",
+              start_var = "reload", mark_var = "reload_mark" } }
+```
+
+A passed gate moves the wait's start back and a missed one moves it
+forward, so the bar jumps with the wait and always shows what is left.
+The energy bar only shows while the pool is **empty** (§6), so a partial
+reload has the gates and their cues, but no bar to see them on.
+
+### The respawn wait
+
+```lua
+local respawn = std.respawn_gates{ gates = 2, mark = "respawn_mark" }   -- at load
+respawn.start(vars, vars.respawn_secs)                                  -- going out
+update = { [S.OUT_GAME] = function(vars) respawn.tick(vars) end },
+rules  = { { from = S.OUT_GAME, to = S.IN_GAME,
+             when = function() return respawn.done() end, ... } },
+```
+
+It writes the vars `std.respawn_wait` writes, and with `gates = 0` it is
+`std.respawn_wait` and nothing else.  A game that also shows the wait as a
+number (`countdown_in`) will see the two disagree once a gate is passed:
+the bar is the truth.

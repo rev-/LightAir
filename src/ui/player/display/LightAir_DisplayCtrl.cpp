@@ -85,7 +85,8 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     const int* fillMs,
     uint8_t barWidth,
     const int* startMs,
-    const int* iconVar
+    const int* iconVar,
+    const int* markVar
 ) {
     if (y < DisplayDefaults::TRAY_HEIGHT) return false;
     if (barWidth == 0 || barWidth > DisplayDefaults::BAR_WIDTH) return false;
@@ -103,6 +104,8 @@ bool LightAir_DisplayCtrl::bindBarVariable(
     b.trigger   = triggerValue;
     b.fillMs    = fillMs;
     b.startMs   = startMs;
+    b.markVar   = markVar;
+    b.lastMark  = 0;
     b.fillStart = 0;
     b.filling   = false;
     b.barWidth  = barWidth;
@@ -271,6 +274,7 @@ void LightAir_DisplayCtrl::renderBar(VariableBinding& b) {
         if (*b.startMs == 0) {
             if (b.lastValue == 0) return;
             b.lastValue = 0;
+            b.lastMark  = 0;
             _display.setColor(false);
             _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH,
                               DisplayDefaults::CELL_HEIGHT);
@@ -286,10 +290,13 @@ void LightAir_DisplayCtrl::renderBar(VariableBinding& b) {
     uint32_t elapsed = millis() - start;
     if (elapsed > fillMs) elapsed = fillMs;
 
-    // Redraw only when the drawn length would actually change.
-    int filled = (int)((elapsed * b.barWidth) / fillMs);
-    if (filled == b.lastValue) return;
+    // Redraw only when the drawn length would actually change — or the
+    // marker did: it comes and goes on its own clock, not the fill's.
+    const int mark   = b.markVar ? *b.markVar : 0;
+    int       filled = (int)((elapsed * b.barWidth) / fillMs);
+    if (filled == b.lastValue && mark == b.lastMark) return;
     b.lastValue = filled;
+    b.lastMark  = mark;
 
     _display.setColor(false);
     _display.fillRect(b.x, b.y, DisplayDefaults::CELL_WIDTH, DisplayDefaults::CELL_HEIGHT);
@@ -298,6 +305,9 @@ void LightAir_DisplayCtrl::renderBar(VariableBinding& b) {
     drawIcon(ICON_HOURGLASS, b.x, b.y + DisplayDefaults::FONT_TOP_PADDING);
     drawBar(b.x + DisplayDefaults::ICON_GUTTER, b.y + 2,
             b.barWidth, DisplayDefaults::BAR_HEIGHT, (float)elapsed / (float)fillMs);
+    if (mark > 0)
+        drawBarMark(b.x + DisplayDefaults::ICON_GUTTER, b.y + 2,
+                    b.barWidth, DisplayDefaults::BAR_HEIGHT, mark);
 }
 
 void LightAir_DisplayCtrl::renderString(VariableBinding& b) {
@@ -382,6 +392,24 @@ const uint8_t* LightAir_DisplayCtrl::getIconBitmap(IconType icon) {
         case ICON_STRONG:    return ICON_STRONG_BITMAP;
         default:             return ICON_LIGHT_BITMAP;
     }
+}
+
+// A bar's marker: two solid brackets, one above and one below the stretch
+// of the bar it covers.  Outside the bar's own rectangle on purpose, so it
+// reads the same over the filled part and the empty part.  Never narrower
+// than 2 px: a window of a few hundred ms on a long wait is less than that.
+void LightAir_DisplayCtrl::drawBarMark(uint8_t x, uint8_t y, uint8_t width,
+                                       uint8_t height, int mark) {
+    const uint32_t start = (uint32_t)(mark & 0xFFFF) - 1;       // thousandths
+    const uint32_t span  = (uint32_t)(mark >> 16) & 0xFFFF;
+    if (start > 1000) return;
+    uint8_t mx = (uint8_t)((start * width) / 1000);
+    uint8_t mw = (uint8_t)((span * width) / 1000);
+    if (mw < 2) mw = 2;
+    if (mx > width - 2) mx = width - 2;
+    if (mx + mw > width) mw = width - mx;
+    _display.fillRect(x + mx, y - 2, mw, 2);
+    _display.fillRect(x + mx, y + height, mw, 2);
 }
 
 // The one bar renderer in the firmware: every gauge on the player LCD

@@ -162,6 +162,254 @@ function std.respawn_wait(vars, secs)
 end
 
 -- ----------------------------------------------------------------
+-- The same wait, with gates (std.gates above): a player who presses the
+-- secondary trigger at the right moments is back sooner.
+--
+--   local respawn = std.respawn_gates{ gates = 2, mark = "respawn_mark" }  -- once, at load
+--   respawn.start(vars, vars.respawn_secs)              -- going out
+--   update = { [S.OUT_GAME] = function(vars) respawn.tick(vars) end },
+--   rules  = { { from = S.OUT_GAME, to = S.IN_GAME,
+--                when = function() return respawn.done() end, ... } },
+--
+-- It writes the three vars std.respawn_wait writes, moving respawn_from as
+-- gates are passed or missed so the bar follows, and the var named by
+-- `mark` for the bar's marker, which the game declares and names on the
+-- row (without `mark` the cues are sound, light and vibration alone):
+--
+--   vars    = { ..., { id = "respawn_mark", default = 0 } },
+--   monitor = { { var = "respawn_zero", ..., bar = true, bar_at = 0,
+--                 fill_var = "respawn_ms", start_var = "respawn_from",
+--                 mark_var = "respawn_mark" } },
+--
+-- With gates = 0 it is std.respawn_wait and nothing else.  A game that
+-- also shows the wait as a number (countdown_in) will see the two
+-- disagree once a gate is passed: the bar is the truth.
+-- ----------------------------------------------------------------
+function std.respawn_gates(cfg)
+  cfg = cfg or {}
+  local g = (cfg.gates or 0) > 0 and std.gates{
+    gates = cfg.gates, window_ms = cfg.window_ms, lead_ms = cfg.lead_ms,
+    reward_pct = cfg.reward_pct, penalty_pct = cfg.penalty_pct,
+    trigger = cfg.trigger, label = cfg.label or "RESPAWN", random = cfg.random } or nil
+  local mark = cfg.mark
+  local done_at, over = 0, true
+  local r = {}
+
+  function r.start(vars, secs)
+    done_at = std.respawn_wait(vars, secs)
+    over = false
+    if g then g.start(vars.respawn_from, vars.respawn_ms) end
+    if mark then vars[mark] = 0 end
+    return done_at
+  end
+
+  function r.tick(vars)
+    if over then return true end
+    if g then
+      local now = la.now()
+      over = g.tick(now)
+      -- Over: leave the bar full, where a plain wait would have left it.
+      vars.respawn_from = over and (now - vars.respawn_ms) or g.from()
+      if mark then vars[mark] = g.mark() end
+    else
+      over = la.now() >= done_at
+    end
+    return over
+  end
+
+  -- Without gates the clock alone decides, tick() or not.
+  function r.done()
+    if not g and not over then over = la.now() >= done_at end
+    return over
+  end
+
+  return r
+end
+
+-- ----------------------------------------------------------------
+-- Gates: a timed wait the player can shorten by pressing at the right
+-- moment — the reload and respawn mini-game, and anything else that has
+-- a bar to wait out.
+--
+--   local g = std.gates{ gates = 2, window_ms = 250, lead_ms = 300,
+--                        reward_pct = 50, penalty_pct = 25,
+--                        trigger = 2, label = "RELOAD" }
+--   g.start(la.now(), nominal_ms)      -- the wait begins
+--   if g.tick(la.now()) then ... end   -- every tick; true once it is over
+--   g.from()    the wait's start for a bar's start_var (0 = not waiting)
+--   g.mark()    the bar's marker for its mark_var (0 = none showing)
+--   g.active()  g.stop()  g.count()
+--
+-- The wait lasts nominal_ms for a player who never presses: NOT pressing
+-- costs nothing, so the mini-game is an offer, never an obligation.
+--
+-- The wait is cut into as many equal segments as there are gates, with one
+-- gate in each.  A gate is a window of window_ms around the middle of its
+-- segment, moved by a random amount of up to two windows either way, drawn
+-- afresh every time — it cannot be learnt or automated.  Its marker shows
+-- on the bar, and GateOpen plays, lead_ms before the window opens and no
+-- earlier, so the player has to be attending to it.
+--
+--   pressed inside the window   the gate is passed: reward_pct of its
+--                               segment is skipped (50 = the rest of it)
+--   not pressed                 nothing; the gate just goes by
+--   pressed outside the window  the gate is missed, and misses add up:
+--       1st   the wait grows by penalty_pct of the nominal time
+--       2nd   one more gate is added at the end, with its segment
+--       3rd   the whole wait starts over — once
+--       more  as the first
+--
+-- A press with no gate left is ignored, and every gate can be missed only
+-- once, so the worst case is bounded.
+--
+-- Too many gates for the time are cut down at start(): a segment must hold
+-- its jitter and the marker's lead (ten windows, or four leads).  count()
+-- says how many are left; with none the wait is a plain one.
+--
+-- cfg.label, when given, names each event on the tray ("RELOAD: NOW").
+-- cfg.random(lo, hi) replaces math.random, for a test.
+-- ----------------------------------------------------------------
+function std.gates(cfg)
+  cfg = cfg or {}
+  local want    = cfg.gates or 1
+  local window  = math.max(cfg.window_ms or 250, 150)   -- a hand cannot hit less
+  local lead    = math.max(cfg.lead_ms or 300, 0)
+  local reward  = math.min(math.max(cfg.reward_pct or 50, 0), 100)
+  local penalty = math.max(cfg.penalty_pct or 25, 0)
+  local trig    = cfg.trigger or 2
+  local label   = cfg.label
+  local rand    = cfg.random or math.random
+
+  local on      = false
+  local t0      = 0      -- the wait's start, moved by rewards and penalties
+  local total   = 0
+  local seg     = 0
+  local count   = 0      -- gates in this wait
+  local idx     = 0      -- the gate now pending, or 0 for none
+  local centre  = 0      -- its middle, in ms since t0
+  local shown   = false
+  local misses  = 0
+  local extra   = false  -- one more gate is owed at the end
+  local again   = false  -- the wait already started over once
+
+  local function say(what)
+    if label then la.show(label .. ": " .. what, 1500) end
+  end
+
+  -- Put gate i in play: the middle of its segment, moved at random.
+  local function arm(i)
+    idx, shown = i, false
+    local jit = 2 * window
+    local room = seg // 4 - window // 2          -- stay well inside the segment
+    if jit > room then jit = room end
+    if jit < 0 then jit = 0 end
+    centre = (i - 1) * seg + seg // 2 + (jit > 0 and rand(-jit, jit) or 0)
+  end
+
+  local function next_gate()
+    if idx > 0 and idx < count then arm(idx + 1) else idx = 0 end
+  end
+
+  local g = {}
+
+  function g.start(anchor, nominal_ms)
+    t0, total = anchor, nominal_ms or 0
+    misses, extra, again = 0, false, false
+    count = want
+    local need = math.max(10 * window, 4 * lead)
+    while count > 1 and total // count < need do count = count - 1 end
+    if count == 1 and total < math.max(4 * window, 4 * lead) then count = 0 end
+    if count < 0 then count = 0 end
+    on = total > 0
+    if count > 0 and on then
+      seg = total // count
+      arm(1)
+    else
+      idx = 0
+    end
+  end
+
+  function g.stop()   on, idx = false, 0 end
+  function g.active() return on end
+  function g.count()  return count end
+  -- A penalty early in the wait can put the start in the future: the bar
+  -- then stands empty until the wait is back at its beginning.
+  function g.from()
+    if not on then return 0 end
+    local now = la.now()
+    return t0 > now and now or t0
+  end
+
+  function g.mark()
+    if not on or idx == 0 or not shown or total <= 0 then return 0 end
+    local open = centre - window // 2
+    if open < 0 then open = 0 end
+    local start = open * 1000 // total
+    if start > 1000 then start = 1000 end
+    return (start + 1) | ((window * 1000 // total) << 16)
+  end
+
+  function g.tick(now)
+    if not on then return true end
+    local t = now - t0
+
+    if idx > 0 then
+      local open, close = centre - window // 2, centre + window // 2
+      if not shown and t >= open - lead then
+        shown = true
+        la.ui("GateOpen")
+        say("NOW")
+      end
+      local pressed = la.trigger_state(trig) == "pressed"
+      if pressed and t >= open and t <= close then
+        -- Passed: skip ahead, but never past the end of this segment —
+        -- the next gate's lead must still be ahead of us.
+        local skip = seg * reward // 100
+        local stop = idx * seg
+        if t + skip > stop then skip = stop - t end
+        if skip > 0 then t0 = t0 - skip end
+        la.ui("GatePassed")
+        say("OK")
+        next_gate()
+      elseif pressed then
+        misses = misses + 1
+        if misses == 3 and not again then
+          again, extra = true, false
+          t0 = now
+          la.ui("GateRestart")
+          say("AGAIN")
+          arm(1)
+        else
+          if misses == 2 then
+            extra = true
+          else
+            t0 = t0 + total * penalty // 100
+          end
+          la.ui("GateMissed")
+          say("MISSED")
+          next_gate()
+        end
+      elseif t > close then
+        next_gate()                    -- gone by, unpressed: no penalty
+      end
+    end
+
+    if now - t0 < total then return false end
+    if extra then
+      -- The gate that is owed: back one segment, with a gate in it.
+      extra = false
+      t0 = now - (total - seg)
+      arm(count)
+      return false
+    end
+    on, idx = false, 0
+    return true
+  end
+
+  return g
+end
+
+-- ----------------------------------------------------------------
 -- BASE-beacon respawn handler for OUT_GAME (Teams/Flag/Upkeep/KoH).
 -- Gates on a minimum-wait predicate, team match and RSSI proximity,
 -- then calls cfg.on_ready and replies so the BASE animates.

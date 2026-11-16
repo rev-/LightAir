@@ -59,6 +59,12 @@ local shared       = false
 -- ---- Live state --------------------------------------------------
 local was_active   = false
 local release_at   = 0
+-- Where the recharge wait counts from.  The release, unless the profile
+-- has gates (std.gates): a gate passed moves it back, a gate missed moves
+-- it forward, and the bar and the refill both follow it.
+local wait_from    = 0
+local gate         = nil   -- the gated wait in progress, see tick_recharge
+local gate_for     = nil   --   ...and the release it belongs to
 -- True between an accepted beam and the trigger release that follows it.
 -- The recharge wait STARTS at that release, so nothing may tick while this
 -- is set — otherwise a player who had been idle would see the pool refill
@@ -635,9 +641,17 @@ function P.define(decl)
     p.area_fx = 1 << fx[name].bit
   end
 
-  -- What each profile always carries, as the wire's mask.
+  -- What each profile always carries, as the wire's mask — and, for a
+  -- profile whose recharge has gates, the gated wait itself (std.gates),
+  -- built here so that nothing allocates on the tick.
   for id, p in pairs(defs) do
     p.fx = fx_mask(p.effects, p.name or id) | (p.area_fx or 0)
+    if p.gates and (p.gates.gates or 1) > 0 then
+      local g = {}
+      for k, v in pairs(p.gates) do g[k] = v end
+      if g.label == nil then g.label = "RELOAD" end
+      p.gate = la.lib("std").gates(g)
+    end
   end
 
   for _, id in ipairs(ids) do
@@ -732,6 +746,11 @@ end
 local function publish_reload(vars, started_at, p)
   if var.reload    then vars[var.reload]    = started_at end
   if var.reload_ms then vars[var.reload_ms] = reload_total_ms(vars, p) end
+  -- The bar's marker, for a wait with gates.  Nothing shows while there
+  -- is no wait.
+  if var.reload_mark then
+    vars[var.reload_mark] = (started_at ~= 0 and gate and gate.active()) and gate.mark() or 0
+  end
 end
 
 -- ================================================================
@@ -1006,6 +1025,9 @@ function P.reset(vars)
   active_idx  = 1
   was_active  = false
   release_at  = 0
+  wait_from   = 0
+  if gate then gate.stop() end
+  gate_for    = nil
   awaiting_release = false
   evicted_name   = nil
   dimmed         = false
@@ -1350,15 +1372,44 @@ local function tick_recharge(vars, p, now)
   local max = max_energy(vars, p)
   local e   = get_energy(vars)
   if max <= 0 or e >= max then
+    if gate then gate.stop() end
     publish_reload(vars, 0, p)
     return
   end
 
   local delay_ms = stretch(val(vars, p.recharge_delay_ms, 0))
-  if (now - release_at) < delay_ms then
+
+  -- ---- Gates: the reload mini-game ---------------------------------
+  -- A profile with `gates` lets the player shorten this wait by pressing
+  -- the secondary trigger at the right moments (std.gates has the rules).
+  -- The nominal time is the wait itself — recharge_delay_ms, stretched
+  -- while dimmed — and with no gates (the default) none of this runs: the
+  -- wait is the release plus the delay, exactly as before.
+  --
+  -- A gated wait belongs to ONE release: a beam fired meanwhile starts a
+  -- new one from its own release.
+  if p.gate and delay_ms > 0 then
+    if gate ~= p.gate then
+      if gate then gate.stop() end
+      gate, gate_for = p.gate, nil
+    end
+    if gate_for ~= release_at then
+      gate_for = release_at
+      gate.start(release_at, delay_ms)
+    end
+    if gate.active() then
+      gate.tick(now)
+      -- Over: put the start where a plain wait of this length would be.
+      wait_from = gate.active() and gate.from() or (now - delay_ms)
+    end
+  else
+    wait_from = release_at
+  end
+
+  if (now - wait_from) < delay_ms then
     -- Waiting out the idle: the clock started at the release, which is
     -- exactly what the bar must show.
-    publish_reload(vars, release_at, p)
+    publish_reload(vars, wait_from, p)
     return
   end
 
@@ -1385,7 +1436,7 @@ local function tick_recharge(vars, p, now)
   end
   if step_ms < 1 then step_ms = 1 end
   local s = pool_slot()
-  local ramp_from = release_at + delay_ms
+  local ramp_from = wait_from + delay_ms
   if s.ramp_at < ramp_from then s.ramp_at = ramp_from end
   while now >= s.ramp_at and get_energy(vars) < max do
     set_energy(vars, get_energy(vars) + 1)
@@ -1395,7 +1446,7 @@ local function tick_recharge(vars, p, now)
     s.ramp_at = now
     publish_reload(vars, 0, p)
   else
-    publish_reload(vars, release_at, p)
+    publish_reload(vars, wait_from, p)
   end
 end
 

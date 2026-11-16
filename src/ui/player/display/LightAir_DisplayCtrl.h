@@ -72,6 +72,18 @@ public:
      * a self-started bar would fill while a player held a dead trigger
      * and nothing came back.  Null = self-start, as above.
      *
+     * markVar adds a MARKER to the bar: a bracket over a stretch of it,
+     * for a wait the player can act on at the right moment (std.gates —
+     * the reload and respawn mini-game).  It points to an int the owner
+     * keeps current: 0 = no marker, otherwise
+     *
+     *     (start + 1) | (width << 16)
+     *
+     * with start and width in thousandths of the bar.  The owner decides
+     * WHEN it shows — only shortly around the moment itself, so that the
+     * player has to be watching — and the display only draws it.  Use
+     * LightAir_DisplayCtrl::barMark() to build the value.  Null = never.
+     *
      * Three shapes cover what the game needs:
      *   energy  : variable = energy, trigger = 0, fill = the projector's
      *             reload_ms, start = its reload anchor
@@ -87,8 +99,17 @@ public:
         const int* fillMs,
         uint8_t barWidth = DisplayDefaults::BAR_WIDTH,
         const int* startMs = nullptr,
-        const int* iconVar = nullptr
+        const int* iconVar = nullptr,
+        const int* markVar = nullptr
     );
+
+    // The value a bar's markVar holds for a marker starting `start`
+    // thousandths along the bar and `width` thousandths wide.
+    static int barMark(uint16_t start, uint16_t width) {
+        if (start > 1000) start = 1000;
+        if (width > 1000) width = 1000;
+        return (int)((uint32_t)(start + 1) | ((uint32_t)width << 16));
+    }
 
     bool bindStringVariable(
         const char* str,
@@ -154,6 +175,8 @@ private:
         int        trigger;     // TYPE_BAR: value at which the bar takes over
         const int* fillMs;      // TYPE_BAR: live pointer to the fill duration, ms
         const int* startMs;     // TYPE_BAR: owner's start instant; null = self-start
+        const int* markVar;     // TYPE_BAR: owner's marker, see bindBarVariable; null = none
+        int        lastMark;    // TYPE_BAR: marker value last drawn
         uint32_t   fillStart;   // TYPE_BAR: millis() when the fill began
         uint8_t    barWidth;
         // Last icon actually drawn.  A runtime iconVar can change while the
@@ -187,6 +210,8 @@ private:
     IconType iconOf(const VariableBinding& b) const;
     const uint8_t* getIconBitmap(IconType icon);
     void drawBar(uint8_t x, uint8_t y, uint8_t width, uint8_t height, float ratio);
+    // The marker of a bar at (x, y, width): brackets above and below it.
+    void drawBarMark(uint8_t x, uint8_t y, uint8_t width, uint8_t height, int mark);
 
     LightAir_Display& _display;
 

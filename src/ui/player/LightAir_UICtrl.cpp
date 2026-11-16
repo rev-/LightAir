@@ -85,6 +85,21 @@ LightAir_UICtrl::_actionTable[(uint8_t)UIEvent::Count] = {
   // dark: the projector going dim.  Distinct from Malus's short red thud (LIFE).
   {{150,150,150,300},4,{2000,1500,1000,700},{200,150,100,50},{ {160,0,255},{100,0,160},{50,0,80},{0,0,0} },2},
 
+  // GateOpen — one short, sharp, high tick with a firm buzz: "now".  It has
+  // to be felt without looking, and must not be mistaken for combat cues.
+  {{60,0,0,0},1,{4800,0,0,0},{255,0,0,0},{ {255,255,255},{0,0,0},{0,0,0},{0,0,0} },3},
+
+  // GatePassed — two quick rising notes in green: a clean success.
+  {{50,90,0,0},2,{3600,5200,0,0},{120,180,0,0},{ {0,255,0},{160,255,160},{0,0,0},{0,0,0} },3},
+
+  // GateMissed — one low flat buzz in amber, long enough to register as a
+  // penalty and shorter than Malus's two-step thud.
+  {{180,0,0,0},1,{500,0,0,0},{230,0,0,0},{ {255,120,0},{0,0,0},{0,0,0},{0,0,0} },3},
+
+  // GateRestart — three falling notes in red, the vibration held throughout:
+  // the whole wait starts over.
+  {{120,120,220,0},3,{1400,1000,600,0},{255,255,255,0},{ {255,0,0},{180,0,0},{90,0,0},{0,0,0} },3},
+
   // Custom1
   {{0,0,0,0},0,{0,0,0,0},{0,0,0,0},{ {0,0,0},{0,0,0},{0,0,0},{0,0,0} },2},
 

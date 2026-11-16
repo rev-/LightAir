@@ -40,7 +40,7 @@ from boot to power-off whether or not the code path that uses them runs.
 
 | Object | host | device (est.) | Sized by |
 |---|---:|---:|---|
-| `LightAir_DisplayCtrl` | 27,016 | **~19,700** | `MAX_SETS = 32` × `MAX_BINDINGS = 8` × 76 B |
+| `LightAir_DisplayCtrl` | 29,064 | **~21,700** | `MAX_SETS = 32` × `MAX_BINDINGS = 8` × 84 B (a bar's marker added a pointer and the value last drawn: +8 B a binding, ~2 KB — one more reason for §3 A) |
 | `LightAir_LuaGame` ×2 | 16,080 | **~14,400** | `MAX_VARS`, `MAX_PROG`, `MAX_MSG_RULES`, `MAX_RULES` |
 | `LightAir_Radio` | 8,032 | ~8,000 | `RADIO_MAX_PAYLOAD = 237` × (`MAX_PENDING = 10` + report 10) |
 | `LightAir_RadioESPNow` | 4,184 | ~4,170 | `ESPNOW_RECV_QUEUE = 16` × 250 B |

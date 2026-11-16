@@ -160,6 +160,8 @@ struct MonitorVar {
                             // millis; 0 = at the trigger but not yet waiting.
                             // null = let the display self-start the clock.
     uint8_t     barWidth;   // 0 = DisplayDefaults::BAR_WIDTH
+    const int*  barMark;    // live pointer to the bar's marker value, or
+                            // null (DisplayCtrl::bindBarVariable, markVar)
 
     // ---- factory helpers ----
 
@@ -187,13 +189,15 @@ struct MonitorVar {
                           uint8_t col, uint8_t row,
                           int trigger, const int* fill,
                           const int* start = nullptr, uint8_t width = 0,
-                          const int* iconVar = nullptr) {
+                          const int* iconVar = nullptr,
+                          const int* mark = nullptr) {
         MonitorVar v = Int(name, value, stateMask, icon, col, row, iconVar);
         v.type       = VarType::BAR;
         v.barTrigger = trigger;
         v.barFill    = fill;
         v.barStart   = start;
         v.barWidth   = width;
+        v.barMark    = mark;
         return v;
     }
 
