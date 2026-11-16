@@ -112,9 +112,10 @@ local touch_pickups    = false   -- ANY mode with a BONUS or MALUS to touch
 -- back, which is the shape of the game.  It is the baseline with three
 -- things changed: how long Enlight must cool between beams (virus_cooldown,
 -- the optics' own rather than hand-timed here), a pool of energy_max, which
--- become_virus() lowers to a fifth, and the role tag the beam carries — so
--- "is this beam viral" rides the payload field meant for it instead of
--- colliding with the projector's strength byte.
+-- become_virus() lowers to a fifth.  What makes a beam viral is not the
+-- projector but the PLAYER: become_virus() sets the role tag every beam of
+-- theirs carries, so "is this beam viral" rides the payload field meant
+-- for who is shining.
 local P_VIRUS = 11
 proj.define{
   vars     = { energy = "energy", spent = "energy_spent",
@@ -124,8 +125,7 @@ proj.define{
     -- bonus = false: the virus's projector is a role, not a pickup.
     { id = P_VIRUS, name = "VIRUS", bonus = false, cooldown_ms = "virus_cooldown",
       max_energy = "energy_max",
-      recharge_delay_ms = proj.rel("recharge_delay_ms"),
-      role_tag = 1 },
+      recharge_delay_ms = proj.rel("recharge_delay_ms") },
   },
 }
 
@@ -162,7 +162,8 @@ local function become_virus(vars)
   -- The virus recharges to only a fifth of the others' energy max.
   vars.energy_max = math.max(1, vars.start_energy // 5)
   if vars.energy > vars.energy_max then vars.energy = vars.energy_max end
-  proj.grant(vars, P_VIRUS)       -- longer cooldown, and a viral role tag
+  proj.grant(vars, P_VIRUS)       -- longer cooldown
+  proj.set_role_tag(1)            -- every beam of a virus is viral
   -- No OUT state in this game: infection is the way out of the game as a
   -- clean player, so that is where a DIM malus lifts.
   proj.set_dim(vars, false)
@@ -173,9 +174,9 @@ end
 
 local function last_clean(vars) return vars.clean_left <= 1 end
 
--- Is this beam viral?  Byte 3 is the projector's role tag (byte 1 is its
--- strength): the VIRUS projector tags 1, everything else 0 — an area hit
--- carries its policy's tag, SPLASH's 0.
+-- Is this beam viral?  Byte 3 is the shining player's role tag (byte 1 is
+-- the strength): a virus tags 1, a clean player 0 — and an area hit
+-- carries the tag of whoever's beam set it off.
 local function viral(pkt) return pkt.len >= 3 and pkt:byte(3) == 1 end
 
 local function game_over(vars)

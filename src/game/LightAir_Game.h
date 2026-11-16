@@ -494,10 +494,13 @@ struct TotemProgramEntry {
 // beacon only has to name it.
 //
 //   id         on the wire (MSG_AREA payload[0]); 1–255
-//   on         what triggers it without game code: a hit from projector
-//              `projector` that the target's ruleset answered TAKEN (LIT,
-//              any hit that landed, the knock-out included) or SHONE alone.
+//   on         what triggers it without game code: a hit carrying the
+//              effect bit `effect` (MSG_LIT's effects word) that the
+//              target's ruleset answered TAKEN (LIT, any hit that landed,
+//              the knock-out included) or SHONE alone.
 //              NONE = only explicit emission (la.area_emit).
+//   effects    the effects word a bystander's hit carries.  The policy's
+//              own, never the triggering beam's, and never `effect`.
 //   bands      RSSI floor → magnitude, strongest first: the first band the
 //              beacon's RSSI reaches is the hit's strength.  None reached =
 //              out of the area.
@@ -509,7 +512,9 @@ struct TotemProgramEntry {
 //              teammates, never the originator.
 //   credit     a player the area puts out of play credits the originator
 //              (MSG_AREA_CREDIT).
-//   roleTag    the role tag the area hit carries (MSG_LIT payload[2]).
+//   roleTag    the role tag and kind an EMITTED area's hits carry
+//   kind       (la.area_emit).  A triggered area's hits carry the
+//              triggering beam's instead, relayed in the beacon.
 // ----------------------------------------------------------------
 enum class AreaTrigger  : uint8_t { NONE = 0, LIT = 1, SHONE = 2 };
 enum class AreaFriendly : uint8_t { GAME = 0, NEVER = 1 };
@@ -522,11 +527,13 @@ struct AreaBand {
 struct AreaPolicy {
     uint8_t      id;
     AreaTrigger  on;
-    uint8_t      projector;     // meaningful when on != NONE
+    uint16_t     effect;        // trigger bit(s); meaningful when on != NONE
+    uint16_t     effects;       // what a bystander's hit carries
     AreaFriendly friendly;
     bool         self;
     bool         credit;
     uint8_t      roleTag;
+    uint8_t      kind;
     uint8_t      bandCount;
     AreaBand     bands[AreaDefaults::MAX_BANDS];
 };

@@ -100,15 +100,55 @@ profile's `cycles`: more integration, more gain.
 
 ---
 
-## 3. Hit weight
+## 3. What a beam carries
 
-`strength` counts **standard hits**, not health points.  Each ruleset
-decides what one standard hit is absorbed as in its own currency — a life
-in Teams, N energy in Outflow. `std.absorbed(pkt)` reads payload byte 1,
-and an **empty payload counts as one standard hit**, which is what lets a
-ruleset move to the projector without every other ruleset moving with it.
+MSG.LIT payload, eight bytes, built by `proj.payload(vars [, spare1, spare2])`:
 
-MSG.LIT payload: `[strength, projector id, role tag, rssi gate]`.
+| Byte | Content |
+|---|---|
+| 1 | strength, in the game's own units |
+| 2 | kind: a mask of 8 the game gives its meaning to |
+| 3 | role tag: the shining player's class or role |
+| 4 | RSSI gate (§4) |
+| 5–6 | effects: 16 bits, one per receiver-side effect (§12) |
+| 7–8 | spare, the ruleset's |
+
+**No projector id travels.**  A receiver acts on what a beam *is* — its
+kind, its effects — never on which projector produced it.  The firmware
+used the id for one thing, finding the area a beam triggers; that is an
+effect bit now (§5).
+
+### Strength and `game_unit`
+
+A profile states `strength` in **standard units** (the baseline is 1,
+STRONG is 3).  `proj.define{ game_unit = n }` says what one standard unit
+is worth in this game's own currency, and the wire carries
+`strength × game_unit`:
+
+- `game_unit = 1` (the default): a coarse game, 1 to 5 lives;
+- `game_unit = 10`: a fine game, about 100.
+
+So one catalogue serves both, and a fine game may state fractions
+(`strength = 0.5` is 5).  An area's bands scale the same way.  A profile
+that only makes sense fine-grained declares `min_unit = 10`: a coarser game
+does not know it, and does not offer it as a bonus.  `proj.units(n)` is the
+same scaling for a field that is not scaled on its own.
+
+Each ruleset still decides what a unit is absorbed as — a life in Teams, N
+energy in Outflow.  `std.absorbed(pkt)` reads payload byte 1, and an empty
+payload counts as 1.
+
+### Kind and role tag
+
+`kind` is the projector's: a profile declares it (a mask, so kinds combine),
+and `proj.set_kind(mask, on [, sticky])` adds or removes bits at run time.
+`role tag` is the player's: `proj.set_role_tag(n)`, set by the ruleset or
+the player's class.  A profile no longer declares `role_tag`; one that does
+refuses the load.
+
+The rule for choosing between a kind and an effect: if the outcome is the
+same for every target, it is an **effect**; if the target decides (its
+class, the game's own rule), it is a **kind**.
 
 ---
 
@@ -162,6 +202,14 @@ than between hit and nothing, and there is no optical measurement to a
 bystander who was never aimed at — so RSSI is not a worse choice than
 something better, it is the only choice.
 
+**An area is triggered by an effect.**  A landed LIT whose effects word
+carries a policy's bit starts that policy's area.  The standard one is the
+`splash` effect (bit 8); a game profile that declares an `area` of its own
+gets the next free bit (9–15, in id order, so every device agrees).  A
+profile with an area always carries its effect, and because it is an
+effect like any other, `proj.set_effect(vars, "splash", true)` makes
+whatever is in hand splash.
+
 **One of the four standard profiles carries it: `proj.standard.SPLASH`.**
 Splash is loud,
 in radio traffic and in play, and a field where every projector splashed
@@ -184,17 +232,21 @@ area = {
   friendly = "game",                     -- or "never"
   self     = false,                      -- may the shooter be caught
   credit   = true,                       -- an area knock-out scores for the shooter
+  effects  = { "dim" },                  -- optional: what a bystander's hit carries
 },
 ```
 
 and `define()` registers it with `la.area_policy` under the projector's own
-id.  Every device runs the same file, so every device holds the same
+id, with the effect bit that triggers it.  A bystander's hit carries the
+policy's own `effects`, never the beam's — otherwise a `mute` beam with
+splash would mute everyone nearby without anyone having chosen that.  Every device runs the same file, so every device holds the same
 policies; no game file mentions splash.  From there the firmware does it:
 
 - **Trigger (the victim).** A LIT from that projector which the ruleset
   answered TAKEN or SHONE (`la.hit`) makes this player the centre: the
-  runner broadcasts `MSG_AREA [policy, shooter, shooter's team]`,
-  single-hop.  `on = "shone"` triggers on the knock-out alone.  A refused
+  runner broadcasts `MSG_AREA [policy, shooter, shooter's team, role
+  tag, kind]`, single-hop — the last two are the beam's, so a bystander's
+  hit says who shone and with what kind, as the direct hit did.  `on = "shone"` triggers on the knock-out alone.  A refused
   hit (immune, friendly, already out, no effect) triggers nothing.
 - **Receive (the bystander).** A beacon in reach becomes a LIT from the
   **shooter**, at the first band its RSSI reaches, flagged as an area hit
@@ -227,9 +279,11 @@ an area nothing triggers; the ruleset starts it with `la.area_emit(id)`
 from a handler, a rule or `update`, with this player as centre and
 originator.  It returns false from inside an area hit's handler.
 
-**Virus.**  An area hit carries its policy's `role_tag` (SPLASH: 0), so in
-Virus it is a clean hit: nothing to a clean player, and down for a virus —
-so a clean SPLASH puts down the viruses standing near the one it hits.
+**Virus.**  An area hit carries the role tag of whoever's beam set it off.
+Only a clean player can hold SPLASH (a virus's projector is its role), so
+in Virus an area hit is a clean one: nothing to a clean player, and down
+for a virus — a clean SPLASH puts down the viruses standing near the one it
+hits.
 
 Guards, each with a test that fails when it is removed:
 
@@ -237,6 +291,7 @@ Guards, each with a test that fails when it is removed:
 |---|---|
 | an area hit never triggers a beacon, and `la.area_emit` refuses inside one | otherwise one beam cascades across the field |
 | the area flag is local: a LIT from the air has it cleared | a peer could otherwise skip every immunity window |
+| an area hit never carries its policy's trigger bit | a second guard against a cascade, should the first ever be touched |
 | single-hop broadcast, never a relay | a flooded area is the opposite of a radius |
 | one triggered beacon per 250 ms (`EMIT_MIN_GAP_MS`) | repeated hits would flood the channel |
 | the shooter's id and team travel | friendly fire is judged against whoever fired, not the victim who relayed |
@@ -304,9 +359,9 @@ recharge_delay_ms = function(vars) return vars.recharge_secs * 1000 end
 A profile field may be a literal, the id of a game var, or a function of
 vars — the var-id form is what keeps menu-owned values live.
 
-Ids are **fixed and reserved**, because a projector id travels on the wire:
-a LIT names the projector that fired, an area beacon names its policy by
-the same id, and every receiver looks either up by that id locally. A game's own profiles start above this range.
+Ids are **fixed and reserved**: an area beacon names its policy by the
+projector's id, the BONUS menu lists projectors by it, and every device
+must agree on both. A game's own profiles start above this range.
 
 STRONG weighs **three standard hits**: in a lives game three lives, in
 Outflow three times `lit_cost` of energy

@@ -738,19 +738,83 @@ do
     check(P.result(v) == nil, "range", "a miss returned a target")
   end
 
-  -- ---- payload carries strength, id, role and the rssi gate -------
+  -- ---- payload: strength, kind, role tag, gate, effects, spares ----
   do
     local P = fresh{ vars = BASE_VARS,
-                     profiles = { { id = 1, name = "S", strength = 3, role_tag = 2,
-                                    rssi_min = -55, max_energy = 5 } } }
+                     profiles = { { id = 1, name = "S", strength = 3, kind = 4,
+                                    rssi_min = -55, max_energy = 5,
+                                    effects = { "dim", "splash" } } } }
     local v = mk_vars(50)
     P.reset(v)
     la.trigger_down = function() return false end
     P.grant(v, 1)
-    local strength, id, role, gate = P.payload(v)
-    check(strength == 3 and id == 1 and role == 2 and gate == 55, "payload",
-          string.format("got %s/%s/%s/%s, expected 3/1/2/55",
-                        tostring(strength), tostring(id), tostring(role), tostring(gate)))
+    P.set_role_tag(2)
+    local strength, kind, role, gate, lo, hi, s1, s2 = P.payload(v)
+    check(strength == 3 and kind == 4 and role == 2 and gate == 55, "payload",
+          string.format("got %s/%s/%s/%s, expected 3/4/2/55",
+                        tostring(strength), tostring(kind), tostring(role), tostring(gate)))
+    check(lo == 2 and hi == 1, "payload",
+          "dim (bit 1) and splash (bit 8) are not the effects word: " ..
+          tostring(lo) .. "/" .. tostring(hi))
+    check(s1 == 0 and s2 == 0, "payload", "the spare bytes are not 0 by default")
+    check(select("#", P.payload(v)) == 8, "payload", "a LIT is not 8 bytes")
+    local _, _, _, _, _, _, a, b = P.payload(v, 7, 9)
+    check(a == 7 and b == 9, "payload", "the ruleset's spare bytes did not travel")
+
+    -- Run-time kind and effects: on, off, lost at strip unless sticky.
+    P.set_kind(1, true)
+    P.set_effect(v, "silent", true)
+    P.set_effect(v, "mute", true, true)
+    _, kind, _, _, lo = P.payload(v)
+    check(kind == 5 and lo == (2 | 4 | 128), "payload",
+          "kind and effects switched on at run time did not join the profile's")
+    check(P.has_effect("silent") and P.has_effect("dim") and not P.has_effect("beacon"),
+          "payload", "has_effect disagrees with the beam")
+    P.set_effect(v, "silent", false)
+    check(not P.has_effect("silent"), "payload", "an effect could not be switched off")
+    P.set_effect(v, "silent", true)
+    P.strip(v)
+    _, kind, role, _, lo, hi = P.payload(v)
+    check(kind == 0 and lo == 4 and hi == 0, "payload",
+          "strip kept what was not sticky, or lost what was: " ..
+          tostring(kind) .. "/" .. tostring(lo) .. "/" .. tostring(hi))
+    check(role == 2, "payload", "going out changed who the player is")
+    P.reset(v)
+    _, _, role, _, lo = P.payload(v)
+    check(role == 0 and lo == 0, "payload", "reset left a role tag or an effect behind")
+    check(not pcall(P.set_effect, v, "nonsense", true), "payload",
+          "an unknown effect was accepted")
+  end
+
+  -- ---- game_unit: one standard unit in the game's own currency -----
+  do
+    area_policies = {}
+    local P = fresh{ vars = BASE_VARS, game_unit = 10,
+                     profiles = { { id = 20, name = "FINE", min_unit = 10, max_energy = 5 },
+                                  { id = 21, name = "HALF", strength = 0.5, max_energy = 5 } } }
+    local v = mk_vars(50)
+    P.reset(v)
+    la.trigger_down = function() return false end
+    check(P.payload(v) == 10, "unit", "the baseline does not weigh 10 at game_unit 10")
+    P.grant(v, P_STANDARD.STRONG.id)
+    check(P.payload(v) == 30, "unit", "STRONG does not weigh 30 at game_unit 10")
+    check(P.grant(v, 21) and P.payload(v) == 5 and math.type(P.payload(v)) == "integer",
+          "unit", "half a standard unit is not 5 at game_unit 10")
+    check(P.grant(v, 20), "unit", "a fine-only profile is not known to a fine game")
+    check(P.units(2)(v) == 20 and P.game_unit() == 10, "unit", "proj.units is not n * game_unit")
+    local s = area_policies[P_STANDARD.SPLASH.id]
+    check(s.bands[1][2] == 20 and s.bands[2][2] == 10, "unit",
+          "an area's bands are not in the game's currency")
+
+    local C = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 20, name = "FINE", min_unit = 10, max_energy = 5 } } }
+    C.reset(v)
+    check(not C.grant(v, 20), "unit", "a fine-only profile is known to a coarse game")
+    for _, label in ipairs(C.bonus_options()) do
+      check(label ~= "FINE", "unit", "a fine-only profile is offered as a bonus in a coarse game")
+    end
+    check(P_STANDARD.SPLASH.area.bands[1][2] == 2, "unit",
+          "scaling a game's bands rewrote the standard catalogue")
   end
 
   -- ---- clamps bite at load ---------------------------------------
@@ -775,19 +839,26 @@ do
   do
     area_policies = {}
     fresh{ vars = BASE_VARS,
-           profiles = { { id = 12, name = "BOOM", max_energy = 5, role_tag = 7,
+           profiles = { { id = 12, name = "BOOM", max_energy = 5,
                           area = { on = "shone", bands = { { -60, 3 } }, friendly = "never",
-                                   self = true, credit = false } },
+                                   self = true, credit = false, effects = { "dim" } } },
+                        { id = 14, name = "BANG", max_energy = 5,
+                          area = { bands = { { -60, 1 } } } },
                         { id = 13, name = "QUIET", max_energy = 5 } } }
     local a = area_policies[12]
-    check(a and a.projector == 12 and a.on == "shone" and a.bands[1][1] == -60
+    check(a and a.on == "shone" and a.bands[1][1] == -60
           and a.bands[1][2] == 3 and a.friendly == "never" and a.self == true
-          and a.credit == false and a.role_tag == 7, "area",
+          and a.credit == false, "area",
           "a profile's area did not reach la.area_policy as declared, under its id")
+    -- Triggered by an effect: the library's bits end at 8, so the game's
+    -- own areas take 9 upward in id order — the same on every device.
+    check(a.effect == 1 << 9 and area_policies[14].effect == 1 << 10, "area",
+          "a game's own areas did not get effect bits 9 and 10 in id order")
+    check(a.effects == 2, "area", "a policy's own effects (dim) did not reach it")
     check(area_policies[13] == nil, "area", "a profile without an area registered one")
     local s = area_policies[P_STANDARD.SPLASH.id]
-    check(s and s.projector == P_STANDARD.SPLASH.id and s.on == "lit", "area",
-          "the standard SPLASH is not registered as a projector-triggered area")
+    check(s and s.effect == 1 << 8 and s.on == "lit" and s.effects == 0, "area",
+          "the standard SPLASH is not registered as an area the splash effect triggers")
     local ok = pcall(function()
       fresh{ vars = BASE_VARS, profiles = { { id = 0, area = { bands = { { -60, 1 } } } } } }
     end)

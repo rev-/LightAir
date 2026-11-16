@@ -596,13 +596,17 @@ int LightAir_LuaGame::l_lib(lua_State* L) {
 //
 //   bands     = { { rssi, magnitude }, ... }  required, 1..MAX_BANDS: the
 //               first floor (dBm) the beacon reaches is the hit's strength
-//   projector = id, on = "lit" | "shone"     optional trigger: a hit from
-//               that projector the target's ruleset answered TAKEN/SHONE
-//               ("lit", the knock-out included) or SHONE alone ("shone")
+//   effect = mask, on = "lit" | "shone"      optional trigger: a hit
+//               carrying that effect bit (MSG_LIT's effects word) the
+//               target's ruleset answered TAKEN/SHONE ("lit", the
+//               knock-out included) or SHONE alone ("shone")
+//   effects   = 0 (default)                  effects word a bystander's hit
+//               carries; the trigger bit is never passed on
 //   friendly  = "game" (default) | "never"   who decides about teammates
 //   self      = false (default)              may the originator be caught
 //   credit    = true (default)               knock-outs credit the originator
-//   role_tag  = 0 (default)                  role tag the area hit carries
+//   role_tag  = 0, kind = 0 (defaults)       what an EMITTED area's hits
+//               carry; a triggered one's carry the triggering beam's
 //
 // Declaring an id again replaces it.  Anything malformed refuses the load,
 // with the reason on the failure screen.
@@ -665,12 +669,22 @@ int LightAir_LuaGame::l_area_policy(lua_State* L) {
     else return luaL_error(L, "area policy %d: on must be \"lit\" or \"shone\"", (int)id);
     lua_pop(L, 1);
     if (p.on != AreaTrigger::NONE) {
-        lua_getfield(L, 2, "projector");
+        lua_getfield(L, 2, "effect");
         if (!lua_isinteger(L, -1))
-            return luaL_error(L, "area policy %d: on needs a projector id", (int)id);
+            return luaL_error(L, "area policy %d: on needs an effect mask", (int)id);
+        const lua_Integer mask = lua_tointeger(L, -1);
+        if (mask < 1 || mask > 0xFFFF)
+            return luaL_error(L, "area policy %d: effect out of range", (int)id);
         lua_pop(L, 1);
-        p.projector = areaByte(L, 2, "projector", 0, 255, 0);
+        p.effect = (uint16_t)mask;
     }
+    lua_getfield(L, 2, "effects");
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isinteger(L, -1) || lua_tointeger(L, -1) < 0 || lua_tointeger(L, -1) > 0xFFFF)
+            return luaL_error(L, "area policy %d: effects out of range", (int)id);
+        p.effects = (uint16_t)lua_tointeger(L, -1);
+    }
+    lua_pop(L, 1);
 
     lua_getfield(L, 2, "friendly");
     const char* fr = lua_tostring(L, -1);
@@ -682,14 +696,15 @@ int LightAir_LuaGame::l_area_policy(lua_State* L) {
     lua_getfield(L, 2, "self");   p.self   = lua_toboolean(L, -1) != 0;   lua_pop(L, 1);
     lua_getfield(L, 2, "credit"); p.credit = lua_isnil(L, -1) || lua_toboolean(L, -1); lua_pop(L, 1);
     p.roleTag = areaByte(L, 2, "role_tag", 0, 255, 0);
+    p.kind    = areaByte(L, 2, "kind", 0, 255, 0);
 
     uint8_t slot = g->_areaPolicyCount;
     for (uint8_t i = 0; i < g->_areaPolicyCount; i++) {
         const AreaPolicy& q = g->_areaPolicies[i];
         if (q.id == p.id) { slot = i; continue; }
-        if (p.on != AreaTrigger::NONE && q.on != AreaTrigger::NONE && q.projector == p.projector)
-            return luaL_error(L, "area policy %d: projector %d already triggers policy %d",
-                              (int)id, (int)p.projector, (int)q.id);
+        if (p.on != AreaTrigger::NONE && q.on != AreaTrigger::NONE && (q.effect & p.effect))
+            return luaL_error(L, "area policy %d: effect %d already triggers policy %d",
+                              (int)id, (int)p.effect, (int)q.id);
     }
     if (slot == g->_areaPolicyCount) {
         if (g->_areaPolicyCount >= AreaDefaults::MAX_POLICIES)
@@ -719,8 +734,14 @@ int LightAir_LuaGame::l_area_emit(lua_State* L) {
         return 1;
     }
     const uint8_t me = g_luaCtx.radio->playerId();
+    uint8_t roleTag = 0, kind = 0;
+    for (uint8_t i = 0; i < g->_areaPolicyCount; i++)
+        if (g->_areaPolicies[i].id == id) {
+            roleTag = g->_areaPolicies[i].roleTag;
+            kind    = g->_areaPolicies[i].kind;
+        }
     areaBeacon(g_luaCtx.out->radio, (uint8_t)id, me,
-               g_luaCtx.runner ? g_luaCtx.runner->teamOf(me) : 0xFF);
+               g_luaCtx.runner ? g_luaCtx.runner->teamOf(me) : 0xFF, roleTag, kind);
     lua_pushboolean(L, 1);
     return 1;
 }

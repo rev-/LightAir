@@ -16,6 +16,7 @@ HostLog Log;
 
 #include "lua/LightAir_LuaGame.h"
 #include "game/LightAir_GameRunner.h"
+#include "game/LightAir_AreaEffect.h"
 #include "game/LightAir_ToolsMenu.h"
 #include "game/LightAir_ConfigBlob.h"
 #include "radio/LightAir_RadioTestTransport.h"
@@ -1747,7 +1748,7 @@ int main() {
         auto beacon = [&](uint8_t originator) {     // a broadcast area beacon for it
             const auto* e = sentOf(RadioMsg::MSG_AREA);
             return e && e->dstMac[0] == 0xFF && e->pkt.resend == 0 &&
-                   e->pkt.payloadLen == 3 && e->pkt.payload[0] == 1 &&
+                   e->pkt.payloadLen == 5 && e->pkt.payload[0] == 1 &&
                    e->pkt.payload[1] == originator && e->pkt.payload[2] == 1;
         };
 
@@ -1755,8 +1756,26 @@ int main() {
         CHECK(shared.load("games/teams.lua"), "teams loads for the area test");
         const LightAir_Game& ag = shared.descriptor();
         CHECK(ag.areaPolicyCount == 1 && ag.areaPolicies && ag.areaPolicies[0].id == 1 &&
-              ag.areaPolicies[0].on == AreaTrigger::LIT && ag.areaPolicies[0].projector == 1,
-              "the projector library declared SPLASH's area, triggered by its hits");
+              ag.areaPolicies[0].on == AreaTrigger::LIT && ag.areaPolicies[0].effect == 0x0100,
+              "the projector library declared SPLASH's area, triggered by the splash effect");
+        {
+            // The wire's own pieces: what triggers, and what a bystander's hit is.
+            RadioPacket lit; memset(&lit, 0, sizeof(lit));
+            lit.msgType = RadioMsg::MSG_LIT; lit.payloadLen = 4;
+            CHECK(litEffects(lit) == 0 && !areaForEffects(ag, litEffects(lit)),
+                  "a LIT too short to carry effects triggers no area");
+            lit.payloadLen = 8; lit.payload[LitPayload::EFFECTS_HI] = 0x01;
+            CHECK(areaForEffects(ag, litEffects(lit)) == &ag.areaPolicies[0],
+                  "the splash effect bit finds SPLASH's policy");
+            AreaPolicy q = ag.areaPolicies[0];
+            q.effects = 0x0102;                      // dim, and (wrongly) its own trigger
+            const RadioPacket h = areaHit(q, 3, 1, 2, /*roleTag*/ 9, /*kind*/ 4);
+            CHECK(areaIsHit(h) && h.payload[LitPayload::STRENGTH] == 2 &&
+                  h.payload[LitPayload::ROLE_TAG] == 9 && h.payload[LitPayload::KIND] == 4,
+                  "an area hit carries the band's strength and the beacon's role tag and kind");
+            CHECK(h.payload[LitPayload::EFFECTS_LO] == 0x02 && h.payload[LitPayload::EFFECTS_HI] == 0,
+                  "an area hit carries the policy's effects, never its trigger bit");
+        }
         g_millisStep = 1;
         run7.begin(ag, d7, in7, rad7, nullptr);
         int* al = slotOf(ag, "lives");
@@ -1766,23 +1785,28 @@ int main() {
 
         // -- Victim: the trigger --
         *al = 5;
-        from(3, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });            // SPLASH, strength 1
+        from(3, 1, RadioMsg::MSG_LIT, { 1, 4, 9, 0, 0, 1 });      // splash effect, strength 1
         CHECK(*al == 4 && replied() == HitReply::TAKEN, "victim: the direct SPLASH hit is the game's");
         CHECK(beacon(3), "victim: a landed SPLASH hit broadcasts a single-hop beacon crediting its shooter");
-        from(7, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        {
+            const auto* e = sentOf(RadioMsg::MSG_AREA);
+            CHECK(e && e->pkt.payload[3] == 9 && e->pkt.payload[4] == 4,
+                  "victim: the beacon relays the beam's role tag and kind");
+        }
+        from(7, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0, 0, 1 });
         CHECK(*al == 3 && !sentOf(RadioMsg::MSG_AREA),
               "victim: a second burst within the gap is not sent, the hit still lands");
         g_millis += 300;
-        from(3, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        from(3, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0, 0, 1 });
         CHECK(*al == 3 && replied() != HitReply::TAKEN && !sentOf(RadioMsg::MSG_AREA),
               "victim: a hit the game refuses (immune) bursts nothing");
-        from(4, 0, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        from(4, 0, RadioMsg::MSG_LIT, { 1, 0, 0, 0, 0, 1 });
         CHECK(*al == 3 && !sentOf(RadioMsg::MSG_AREA), "victim: a teammate's refused hit bursts nothing");
-        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0 });            // BASE projector
-        CHECK(*al == 2 && !sentOf(RadioMsg::MSG_AREA), "victim: a projector without an area bursts nothing");
+        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0, 0xFF, 0xFE }); // every effect but splash
+        CHECK(*al == 2 && !sentOf(RadioMsg::MSG_AREA), "victim: a beam without the area's effect bursts nothing");
         g_millis += 3100;                                         // every window closed
         *al = 1;
-        from(7, 1, RadioMsg::MSG_LIT, { 1, 1, 0, 0 });
+        from(7, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0, 0, 1 });
         CHECK(replied() == HitReply::SHONE && beacon(7), "victim: a knock-out bursts too (on = \"lit\")");
 
         // -- Bystander: the receive side --
@@ -1814,7 +1838,7 @@ int main() {
         from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0 });
         CHECK(*al == 2 && replied() == HitReply::TAKEN,
               "bystander: area hits opened no immunity window for their originator");
-        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0, AreaDefaults::HIT_FLAG_AREA });
+        from(5, 1, RadioMsg::MSG_LIT, { 1, 0, 0, 0, 0, 0, 0, 0, AreaDefaults::HIT_FLAG_AREA });
         CHECK(*al == 2 && replied() != HitReply::TAKEN,
               "bystander: a LIT from the air claiming the area flag is a direct hit (immune)");
         from(7, 1, RadioMsg::MSG_AREA, { 1, 5, 1 });
@@ -1960,12 +1984,12 @@ int main() {
             { "la.area_policy(41, { bands = { { 5, 1 } } })",             "band out of range" },
             { "la.area_policy(41, { bands = { {-60,1},{-61,1},{-62,1},{-63,1},{-64,1} } })",
                                                                           "1-4 bands" },
-            { "la.area_policy(41, { bands = { { -60, 1 } }, on = \"lit\" })", "needs a projector" },
+            { "la.area_policy(41, { bands = { { -60, 1 } }, on = \"lit\" })", "needs an effect" },
             { "la.area_policy(41, { bands = { { -60, 1 } }, on = \"hit\" })", "on must be" },
             { "la.area_policy(41, { bands = { { -60, 1 } }, friendly = \"no\" })", "friendly must be" },
             { "la.area_policy(0, { bands = { { -60, 1 } } })",            "1-255" },
-            { "la.area_policy(41, { bands = {{-60,1}}, on = \"lit\", projector = 3 })"
-              " la.area_policy(42, { bands = {{-60,1}}, on = \"shone\", projector = 3 })",
+            { "la.area_policy(41, { bands = {{-60,1}}, on = \"lit\", effect = 4 })"
+              " la.area_policy(42, { bands = {{-60,1}}, on = \"shone\", effect = 6 })",
                                                                           "already triggers" },
         };
         for (auto& b : bads) {
@@ -1979,8 +2003,8 @@ int main() {
         // Declaring an id again replaces it, triggers included.
         {
             FILE* f = fopen(bpath, "w");
-            fprintf(f, "la.area_policy(41, { bands = {{-60,1}}, on = \"lit\", projector = 3 })\n"
-                       "la.area_policy(41, { bands = {{-50,2},{-70,1}}, on = \"lit\", projector = 3 })\n"
+            fprintf(f, "la.area_policy(41, { bands = {{-60,1}}, on = \"lit\", effect = 4 })\n"
+                       "la.area_policy(41, { bands = {{-50,2},{-70,1}}, on = \"lit\", effect = 4 })\n"
                        "return { api = 1, type_id = 0x7F0C, name = \"Re\", initial_state = 0,\n"
                        "  config = {}, vars = {}, monitor = {}, winners = {},\n"
                        "  totem_slots = {}, teams = 0, rules = {}, update = {} }\n");

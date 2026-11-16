@@ -344,12 +344,12 @@ void LightAir_GameRunner::logic(const InputReport& inputs,
         if (_held && holdDrops(ev.packet.senderId, ev.packet.msgType)) continue;
 
         // The area flag is local (LightAir_AreaEffect.h): a LIT from the air
-        // is a direct hit, whatever its fifth byte says.
+        // is a direct hit, whatever a byte past the wire layout says.
         RadioPacket direct;
         const RadioPacket* pkt = &ev.packet;
         if (areaIsHit(ev.packet)) {
             direct = ev.packet;
-            direct.payload[4] &= (uint8_t)~AreaDefaults::HIT_FLAG_AREA;
+            direct.payload[LitPayload::FLAGS] &= (uint8_t)~AreaDefaults::HIT_FLAG_AREA;
             pkt = &direct;
         }
 
@@ -454,9 +454,10 @@ void LightAir_GameRunner::dispatchReply(RadioEventType type, const RadioPacket& 
  *   Policies are the game's data (LightAir_Game.h §7b); the wire format is
  *   LightAir_AreaEffect's.
  *
- *     trigger   a real LIT the ruleset answered TAKEN or SHONE, from a
- *               projector a policy names, makes THIS player the centre: it
- *               broadcasts the beacon, crediting the shooter.  At most one
+ *     trigger   a real LIT the ruleset answered TAKEN or SHONE, carrying
+ *               an effect a policy names, makes THIS player the centre: it
+ *               broadcasts the beacon, crediting the shooter and relaying
+ *               the beam's role tag and kind.  At most one
  *               per EMIT_MIN_GAP_MS.  (A ruleset's own la.area_emit is not
  *               gated: like la.broadcast, its airtime is the ruleset's.)
  *     receive   a beacon in reach becomes a LIT from the originator, at the
@@ -471,8 +472,7 @@ void LightAir_GameRunner::dispatchReply(RadioEventType type, const RadioPacket& 
 void LightAir_GameRunner::areaAfterHit(const RadioPacket& lit, uint8_t sub,
                                        GameOutput& output) {
     if (sub != HitReply::TAKEN && sub != HitReply::SHONE) return;
-    if (lit.payloadLen < 2) return;
-    const AreaPolicy* p = areaForProjector(*_game, lit.payload[1]);
+    const AreaPolicy* p = areaForEffects(*_game, litEffects(lit));
     if (!p) return;
     if (p->on == AreaTrigger::SHONE && sub != HitReply::SHONE) return;
 
@@ -480,7 +480,8 @@ void LightAir_GameRunner::areaAfterHit(const RadioPacket& lit, uint8_t sub,
     if (_areaSentEver && now - _areaSentAt < AreaDefaults::EMIT_MIN_GAP_MS) return;
     _areaSentEver = true;
     _areaSentAt   = now;
-    areaBeacon(output.radio, p->id, lit.senderId, teamOf(lit.senderId));
+    areaBeacon(output.radio, p->id, lit.senderId, teamOf(lit.senderId),
+               lit.payload[LitPayload::ROLE_TAG], lit.payload[LitPayload::KIND]);
 }
 
 void LightAir_GameRunner::areaReceive(const RadioEvent& ev, GameOutput& output) {
@@ -505,7 +506,12 @@ void LightAir_GameRunner::areaReceive(const RadioEvent& ev, GameOutput& output) 
     // which an area hit is not.
     if (_held && !holdAccepts(RadioMsg::MSG_LIT)) return;
 
-    const RadioPacket hit = areaHit(*p, origin, team, magnitude);
+    // A beacon from before the role tag and kind travelled carries the
+    // policy's own.
+    const bool    tagged  = b.payloadLen >= 5;
+    const RadioPacket hit = areaHit(*p, origin, team, magnitude,
+                                    tagged ? b.payload[3] : p->roleTag,
+                                    tagged ? b.payload[4] : p->kind);
     const DirectRadioRule* r = directRuleFor(hit);
     if (!r) return;                              // this state takes no hits
 

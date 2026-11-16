@@ -75,6 +75,24 @@ local evicted_name = nil
 local DIM = { energy_div = 2, recharge_mul = 2, cooldown_mul = 2,
               min_cooldown_ms = 250 }
 local dimmed = false
+
+-- ---- The game's unit ----------------------------------------------
+-- define{ game_unit = n }: what ONE standard unit of strength is worth in
+-- this game's own currency.  1 for a coarse game (1 to 5 lives), 10 for a
+-- fine one (about 100): a profile states its strength once, in standard
+-- units, and the wire carries strength * game_unit.  A profile that only
+-- makes sense fine-grained says min_unit = 10 and is simply not known to
+-- a coarser game.  proj.units(n) is the same scaling for any other field.
+local unit = 1
+
+-- ---- What a beam says about itself --------------------------------
+-- role_tag: who is shining (the player's class or role), set by the
+-- ruleset.  kind and effects are the projector's, plus what the ruleset
+-- switched on at run time (a power-up, a rule, a key): `sticky` survives
+-- strip(), the rest is lost on going out.
+local role_tag   = 0
+local kind_on,  kind_sticky = 0, 0
+local fx_on,    fx_sticky   = 0, 0
 local bonus_ids = {}       -- BONUS option label -> projector id, see bonus_options()
 
 -- ================================================================
@@ -92,8 +110,9 @@ local LIM = {
   range_m           = { 0,  100 },     -- 0 = whatever the device can see
   cost              = { 0,  10 },
   max_energy        = { 0,  200 },
-  strength          = { 0,  10 },
-  role_tag          = { 0,  255 },
+  strength          = { 0,  10 },      -- standard units, see game_unit
+  kind              = { 0,  255 },     -- a mask of 8, the game's to define
+  game_unit         = { 1,  25 },
   rssi_min          = { -120, 0 },     -- dBm; 0 = no gate
   ready_ms          = { 0,  5000 },
   -- Milliseconds, not seconds: a recharge quantised to whole seconds is far
@@ -111,7 +130,55 @@ local LIM = {
 local RETIRED = {
   recharge_delay_secs = "recharge_delay_ms",
   recharge_secs       = "recharge_ms",
+  -- The role tag is the PLAYER's now (their class or role); what the
+  -- projector says about itself is its kind.
+  role_tag            = "kind, or proj.set_role_tag()",
 }
+
+-- ================================================================
+--   EFFECTS — what a beam does at the receiver besides its strength.
+--
+--   Each is one bit of the LIT's 16-bit effects word, so stacking costs
+--   nothing on the wire.  A profile lists the ones it always carries
+--   (effects = { "dim", "beacon" }); proj.set_effect() switches one on or
+--   off at run time for whatever is in hand.  What an effect DOES, and for
+--   how long, is this table's — the same on every device, because every
+--   device runs this file — so a stronger variant is another entry, not a
+--   parameter of the beam.  define{ effects = { dim = { ms = 8000 } } }
+--   retunes one for a game.
+--
+--   Only receiver-side effects live here.  What the shining projector
+--   does on its own (lock, charge, fire modes) sends nothing but the
+--   strength it ends up with.
+--
+--   Bits 0-8 are the library's, 9-15 go to profiles that declare an area
+--   of their own, in id order.
+-- ================================================================
+local FX = {
+  restore         = { bit = 0 },                 -- strength is given, not taken
+  dim             = { bit = 1, ms = 5000 },      -- the receiver is dimmed
+  mute            = { bit = 2, ms = 3000 },      -- the receiver cannot shine
+  expose          = { bit = 3, ms = 5000, mul = 2 }, -- the next beam weighs more
+  siphon          = { bit = 4, amount = 5 },     -- energy leaves the receiver
+  beacon          = { bit = 5, ms = 20000, every_ms = 1000 },
+  ignore_immunity = { bit = 6 },
+  silent          = { bit = 7 },                 -- the receiver is not told who
+  splash          = { bit = 8 },                 -- the standard SPLASH area
+}
+local FX_FIRST_FREE, FX_LAST = 9, 15
+local fx = {}              -- name -> resolved entry, filled by define()
+
+local function fx_mask(list, who)
+  local m = 0
+  for _, name in ipairs(list or {}) do
+    local e = fx[name]
+    if not e then
+      error("projector " .. tostring(who) .. ": unknown effect '" .. tostring(name) .. "'", 0)
+    end
+    m = m | (1 << e.bit)
+  end
+  return m
+end
 
 local RECHARGE = { refill = true, ramp = true, none = true }
 
@@ -170,7 +237,7 @@ local BASELINE = {
   -- The menu owns this one in seconds; the projector works in ms.
   recharge_delay_ms   = function(vars) return (vars.recharge_secs or 0) * 1000 end,
   strength            = 1,
-  role_tag            = 0,
+  kind                = 0,
   rssi_min            = 0,
   ready_ms            = 0,
 }
@@ -209,6 +276,14 @@ local function rel(field, f)
   end
 end
 P.rel = rel
+
+-- n standard units in this game's currency, for any field that is not
+-- scaled on its own (strength is; a cost charged to "lives" is not):
+--   self_cost = { var = "lives", amount = proj.units(1) }
+function P.units(n)
+  return function() return n * unit end
+end
+function P.game_unit() return unit end
 
 local function half(x)       return x // 2 end
 local function twice(x)      return x * 2 end
@@ -276,9 +351,13 @@ P.standard = {
 
     -- The area its hits throw around whoever they land on: an area policy
     -- for the firmware's area service (la.area_policy, registered by
-    -- define() under this projector's id).  The firmware triggers it, grades
-    -- it, credits it; the ruleset's own LIT handler decides what a hit does.
+    -- define() under this projector's id) and triggered by the "splash"
+    -- EFFECT — so anything in hand splashes while that effect is on.  The
+    -- firmware triggers it, grades it, credits it; the ruleset's own LIT
+    -- handler decides what a hit does.
+    effects = { "splash" },
     area = {
+      effect   = "splash",
       on       = "lit",      -- every hit that lands bursts, the knock-out included
       -- Graded: RSSI is coarse, so a misread moves a bystander one band
       -- rather than between hit and nothing.
@@ -405,68 +484,118 @@ P.standard = {
 --   recharge is "refill" (the default), "ramp" or "none"; anything else
 --   refuses the load rather than recharging some other way.
 -- ================================================================
+-- A profile as define() keeps it: a copy, checked, with its literals
+-- clamped.  nil for one this game's unit is too coarse for (min_unit).
+local function prepare(raw)
+  if (raw.min_unit or 1) > unit then return nil end
+  local p = {}
+  for k, v in pairs(raw) do p[k] = v end
+  local who = tostring(p.name or p.id)
+  -- A profile still naming a retired key would silently get that field's
+  -- default, so say so at load rather than shipping a projector that
+  -- behaves subtly wrong.
+  for old, new in pairs(RETIRED) do
+    if p[old] ~= nil then
+      error("projector profile '" .. who .. "' uses retired field '" .. old ..
+            "'; use " .. new, 0)
+    end
+  end
+  if p.recharge ~= nil and not RECHARGE[p.recharge] then
+    error("projector profile '" .. who ..
+          "': recharge must be \"refill\", \"ramp\" or \"none\"", 0)
+  end
+  for k in pairs(LIM) do clamp_field(p, k) end
+  return p
+end
+
 function P.define(decl)
   cfg  = decl or {}
   var  = cfg.vars or {}
   defs = {}
   shared = cfg.shared_pool and true or false
+  unit = clamp(cfg.game_unit or 1, LIM.game_unit[1], LIM.game_unit[2])
+
+  -- The effects table, with this game's retuning.  The bit is the wire's
+  -- and is not a game's to move.
+  fx = {}
+  for name, e in pairs(FX) do
+    local r = {}
+    for k, v in pairs(e) do r[k] = v end
+    fx[name] = r
+  end
+  for name, over in pairs(cfg.effects or {}) do
+    if not fx[name] then error("projector: unknown effect '" .. tostring(name) .. "'", 0) end
+    for k, v in pairs(over) do
+      if k ~= "bit" then fx[name][k] = v end
+    end
+  end
 
   local base = {}
   for k, v in pairs(BASELINE) do base[k] = v end
   defs[0] = base
 
   for _, raw in ipairs(cfg.profiles or {}) do
-    local p = {}
-    for k, v in pairs(raw) do p[k] = v end
-    -- The recharge fields were seconds once and are milliseconds now.  A
-    -- profile still naming the old key would silently get a zero delay, so
-    -- say so at load rather than shipping a projector that never waits.
-    for old, new in pairs(RETIRED) do
-      if p[old] ~= nil then
-        error("projector profile '" .. tostring(p.name or p.id) ..
-              "' uses retired field '" .. old .. "'; use '" .. new .. "'", 0)
+    local p = prepare(raw)
+    if p then
+      local id = p.id or 0
+      if id == 0 then
+        -- Retune the baseline in place rather than naming a different id:
+        -- everything else treats slot 1 as structural.
+        for k, v in pairs(p) do defs[0][k] = v end
+      else
+        defs[id] = p
       end
     end
-    if p.recharge ~= nil and not RECHARGE[p.recharge] then
-      error("projector profile '" .. tostring(p.name or p.id) ..
-            "': recharge must be \"refill\", \"ramp\" or \"none\"", 0)
-    end
-    local id = p.id or 0
-    if id == 0 then
-      -- Retune the baseline in place rather than naming a different id:
-      -- everything else treats slot 1 as structural.
-      for k, v in pairs(p) do defs[0][k] = v end
-    else
-      for k in pairs(LIM) do clamp_field(p, k) end
-      defs[id] = p
-    end
   end
-  for k in pairs(LIM) do clamp_field(defs[0], k) end
 
   -- The standard catalogue is always KNOWN, declared or not: a BONUS totem
   -- may hand any of it to any game.  Known is not owned — the inventory
   -- still starts with the baseline alone.
   for _, std_p in pairs(P.standard) do
-    if not defs[std_p.id] then
-      local p = {}
-      for k, v in pairs(std_p) do p[k] = v end
-      for k in pairs(LIM) do clamp_field(p, k) end
-      defs[std_p.id] = p
-    end
+    if not defs[std_p.id] then defs[std_p.id] = prepare(std_p) end
   end
 
-  -- A profile's area is a policy for the firmware's area service, under
-  -- the projector's own id: a hit from this projector that the target's
-  -- ruleset answers TAKEN / SHONE triggers it, and every device registers
-  -- the same policies because every device runs the same file.
+  -- A profile's area is a policy for the firmware's area service, declared
+  -- under the projector's own id and triggered by an EFFECT: a landed LIT
+  -- carrying that effect's bit, which the target's ruleset answered TAKEN /
+  -- SHONE, makes the target the centre.  Every device registers the same
+  -- policies with the same bits, because every device runs the same file
+  -- and the bits are handed out in id order.
+  local ids = {}
   for id, p in pairs(defs) do
-    if p.area then
-      assert(id ~= 0, "the baseline projector cannot carry an area")
-      local a = p.area
-      la.area_policy(id, { projector = id, on = a.on or "lit", bands = a.bands,
-                           friendly = a.friendly, self = a.self, credit = a.credit,
-                           role_tag = type(p.role_tag) == "number" and p.role_tag or 0 })
+    if p.area then ids[#ids + 1] = id end
+  end
+  table.sort(ids)
+  local next_bit = FX_FIRST_FREE
+  for _, id in ipairs(ids) do
+    local p, a = defs[id], defs[id].area
+    assert(id ~= 0, "the baseline projector cannot carry an area")
+    local name = a.effect or string.lower(tostring(p.name or id))
+    if not fx[name] then
+      if next_bit > FX_LAST then error("projector: too many area effects", 0) end
+      fx[name] = { bit = next_bit }
+      next_bit = next_bit + 1
     end
+    p.area_fx = 1 << fx[name].bit
+  end
+
+  -- What each profile always carries, as the wire's mask.
+  for id, p in pairs(defs) do
+    p.fx = fx_mask(p.effects, p.name or id) | (p.area_fx or 0)
+  end
+
+  for _, id in ipairs(ids) do
+    local p, a = defs[id], defs[id].area
+    -- A band's strength is in standard units, like a profile's.
+    local bands = {}
+    for i, b in ipairs(a.bands or {}) do
+      bands[i] = { b[1], clamp(b[2] * unit, 1, 255) }
+    end
+    la.area_policy(id, { effect = p.area_fx, on = a.on or "lit", bands = bands,
+                         friendly = a.friendly, self = a.self, credit = a.credit,
+                         -- What a bystander's hit carries: the policy's own
+                         -- list, never the beam's.
+                         effects = fx_mask(a.effects, p.name or id) })
   end
 
   cfg.max_owned = clamp(cfg.max_owned or 3, LIM.max_owned[1], LIM.max_owned[2])
@@ -750,6 +879,7 @@ end
 -- ================================================================
 function P.strip(vars)
   P.set_dim(vars, false)
+  kind_on, fx_on = kind_on & kind_sticky, fx_on & fx_sticky
   local in_hand = slots[active_idx].id
   slots[active_idx].energy = get_energy(vars)      -- bank before reshuffling
   for i = #slots, 2, -1 do
@@ -794,6 +924,9 @@ function P.reset(vars)
   awaiting_release = false
   evicted_name   = nil
   dimmed         = false
+  role_tag       = 0
+  kind_on, kind_sticky = 0, 0
+  fx_on,   fx_sticky   = 0, 0
 
   slots[1].energy = max_energy(vars, defs[0])
   activate(vars, 1)
@@ -826,20 +959,78 @@ end
 --
 --     la.send(target, MSG.LIT, proj.payload(vars))
 --
---   [strength, projector id, role tag, rssi gate].  The gate travels as
---   a positive magnitude because payload bytes are unsigned: 50 means
---   -50 dBm.  A receiver running an older file reads the first byte and
---   ignores the rest, which is the same rule as "empty payload = one
---   standard hit".
+--   [strength, kind, role tag, rssi gate, effects lo, effects hi, spare,
+--   spare].  Strength is in the game's currency (standard units times
+--   game_unit).  The gate travels as a positive magnitude because payload
+--   bytes are unsigned: 50 means -50 dBm.  The two spare bytes are the
+--   ruleset's: proj.payload(vars, a, b).
+--
+--   No projector id travels: a receiver acts on what a beam IS (its kind,
+--   its effects), never on which projector produced it.
 -- ================================================================
-function P.payload(vars)
+-- What a beam of the projector in hand weighs, in the game's currency.
+local function strength_of(vars, p)
+  return clamp(math.floor(val(vars, p.strength, 1) * unit + 0.5), 0, 255)
+end
+
+function P.payload(vars, spare1, spare2)
   local p = active()
   local gate = val(vars, p.rssi_min, 0)
-  return val(vars, p.strength, 1),
-         P.active_id(),
-         val(vars, p.role_tag, 0),
-         (gate < 0) and -gate or 0
+  local e = (p.fx or 0) | fx_on
+  return strength_of(vars, p),
+         val(vars, p.kind, 0) | kind_on,
+         role_tag,
+         (gate < 0) and -gate or 0,
+         e & 0xFF, e >> 8,
+         spare1 or 0, spare2 or 0
 end
+
+-- ================================================================
+--   Role tag, kind and effects at run time.
+--
+--   set_role_tag(n)            who is shining: the player's class or role
+--   set_kind(mask, on, sticky) add or remove kind bits for what is in hand
+--   set_effect(vars, name, on, sticky)   the same for one effect
+--
+--   A power-up, a rule or a key may all call these.  What was switched on
+--   is lost at strip() — going out — unless it was set sticky, which is
+--   for what the player IS rather than what they picked up.  reset()
+--   clears everything.
+-- ================================================================
+function P.set_role_tag(n) role_tag = clamp(n or 0, 0, 255) end
+function P.role_tag() return role_tag end
+
+function P.set_kind(mask, on, sticky)
+  mask = (mask or 0) & 0xFF
+  if on == false then
+    kind_on, kind_sticky = kind_on & ~mask, kind_sticky & ~mask
+  else
+    kind_on = kind_on | mask
+    if sticky then kind_sticky = kind_sticky | mask end
+  end
+end
+
+function P.set_effect(vars, name, on, sticky)
+  local e = fx[name]
+  if not e then error("projector: unknown effect '" .. tostring(name) .. "'", 0) end
+  local mask = 1 << e.bit
+  if on == false then
+    fx_on, fx_sticky = fx_on & ~mask, fx_sticky & ~mask
+  else
+    fx_on = fx_on | mask
+    if sticky then fx_sticky = fx_sticky | mask end
+  end
+end
+
+-- Does the next beam carry this effect (the profile's or switched on)?
+function P.has_effect(name)
+  local e = fx[name]
+  if not e then return false end
+  return (((active().fx or 0) | fx_on) & (1 << e.bit)) ~= 0
+end
+
+-- The effect a mask bit stands for, for a receiver: its entry, or nil.
+function P.effect(name) return fx[name] end
 
 -- ================================================================
 --   Recharge

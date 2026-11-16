@@ -34,14 +34,22 @@ namespace RadioMsg {
 // Used by every game where players shine each other directly.
 
 // Unicast lit notification, sent by the shining player to the lit target.
-//   payload[0] = strength, in standard hits
-//   payload[1] = projector id (games/lib/projector.lua)
-//   payload[2] = role tag
+// Layout: LitPayload below (games/lib/projector.lua builds it).
+//   payload[0] = strength, in the game's own units
+//   payload[1] = kind: a mask of 8 the game gives its meaning to
+//   payload[2] = role tag: the shining player's class or role
 //   payload[3] = RSSI gate, positive magnitude (50 means -50 dBm; 0 = none)
-//   payload[4] = flags, never sent on the wire: AreaDefaults::HIT_FLAG_AREA
+//   payload[4] = effects, low byte   } 16 bits, one per receiver-side
+//   payload[5] = effects, high byte  } effect; an area policy is triggered
+//                                      by one of them
+//   payload[6] = spare, the ruleset's
+//   payload[7] = spare, the ruleset's
+//   payload[8] = flags, never sent on the wire: AreaDefaults::HIT_FLAG_AREA
 //                marks a hit the area service built locally from a MSG_AREA
-//                beacon (see below).  A real LIT is 4 bytes or fewer, and
+//                beacon (see below).  A real LIT is 8 bytes or fewer, and
 //                the runner clears the flag on any LIT from the air.
+// No projector id travels: a receiver acts on what a beam is, not on
+// which projector produced it.
 // Reply (0x11) payload[0] = the game's reply sub-type.  Two values are
 // fixed for every ruleset, because the firmware reads them (HitReply):
 // TAKEN = the hit landed, SHONE = it put the player out of play.
@@ -66,6 +74,8 @@ constexpr uint8_t MSG_POINT_REPORT  = 0x14;
 //   payload[1] = originator: who the effect is credited to and whose team
 //                friendly fire is judged against (not the relayer)
 //   payload[2] = originator's team (0xFF = none)
+//   payload[3] = role tag the hits carry (the originator's)
+//   payload[4] = kind the hits carry (the triggering beam's)
 // Single-hop only (resend 0): a flooded beacon would reach the whole field,
 // and the radius IS the beacon's reach.  Never answered.  A hit built from
 // one never emits another, which is what stops a chain reaction.
@@ -225,12 +235,26 @@ namespace TotemTouch {
     constexpr uint8_t FIRST_PROGRAM = 1;
 }
 
+// MSG_LIT payload layout (see RadioMsg::MSG_LIT).
+namespace LitPayload {
+    constexpr uint8_t STRENGTH   = 0;
+    constexpr uint8_t KIND       = 1;
+    constexpr uint8_t ROLE_TAG   = 2;
+    constexpr uint8_t RSSI_GATE  = 3;
+    constexpr uint8_t EFFECTS_LO = 4;
+    constexpr uint8_t EFFECTS_HI = 5;
+    constexpr uint8_t SPARE_0    = 6;
+    constexpr uint8_t SPARE_1    = 7;
+    constexpr uint8_t WIRE_LEN   = 8;   // what travels
+    constexpr uint8_t FLAGS      = 8;   // local only, after the wire bytes
+}
+
 // Area effects (LightAir_GameRunner's area service; policies are declared
 // by game files and libraries with la.area_policy).
 namespace AreaDefaults {
     constexpr uint8_t  MAX_POLICIES     = 8;    // per game
     constexpr uint8_t  MAX_BANDS        = 4;    // RSSI bands per policy
-    constexpr uint8_t  HIT_FLAG_AREA    = 0x01; // MSG_LIT payload[4]: a locally built area hit
+    constexpr uint8_t  HIT_FLAG_AREA    = 0x01; // MSG_LIT payload[LitPayload::FLAGS]: a locally built area hit
     // One beacon per hit: a projector-triggered emission inside this window
     // of the previous one is dropped, so a burst of hits cannot flood.
     constexpr uint16_t EMIT_MIN_GAP_MS  = 250;
