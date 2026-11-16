@@ -47,6 +47,7 @@ public:
     GatePassed,       // pressed inside the window
     GateMissed,       // pressed outside it
     GateRestart,      // too many misses: the wait starts over
+    Locked,           // a projector is locking on to this player
     Custom1,
     Custom2,
     Custom3,

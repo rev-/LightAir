@@ -82,9 +82,13 @@ Lua's recursive-descent parser. That is a second, independent ceiling from the
 heap one, and worth remembering before adding anything large as a local.
 
 **The libraries grew** with the game unit, effects, gates and classes
-(`docs/parked-features.md` §3): +10.3 KB per loaded game on a 64-bit host
-with the libraries stripped, an estimated 6–7 KB on the device.  The
+(`docs/parked-features.md` §3): 8 to 10 KB per loaded game on a 64-bit
+host with the libraries stripped, an estimated 5–7 KB on the device.  The
 ~55 KB above predates that and has not been re-measured on hardware.
+
+The library inbox (8 messages, ~110 B, in the runner) and a marker per
+monitor row (5 B × 16, in each `LightAir_LuaGame`) are a few hundred bytes
+of static RAM, not itemised above.
 
 The Lua figure is the *whole* cost of a ruleset: compiled functions for the
 game file plus `std.lua` plus `projector.lua`, and the tables and closures they

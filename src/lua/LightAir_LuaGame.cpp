@@ -787,21 +787,17 @@ void LightAir_LuaGame::loadFromTable(lua_State* L, int tbl) {
                     lua_pop(L, 1);
                 }
 
-                // mark_var is optional: the var a gated wait (std.gates)
-                // publishes its marker in, drawn over the bar while it holds
-                // one.
+                // A bar whose wait has an owner (a start_var) gets a marker
+                // of its own, with nothing to declare: the owner names the
+                // wait by its start_var (la.bar_mark) and the marker shows on
+                // every row timing that wait — and on no other, so two waits
+                // running at once never share one.
                 const int* markPtr = nullptr;
-                char markId[LuaDefaults::MAX_VAR_ID];
-                lua_getfield(L, e, "mark_var");
-                if (lua_isstring(L, -1)) {
-                    lua_pop(L, 1);
-                    fieldStr(L, e, "mark_var", markId, sizeof(markId), true);
-                    int ms = findSlot(markId);
-                    if (ms < 0 || _slots[ms].isText)
-                        luaL_error(L, "monitor bar mark_var '%s' invalid", markId);
-                    markPtr = &_slots[ms].val;
-                } else {
-                    lua_pop(L, 1);
+                _barMarks[monitorCount]    = 0;
+                _barMarkSlot[monitorCount] = -1;
+                if (startPtr) {
+                    _barMarkSlot[monitorCount] = (int8_t)findSlot(startId);
+                    markPtr = &_barMarks[monitorCount];
                 }
 
                 _monitorVars[monitorCount] = MonitorVar::Bar(
@@ -1373,6 +1369,10 @@ void LightAir_LuaGame::unload() {
     _progCount = 0;
     _optLabelCount = 0;
     _areaPolicyCount = 0;
+    for (uint8_t i = 0; i < LuaDefaults::MAX_MONITOR; i++) {
+        _barMarks[i]    = 0;
+        _barMarkSlot[i] = -1;
+    }
     _choiceCount = 0;
     _drawnCount = 0;
     _stateMax = 0;

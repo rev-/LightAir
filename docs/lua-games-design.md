@@ -409,6 +409,14 @@ split one decision across two ticks; `la.background` and
 No verbs run on totems: totem behaviour is TotemVM data (§5), and totem
 animations are referenced by name inside those programs.
 
+**Library verbs** — `la.inbox()` → `msg, sender, team, rssi, b1..b6`: the
+oldest message of the library block (0x20–0x2F: `la.msg.LOCK`,
+`la.msg.TRACE`) that no ruleset handler took, or nothing; reading consumes
+it.  It is how `projector.lua` receives its own messages without a line in
+any ruleset (`docs/projector.md` §16); a handler a ruleset declares for
+one of them wins.  `la.bar_mark(start_var, value)` sets the marker of the
+bar that times the wait named by its `start_var` (§14).
+
 **Area effects** — `la.area_policy(id, spec)` declares one, while the game
 loads (a later call is refused): `bands = { { rssi, strength }, ... }`
 (1–4, required), an optional trigger `effect = mask, on = "lit" | "shone"` (a bit of

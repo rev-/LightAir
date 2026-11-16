@@ -413,7 +413,7 @@ return {
       [MSG.BONUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.MALUS_BEACON] = std.pickup_claim{ rssi = PICKUP_RSSI, on_claim = pickup },
       [MSG.LIT] = std.lit_target{
-        lives = "lives", immunity = imm, proj = proj,
+        lives = "lives", immunity = imm,
         reply = { taken = R.TAKEN, shone = R.SHONE, immune = R.IMMUNE },
         on_shone = function(_, pkt) shone_by = proj.shiner(pkt) end,
       },

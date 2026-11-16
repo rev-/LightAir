@@ -141,12 +141,13 @@ declares it.  These do:
 | 6.3 | Virus still infects | Repeat 5.1 | A virus's beam infects; a clean player's does not |
 | 6.4 | Switching | Pick up two projectors; tap `>` and `<` | The tray names the one in hand, the energy icon follows, `ProjectorChange` plays; in FestaSportSasso the `<`+`>` chord restarts and switches nothing |
 | 6.5 | Eviction | Pick up a fourth projector | Tray `LOST <oldest>` |
-| 6.6 | Gate cues | A test profile with `gates = { gates = 2 }` and a `mark_var` on the energy row; empty the pool | `GateOpen` is felt and heard without looking; the brackets appear on the bar about 0.3 s before the window and go with it; a press inside plays `GatePassed` and the bar jumps forward; a press outside plays `GateMissed` and it jumps back; three misses play `GateRestart` |
+| 6.6 | Gate cues | A test profile with `gates = { gates = 2 }`; empty the pool | `GateOpen` is felt and heard without looking; the brackets appear on the bar about 0.3 s before the window and go with it; a press inside plays `GatePassed` and the bar jumps forward; a press outside plays `GateMissed` and it jumps back; three misses play `GateRestart` |
+| 6.8 | Lock warning | A test profile with `lock = {}`; hold the beam on another player | Their device shows `LOCKED` and plays `Locked` about once a second for as long as the beam is held, and stops within 2 s of the release; it does not while they are out; nothing names the shining player |
 | 6.7 | Gate timing | Same; ten reloads, pressing on the cue | Record how many are passed at `window_ms = 250`.  If fewer than about seven, the window or the lead is too short for the loop's latency. |
 
 Bring back: whether the marker's two brackets are readable on the glass at
 arm's length, and the free heap after loading the heaviest game (§ below)
-— the libraries grew by an estimated 6–7 KB.
+— the libraries grew by an estimated 5–7 KB.
 
 ---
 

@@ -983,9 +983,10 @@ int main() {
             int* reloadMs   = slotOf(bd, "reload_ms");
             CHECK(reload == owned->barStart, "start_var resolved to the reload slot");
             CHECK(reloadMs == owned->barFill, "fill_var resolved to the reload_ms slot");
-            CHECK(owned->barMark && owned->barMark == slotOf(bd, "reload_mark"),
-                  "mark_var resolved to the reload_mark slot");
-            CHECK(selfT->barMark == nullptr, "no mark_var: a bar without a marker");
+            // A bar whose wait has an owner gets a marker of its own, with
+            // nothing declared; la.bar_mark names the wait by its start var.
+            CHECK(owned->barMark && *owned->barMark == 0, "an owned bar has a marker, clear at load");
+            CHECK(selfT->barMark == nullptr, "a self-timed bar has no owner, so no marker");
             if (reload && reloadMs && owned->barStart && owned->barFill) {
                 *reload = 4321;
                 *reloadMs = 7000;
@@ -1945,6 +1946,85 @@ int main() {
             step(run8, tr8);
             CHECK(*ap == 1 && sentOf(RadioMsg::MSG_AREA_CREDIT + 1),
                   "originator: a credit for an unknown policy is acknowledged, not scored");
+        }
+
+        // -- The library inbox, and a bar's own marker --
+        // A library message no ruleset handler took is kept for the library
+        // that owns it (la.inbox), unanswered; a handler the ruleset declares
+        // wins; a state change empties it; it is small and drops what is old.
+        CHECK(shared.load("test/host/fixtures/inbox.lua"), shared.loadError());
+        {
+            const LightAir_Game& ig = shared.descriptor();
+            run7.begin(ig, d7, in7, rad7, nullptr);
+            int* got = slotOf(ig, "got");         int* lastMsg = slotOf(ig, "last_msg");
+            int* lastSender = slotOf(ig, "last_sender"); int* lastB1 = slotOf(ig, "last_b1");
+            int* lastRssi = slotOf(ig, "last_rssi");
+            int* handled = slotOf(ig, "handled"); int* drain = slotOf(ig, "drain");
+            int* go = slotOf(ig, "go");           int* markCmd = slotOf(ig, "mark_cmd");
+            CHECK(got && lastMsg && lastSender && lastB1 && lastRssi && handled && drain && go && markCmd,
+                  "inbox fixture slots");
+            if (got && lastMsg && lastSender && lastB1 && lastRssi && handled && drain && go && markCmd) {
+                tr7.testRssi = -47;
+                from(3, 1, RadioMsg::MSG_LOCK, { 2 });
+                CHECK(*got == 1 && *lastMsg == RadioMsg::MSG_LOCK && *lastSender == 3 &&
+                      *lastB1 == 2 && *lastRssi == -47,
+                      "a library message with no handler reaches la.inbox, sender, RSSI and payload");
+                CHECK(!sentOf(RadioMsg::MSG_LOCK + 1), "a library message is never answered");
+                from(3, 1, 0x16, { 2 });
+                CHECK(*got == 1, "a message outside the library block is not kept");
+                from(3, 1, RadioMsg::MSG_LOCK + 1, { 2 });
+                CHECK(*got == 1, "a reply type is not a library message");
+
+                // Not read for a while: the newest eight are kept, the old dropped.
+                *drain = 0;
+                for (uint8_t i = 0; i < 11; i++) from(3, 1, RadioMsg::MSG_TRACE, { i, 0, 2 });
+                *drain = 1;
+                step(run7, tr7);
+                CHECK(*got == 1 + LibInboxDefs::SIZE && *lastB1 == 10,
+                      "an unread inbox keeps its newest eight messages");
+                *drain = 0;
+                from(3, 1, RadioMsg::MSG_LOCK, { 2 });
+                g_millis += LibInboxDefs::MAX_AGE_MS + 500;
+                *drain = 1;
+                step(run7, tr7);
+                CHECK(*got == 1 + LibInboxDefs::SIZE, "a message left too long is not delivered late");
+
+                // The marker: on the bar that times the named wait, and no other.
+                const MonitorVar* waitBar = nullptr; const MonitorVar* otherBar = nullptr;
+                for (uint8_t i = 0; i < ig.monitorCount; i++) {
+                    const MonitorVar& m = ig.monitorVars[i];
+                    if (m.type != VarType::BAR) continue;
+                    if (m.barStart == slotOf(ig, "wait_from"))  waitBar = &m;
+                    if (m.barStart == slotOf(ig, "other_from")) otherBar = &m;
+                }
+                CHECK(waitBar && otherBar && waitBar->barMark && otherBar->barMark &&
+                      waitBar->barMark != otherBar->barMark, "each owned bar has a marker of its own");
+                if (waitBar && otherBar && waitBar->barMark && otherBar->barMark) {
+                    *markCmd = LightAir_DisplayCtrl::barMark(400, 50);
+                    step(run7, tr7);
+                    CHECK(*waitBar->barMark == *markCmd && *otherBar->barMark == 0,
+                          "la.bar_mark marks the bar of the wait it names, and no other");
+                    *markCmd = 0;
+                    step(run7, tr7);
+                    CHECK(*waitBar->barMark == 0, "la.bar_mark clears it");
+                }
+
+                // A state change empties the inbox; a declared handler wins.
+                *drain = 0;
+                from(3, 1, RadioMsg::MSG_TRACE, { 7, 0, 2 });
+                *go = 1; *drain = 1;
+                step(run7, tr7);                 // PLAY -> OWN
+                step(run7, tr7);
+                CHECK(*got == 1 + LibInboxDefs::SIZE,
+                      "what arrived in one state is not delivered in the next");
+                from(3, 1, RadioMsg::MSG_LOCK, { 2 });
+                CHECK(*handled == 1 && *got == 1 + LibInboxDefs::SIZE,
+                      "a handler the ruleset declares wins over the inbox");
+                from(3, 1, RadioMsg::MSG_TRACE, { 7, 0, 2 });
+                CHECK(*got == 2 + LibInboxDefs::SIZE && *handled == 1,
+                      "in the same state, a library message it does not handle still reaches the inbox");
+                tr7.testRssi = -40;
+            }
         }
 
         // -- A ruleset's own area: la.area_emit, and the chain guard --

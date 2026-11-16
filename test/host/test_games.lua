@@ -6,7 +6,7 @@ local clock = 0
 
 la = {
   msg = { LIT = 0x10, SCORE_COLLECT = 0x12, POINT_REPORT = 0x14, AREA = 0x18,
-          TRACE = 0x1C,
+          TRACE = 0x20, LOCK = 0x22,
           FLAG_EVENT = 0x50, CP_BEACON = 0x52, CP_SCORE = 0x54,
           BASE_BEACON = 0x56, FLAG_BEACON = 0x58,
           BONUS_BEACON = 0x5E, MALUS_BEACON = 0x60, TOTEM_TOUCH = 0xF4 },
@@ -97,6 +97,15 @@ end
 area_policies = {}
 function la.area_policy(id, spec) area_policies[id] = spec end
 function la.area_emit(id) out.radio[#out.radio+1] = { "area", id }; return true end
+-- The library inbox and the bars' markers are firmware too (luagame suite).
+-- Here a test queues what the inbox would hold and reads back the marks.
+inbox = {}
+function la.inbox()
+  local e = table.remove(inbox, 1)
+  if e then return table.unpack(e) end
+end
+bar_marks = {}
+function la.bar_mark(var, v) bar_marks[var] = v end
 
 -- fake packet proxy
 local function mk_pkt(fields)
@@ -1312,7 +1321,7 @@ do
     -- ---- the projector: gates on the recharge wait ----
     clock, shine_busy_until = 0, 0
     local GV = { energy = "energy", spent = "energy_spent", reload = "reload",
-                 reload_ms = "reload_ms", reload_mark = "reload_mark" }
+                 reload_ms = "reload_ms" }
     local P = fresh{ vars = GV,
                      profiles = { { id = 50, name = "GATED", max_energy = 1,
                                     recharge = "refill", recharge_delay_ms = 4000,
@@ -1321,7 +1330,8 @@ do
                                   { id = 51, name = "PLAIN", max_energy = 1,
                                     recharge = "refill", recharge_delay_ms = 4000 } } }
     local v = mk_vars(50)
-    v.reload, v.reload_ms, v.reload_mark = 0, 0, 0
+    v.reload, v.reload_ms = 0, 0
+    bar_marks = {}
     P.reset(v)
     la.trigger_down = function() return false end
     -- Fire the one beam, release, and wait; returns how long the refill took.
@@ -1337,7 +1347,7 @@ do
         clock = clock + 10
         state = (press_after and clock - t0 == press_after) and "pressed" or "off"
         P.tick(v)
-        if v.reload_mark ~= 0 then marked = true end
+        if (bar_marks.reload or 0) ~= 0 then marked = true end
         if v.energy == 1 then break end
       end
       state = "off"
@@ -1347,8 +1357,11 @@ do
     check(plain == 4000, "gates", "a profile without gates refilled in " .. plain .. " ms, expected 4000")
     local idle, marked = reload(50)
     check(idle == 4000, "gates", "a gated reload nobody pressed took " .. idle .. " ms, expected 4000")
-    check(marked and v.reload_mark == 0, "gates",
+    -- The marker goes to the bar that times THIS wait, named by its start
+    -- var, with no var or row for the game to declare.
+    check(marked and bar_marks.reload == 0, "gates",
           "the bar's marker never showed, or was left showing after the reload")
+    check(bar_marks.respawn_from == nil, "gates", "the reload's marker reached another wait's bar")
     local quick = reload(50, 2000)
     check(quick == 2000, "gates", "a gated reload passed at its gate took " .. quick .. " ms, expected 2000")
     local slow = reload(50, 500)
@@ -1356,7 +1369,8 @@ do
 
     -- ---- the respawn wait, gated ----
     clock = 500000
-    local rv = { respawn_zero = 1, respawn_from = 0, respawn_ms = 0, respawn_mark = 0 }
+    local rv = { respawn_zero = 1, respawn_from = 0, respawn_ms = 0 }
+    bar_marks = {}
     local plainR = std.respawn_gates{}
     plainR.start(rv, 4)
     clock = clock + 3990
@@ -1365,21 +1379,49 @@ do
     check(plainR.done(), "respawn", "a plain respawn wait did not end on time, untouched by tick()")
 
     local gr = std.respawn_gates{ gates = 1, window_ms = 200, lead_ms = 300,
-                                  random = rnd, mark = "respawn_mark" }
+                                  random = rnd }
     local start = clock
     gr.start(rv, 4)
     local ended, saw_mark
     for _ = 1, 600 do
       clock = clock + 10
       state = (clock - start == 2000) and "pressed" or "off"
-      if rv.respawn_mark ~= 0 then saw_mark = true end
       if gr.tick(rv) and not ended then ended = clock - start end
+      if (bar_marks.respawn_from or 0) ~= 0 then saw_mark = true end
     end
     state = "off"
     check(ended == 2000 and gr.done(), "respawn", "a gated respawn passed at its gate took " ..
           tostring(ended) .. " ms, expected 2000")
-    check(saw_mark and rv.respawn_mark == 0, "respawn", "the respawn bar's marker did not show and clear")
+    check(saw_mark and bar_marks.respawn_from == 0 and bar_marks.reload == nil, "respawn",
+          "the respawn bar's marker did not show and clear, on its own bar alone")
     check(clock - rv.respawn_from >= rv.respawn_ms, "respawn", "the bar was not left full")
+
+    -- Two waits at once: each its own gate, and ONE press goes to one of
+    -- them — the one whose window is open; with none open, the first begun.
+    local a = std.gates{ gates = 1, window_ms = 200, lead_ms = 300, random = rnd }
+    local b = std.gates{ gates = 1, window_ms = 200, lead_ms = 300, random = rnd }
+    a.start(0, 4000)                             -- gate at 2000
+    b.start(0, 8000)                             -- gate at 4000
+    local a_done, b_done
+    for t = 0, 12000, 10 do
+      state = (t == 4000) and "pressed" or "off" -- b's window; a is over by then
+      if a.tick(t) and not a_done then a_done = t end
+      if b.tick(t) and not b_done then b_done = t end
+    end
+    check(a_done == 4000 and b_done == 4000, "gates",
+          "a press in the second wait's window did not go to it alone: " ..
+          tostring(a_done) .. "/" .. tostring(b_done))
+    a.start(0, 4000); b.start(0, 8000)
+    a_done, b_done = nil, nil
+    for t = 0, 12000, 10 do
+      state = (t == 500) and "pressed" or "off"  -- no window open: one miss, not two
+      if a.tick(t) and not a_done then a_done = t end
+      if b.tick(t) and not b_done then b_done = t end
+    end
+    state = "off"
+    check(a_done == 5000 and b_done == 8000, "gates",
+          "one press outside every window was charged to both waits: " ..
+          tostring(a_done) .. "/" .. tostring(b_done))
     la.trigger_state = real_state
   end
 
@@ -1556,6 +1598,148 @@ do
     K.reset()
     check(K.current() == nil, "class", "reset kept a class")
     la.key_state, la.trigger_state = real_key, real_state
+  end
+
+  -- ---- the lock warns its target; the library reads its own messages --
+  do
+    clock, shine_busy_until = 0, 0
+    inbox = {}
+    local P = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 33, name = "TUNNEL", max_energy = 50, recharge = "none",
+                                    cooldown_ms = 0, lock = { grace_ms = 300 } },
+                                  { id = 34, name = "MEND", max_energy = 50, recharge = "none",
+                                    cooldown_ms = 0, effects = { "restore" },
+                                    lock = { grace_ms = 300, warn_at = 0 } },
+                                  { id = 35, name = "LATE", max_energy = 50, recharge = "none",
+                                    cooldown_ms = 0, lock = { grace_ms = 300, warn_at = 3 } } } }
+    local v = mk_vars(50)
+    P.reset(v)
+    la.trigger_down = function() return false end
+    local function locks()
+      local n, last = 0, nil
+      for _, m in ipairs(out.radio) do
+        if m[1] == "bcast" and m[2] == la.msg.LOCK then n = n + 1; last = m[3] end
+      end
+      return n, last
+    end
+    -- Hold the trigger on player `id` for `beams` beams of 110 ms.
+    local function hold_on(id, beams)
+      la.trigger_down = function() return true end
+      P.tick(v); clock = clock + 110
+      for _ = 1, beams do
+        shine_result = { status = "player", id = id, metres = 1, r = 0, ang = 0 }
+        P.result(v); P.tick(v); clock = clock + 110
+      end
+      la.trigger_down = function() return false end
+      shine_result = { status = "no_hit", id = 0, metres = 0, r = 0, ang = 0 }
+      P.result(v); P.tick(v); P.result(v)
+      clock = clock + 2000
+    end
+
+    P.grant(v, 33)
+    out.radio = {}
+    hold_on(5, 1)
+    local n, who = locks()
+    check(n == 1 and who == 5, "lock warn", "the first beam that landed did not warn its target")
+    out.radio = {}
+    hold_on(5, 25)                               -- 2.75 s on one target
+    check(locks() == 3, "lock warn", locks() .. " warnings in 2.75 s, expected 3 (one a second)")
+    out.radio = {}
+    la.trigger_down = function() return true end
+    P.tick(v); clock = clock + 110
+    for _, id in ipairs{ 5, 5, 7 } do
+      shine_result = { status = "player", id = id, metres = 1, r = 0, ang = 0 }
+      P.result(v); P.tick(v); clock = clock + 110
+    end
+    n, who = locks()
+    check(n == 2 and who == 7, "lock warn", "a lock that moved to someone else did not warn them at once")
+    la.trigger_down = function() return false end
+    shine_result = { status = "no_hit", id = 0, metres = 0, r = 0, ang = 0 }
+    P.result(v); P.tick(v); P.result(v); clock = clock + 2000
+
+    P.grant(v, 34)
+    out.radio = {}
+    hold_on(5, 12)
+    check(locks() == 0, "lock warn", "a lock with warn_at = 0 warned")
+    P.grant(v, 35)
+    out.radio = {}
+    hold_on(5, 2)
+    check(locks() == 0, "lock warn", "warn_at = 3 warned before the third step")
+    hold_on(5, 3)
+    check(locks() == 1, "lock warn", "warn_at = 3 did not warn at the third step")
+
+    -- The target: LOCKED for as long as the warnings keep coming, by the
+    -- library's tick alone — no handler in any game — and never a name.
+    out.ui, out.shows = {}, {}
+    inbox = { { la.msg.LOCK, 9, 1, -50, 4, 0, 0, 0, 0, 0 } }     -- for player 4
+    P.tick(v)
+    check(not P.locked() and #out.ui == 0, "lock warn", "a warning for someone else was taken")
+    inbox = { { la.msg.LOCK, 9, 1, -50, 2, 0, 0, 0, 0, 0 } }     -- for us (player 2)
+    P.tick(v)
+    check(P.locked() and out.ui[1] == "Locked" and out.shows[1] == "LOCKED", "lock warn",
+          "a warning did not show LOCKED and play the cue: " .. tostring(P.locked()) .. " " .. table.concat(out.ui, ",") .. " / " .. table.concat(out.shows, ","))
+    clock = clock + 1000
+    inbox = { { la.msg.LOCK, 9, 1, -50, 2, 0, 0, 0, 0, 0 } }
+    P.tick(v)
+    check(#out.ui == 2 and P.locked(), "lock warn", "the cue did not pulse with the next warning")
+    clock = clock + 1400; P.tick(v)
+    check(P.locked(), "lock warn", "one late warning blinked the lock off")
+    clock = clock + 200; P.tick(v)
+    check(not P.locked(), "lock warn", "the warning outlived the lock")
+
+    -- Traces reach the library the same way.
+    inbox = { { la.msg.TRACE, 8, 1, -60, 2, 0, 0 },              -- for its shiner: us
+              { la.msg.TRACE, 6, 1, -45, 5, 1, 0 },              -- for player 5 alone
+              { la.msg.TRACE, 3, 1, -70, 5, 1, 2 } }             -- for anyone
+    P.tick(v)
+    local rssi, age = P.trace_of(8)
+    check(rssi == -60 and age == 0, "inbox", "a trace meant for us was not recorded")
+    check(P.trace_of(6) == nil, "inbox", "a trace meant for someone else was recorded")
+    local near, near_rssi = P.nearest_trace()
+    check(near == 8 and near_rssi == -60, "inbox", "the nearest traced player is not the strongest one heard")
+    clock = clock + 4000
+    check(P.nearest_trace() == nil and select(2, P.trace_of(8)) == 4000, "inbox",
+          "an old trace still counts as near")
+    P.strip(v)
+    check(P.trace_of(8) == nil, "inbox", "going out kept the traces")
+    inbox = {}
+  end
+
+  -- ---- a ruleset stays transparent: effects with nothing to pass -----
+  do
+    local std = la.lib("std")
+    local live = la.lib("projector")             -- the instance a ruleset would share
+    live.define{ vars = BASE_VARS }
+    local v = mk_vars(20)
+    v.lives, v.start_lives = 3, 5
+    live.reset(v)
+    local R = { taken = 1, shone = 2, friend = 3, immune = 4 }
+    local h = std.lit_target{ lives = "lives", immunity = std.immunity(3000), reply = R }
+    h(v, mk_pkt{ sender = 4, payload = { 1, 0, 0, 0, 1, 0, 0, 0 } })      -- restore
+    check(v.lives == 4, "transparent", "std.lit_target did not find the projector library on its own")
+    local plain = std.lit_target{ lives = "lives", immunity = std.immunity(3000), reply = R,
+                                  proj = false }
+    plain(v, mk_pkt{ sender = 5, payload = { 1, 0, 0, 0, 1, 0, 0, 0 } })
+    check(v.lives == 3, "transparent", "proj = false did not make a beam its strength alone")
+  end
+
+  -- ---- a ruleset may say which projectors exist ----------------------
+  do
+    local FAST, LONG, STRONG = P_STANDARD.FAST.id, P_STANDARD.LONG.id, P_STANDARD.STRONG.id
+    local v = mk_vars(20)
+    local P = fresh{ vars = BASE_VARS, only = { FAST, 40 },
+                     profiles = { { id = 40, name = "MINE", max_energy = 5 },
+                                  { id = 41, name = "OTHER", max_energy = 5 } } }
+    P.reset(v)
+    check(P.grant(v, FAST) and P.grant(v, 40), "only", "a listed projector does not exist")
+    check(not P.give(v, LONG) and not P.give(v, 41), "only", "an unlisted projector exists")
+    check(table.concat(P.bonus_options(), ",") == "LIFE,FAST,MINE", "only",
+          "the BONUS menu offers " .. table.concat(P.bonus_options(), ","))
+    local Q = fresh{ vars = BASE_VARS, except = { STRONG } }
+    Q.reset(v)
+    check(not Q.give(v, STRONG) and Q.give(v, LONG), "only", "except did not keep one projector out")
+    local opts = table.concat(Q.bonus_options(), ",")
+    check(not opts:find("STRONG") and opts:find("LONG"), "only", "the BONUS menu offers " .. opts)
   end
 
   -- ---- clamps bite at load ---------------------------------------

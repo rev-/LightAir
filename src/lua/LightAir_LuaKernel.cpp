@@ -47,7 +47,7 @@ static const char* const kUIEventNames[] = {
     "ProjectorChange", "Stop",
     "Bonus", "Malus", "Special1", "Special2",
     "BonusProjector", "MalusDim",
-    "GateOpen", "GatePassed", "GateMissed", "GateRestart",
+    "GateOpen", "GatePassed", "GateMissed", "GateRestart", "Locked",
     "Custom1", "Custom2", "Custom3", "Custom4",
 };
 static const uint8_t kUIEventCount = sizeof(kUIEventNames) / sizeof(*kUIEventNames);
@@ -62,6 +62,7 @@ static const NamedU8 kMsgConsts[] = {
     { "POINT_REPORT",  RadioMsg::MSG_POINT_REPORT },
     { "AREA",          RadioMsg::MSG_AREA },
     { "TRACE",         RadioMsg::MSG_TRACE },
+    { "LOCK",          RadioMsg::MSG_LOCK },
     { "FLAG_EVENT",    RadioMsg::MSG_FLAG_EVENT },
     { "CP_BEACON",     RadioMsg::MSG_CP_BEACON },
     { "CP_SCORE",      RadioMsg::MSG_CP_SCORE },
@@ -720,6 +721,39 @@ int LightAir_LuaGame::l_area_policy(lua_State* L) {
     return 0;
 }
 
+// la.bar_mark(start_var, value) — the marker of the bar that times a wait.
+//
+// A wait with gates (std.gates) shows a marker on its bar shortly before
+// each gate.  The wait is named by the var its bar reads its START from
+// (the row's start_var): every bar row timing that wait draws the marker,
+// and no other row does.  value is what DisplayCtrl::bindBarVariable's
+// markVar holds: 0 = none, otherwise (start + 1) | (width << 16) in
+// thousandths of the bar.  No row for that wait: nothing happens.
+int LightAir_LuaGame::l_bar_mark(lua_State* L) {
+    LightAir_LuaGame* g = self(L);
+    const int slot = g->findSlot(luaL_checkstring(L, 1));
+    const int v    = (int)luaL_checkinteger(L, 2);
+    if (slot < 0) return 0;
+    for (uint8_t i = 0; i < LuaDefaults::MAX_MONITOR; i++)
+        if (g->_barMarkSlot[i] == slot) g->_barMarks[i] = v;
+    return 0;
+}
+
+// la.inbox() -> msg, sender, team, rssi, b1..b6 — the oldest library
+// message no ruleset handler took (LightAir_LibInbox.h), or nothing.
+// Reading consumes it.  For libraries: a ruleset that wants one of these
+// messages declares a handler for it, and then it never gets here.
+static int l_inbox(lua_State* L) {
+    LibInboxEntry e;
+    if (!g_luaCtx.runner || !g_luaCtx.runner->inboxPop(e)) return 0;
+    lua_pushinteger(L, e.msgType);
+    lua_pushinteger(L, e.sender);
+    lua_pushinteger(L, e.team);
+    lua_pushinteger(L, e.rssi);
+    for (uint8_t i = 0; i < LibInboxDefs::PAYLOAD; i++) lua_pushinteger(L, e.payload[i]);
+    return 4 + LibInboxDefs::PAYLOAD;
+}
+
 // la.area_emit(id) -> bool — this player is the centre of an area effect,
 // and its originator.  For effects a ruleset decides on (a figure that
 // bursts when shone, …); a projector's area needs no call, the runner
@@ -783,6 +817,8 @@ void LightAir_LuaGame::registerKernel() {
         { "lib", LightAir_LuaGame::l_lib },
         { "area_policy", LightAir_LuaGame::l_area_policy },
         { "area_emit",   LightAir_LuaGame::l_area_emit },
+        { "bar_mark",    LightAir_LuaGame::l_bar_mark },
+        { "inbox",       l_inbox },
     };
     for (const Verb& v : kVerbs) {
         lua_pushlightuserdata(L, this);

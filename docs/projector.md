@@ -669,8 +669,26 @@ repeating — times the profile's strength, and the total is capped at `max`.
   same "discard, not trade" as §11.
 - `vars.lock`, when declared, shows the step reached.
 
-The target is told nothing while a lock builds.  A fine game (§3) is where
-the curve has room: with 3 to 5 lives, `fib` is out by the fifth step.
+**The target is warned.**  From step `warn_at` — default 1, the first beam
+that lands — the projector broadcasts `MSG_LOCK` naming the target, and
+again every second while the lock holds.  The target's device shows
+`LOCKED` and plays the `Locked` cue (two urgent pips, a hard double buzz,
+magenta) at each one, so it pulses for as long as the lock is on, and stops
+by itself 1.5 s after the last: a released trigger, a broken lock and a
+lost packet all end it the same way, with no "stop" message.  It never
+names the shining player — a name says where to look, and `LOCKED` alone
+already says "move".  The warning gives the target a second or more to
+break line of sight, which makes `grace_ms` the main balance lever of a
+locking projector.
+
+`warn_at = 0` is a lock that does not warn: one that restores, or
+protects, has nothing to warn about.  `warn_at = 3` warns from the third
+step.
+
+No game declares anything for this: see §16.
+
+A fine game (§3) is where the curve has room: with 3 to 5 lives, `fib` is
+out by the fifth step.
 
 ### The rest
 
@@ -725,9 +743,10 @@ proj.define{ effects = { dim = { ms = 8000 }, beacon = { to = "team" } } }
 **Only receiver-side effects are here.**  A lock, a charge, a fire mode
 (§12) are the shining side's and send nothing but a strength.
 
-**Who applies them.**  `std.lit_target{ proj = proj, … }` does.  A ruleset
-with its own LIT handler reads the beam through the library, never by
-offset: `proj.beam_has(pkt, name)`, `proj.kind(pkt)`, `proj.role(pkt)`,
+**Who applies them.**  `std.lit_target` does, with nothing to pass: it
+finds the projector library on its own (§16; `proj = false` opts out).  A
+ruleset with its own LIT handler reads the beam through the library, never
+by offset: `proj.beam_has(pkt, name)`, `proj.kind(pkt)`, `proj.role(pkt)`,
 `proj.shiner(pkt)`, `proj.weight(vars, pkt)` (the strength, more while
 exposed) and `proj.landed(vars, pkt)` (apply the timed ones — call it when
 the hit landed and the player stays in play).
@@ -746,16 +765,17 @@ A traced player broadcasts `MSG_TRACE [shiner, shiner's team, to]`,
 single-hop, at most **once a second** however a game retunes it — one
 traced player is one more periodic sender on the channel.  `to` is who may
 use it: `"shiner"`, `"team"` or `"all"`.  Nothing is shown to the traced
-player.  A ruleset that tracks with it handles the message itself:
+player.  The library keeps the last trace heard from each traced player
+that is meant for this device (§16), and a ruleset asks:
 
 ```lua
-[MSG.TRACE] = function(vars, pkt)
-  local who, rssi = proj.trace(pkt)    -- nil when it is not meant for us
-end
+local rssi, age_ms = proj.trace_of(id)        -- nil: never heard
+local id, rssi     = proj.nearest_trace(3000) -- the strongest one, if recent
 ```
 
-The firmware only carries it; what a reading means (a distance bar, a
-count of seconds near someone) is the ruleset's.
+What a reading means (a distance bar, a count of seconds near someone) is
+the ruleset's.  One that would rather take the message itself declares a
+handler for `MSG.TRACE` and reads it with `proj.trace(pkt)`.
 
 
 ---
@@ -812,17 +832,19 @@ notes, green), `GateMissed` (a low flat buzz, amber), `GateRestart` (three
 falling notes, red).  With `label = "RELOAD"` (the projector's default) each
 is also named on the tray: `RELOAD: NOW`, `OK`, `MISSED`, `AGAIN`.
 
-**The bar's marker.**  A bar row may name a `mark_var`; while that var holds
-a marker the display draws two brackets over the stretch of the bar it
-covers.  The owner decides when it shows, the display only draws it:
+**The bar's marker.**  Two brackets over the stretch of the bar the gate
+covers, drawn by the display while the wait's owner says so.  There is
+nothing to declare: every bar row with a `start_var` has a marker of its
+own, and the owner names the wait by that var (`la.bar_mark(start_var,
+value)`).  So a game that never heard of gates shows the marker the day a
+totem hands out a gated projector.
 
-```lua
-proj.define{ vars = { ..., reload = "reload", reload_ms = "reload_ms",
-                      reload_mark = "reload_mark" } }
-vars    = { ..., { id = "reload_mark", default = 0 } }
-monitor = { { var = "energy", ..., bar = true, bar_at = 0, fill_var = "reload_ms",
-              start_var = "reload", mark_var = "reload_mark" } }
-```
+**One marker per wait.**  A marker belongs to the bar that times that wait
+and shows on no other.  Should two gated waits ever run at once, each has
+its own gate, its own marker and its own bar, and **one press goes to one
+of them**: the wait whose window is open takes it; with none open it is a
+miss for the wait that began first.  The player can speed up only one of
+them at a time.
 
 A passed gate moves the wait's start back and a missed one moves it
 forward, so the bar jumps with the wait and always shows what is left.
@@ -832,7 +854,7 @@ reload has the gates and their cues, but no bar to see them on.
 ### The respawn wait
 
 ```lua
-local respawn = std.respawn_gates{ gates = 2, mark = "respawn_mark" }   -- at load
+local respawn = std.respawn_gates{ gates = 2 }                          -- at load
 respawn.start(vars, vars.respawn_secs)                                  -- going out
 update = { [S.OUT_GAME] = function(vars) respawn.tick(vars) end },
 rules  = { { from = S.OUT_GAME, to = S.IN_GAME,
@@ -901,10 +923,91 @@ local classes = std.classes{ proj = proj, var = "class_name", list = {
 `classes.pick(vars)`: `<` and `>` step through the list, the trigger
 confirms — or the game assigns (`classes.assign(vars, name)`).
 
-**The receiving side** is `std.lit_target{ proj = proj, classes = classes }`.
+**The receiving side** is `std.lit_target{ classes = classes }`.
 A kind or a role the class is immune to answers `reply.immune`.
 
 **Not built.**  A limit of one class per team needs the devices to agree on
 who took what — a protocol, not a parameter.  The engineer's own totem is
 on hold: a totem is a separate device running a TotemVM program, and
 whether one can be bound to an owner has not been looked into.
+
+
+---
+
+## 16. A ruleset transparent to its projectors
+
+A ruleset is about the game: what happens when players meet, how states
+change, who scores.  A projector is about power and effects.  The less a
+ruleset has to know about the projectors that may turn up, the more of
+them can be handed out on the field without touching a game file — so a
+projector behaviour must not need a line in every ruleset.
+
+### What needs nothing declared
+
+| Behaviour | How it works without the ruleset |
+|---|---|
+| splash (§5) | the firmware's area service; bystanders' hits go to the ordinary LIT handler |
+| effects at the receiver (§13) | `std.lit_target` finds the projector library itself |
+| the lock warning (§12), traces (§13) | the library inbox, below |
+| the gate marker (§14) | every owned bar has a marker; the owner names the wait |
+| switching, timers, the trace being sent | the projector's own tick |
+
+### The library inbox
+
+`MSG_LOCK` and `MSG_TRACE` belong to the projector library, not to a
+ruleset.  They live in a block of message types of their own (0x20–0x2F),
+and the runner treats that block specially: a message of it that **no
+handler of the ruleset took** in the current state is kept in a small
+inbox (`src/game/LightAir_LibInbox.h`), and the library reads it on its
+tick with `la.inbox()`.
+
+- **A handler the ruleset declares wins.**  A ruleset that wants a library
+  message for itself lists it in `on_message`; it then never reaches the
+  inbox in that state.
+- **In play only, for free.**  The library reads the inbox from
+  `proj.tick`, which a ruleset calls in its in-play states and nowhere
+  else.  A player who is out is not warned, with nothing declared.
+- **Never answered.**  Library messages are single-hop broadcasts; a
+  message for one player names them in its payload and the others ignore
+  it.  Nothing waits for a reply and no slot is held.
+- **A new library message needs no firmware change** beyond its name in
+  `RadioMsg` and `la.msg`.
+
+### What it costs — the downsides, deliberately accepted
+
+- **It rests on a convention nobody enforces**: "in play" means "the
+  ruleset ticks the projector".  A state that plays but skips the tick
+  gets no warning and runs no effect clock.  Virus skips it for the 5 s of
+  a returned virus's grace.
+- **The inbox is small and lossy**: 8 messages, nothing older than 2 s,
+  emptied on every state change.  Right for a warning repeated every
+  second; wrong for anything that must arrive exactly once.
+- **The game file no longer tells the whole story.**  Nothing in a ruleset
+  says why `LOCKED` appears.  This section and the test suite carry that.
+- **Every device carries every behaviour**, used or not: the RAM in
+  `docs/parked-features.md` §3 is the price of the freedom on the field.
+
+### What stays explicit, on purpose
+
+Sending a LIT (the ruleset decides who may be shone: friendly fire is a
+rule), `proj.strip` in the rule that takes a player out (only the ruleset
+knows which transition that is), classes, a gated respawn, and what a
+BONUS totem hands out.
+
+### A ruleset may still shape its projectors
+
+Transparency is the default, not a cage: a ruleset uses projectors as
+tools when a game mode calls for it.
+
+```lua
+proj.define{ only   = { proj.standard.FAST.id, P_MINE } }   -- these exist, nothing else
+proj.define{ except = { proj.standard.STRONG.id } }         -- everything but this one
+```
+
+A projector that does not exist in a ruleset is not known to it at all:
+never given, and **never offered by a BONUS totem's menu**, because
+`proj.bonus_options()` lists only what exists.  So what the DM can assign
+to a power-up totem follows from the game's own declaration.  The
+baseline always exists; a ruleset replaces it by declaring profile id 0,
+forces one into hand with `proj.grant`, switches effects and kinds on and
+off (§13), and turns the switch keys off with `switch_keys = false`.

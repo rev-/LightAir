@@ -3,6 +3,7 @@
 #include "LightAir_Game.h"
 #include "LightAir_GameOutput.h"
 #include "LightAir_GameHold.h"
+#include "LightAir_LibInbox.h"
 #include "../input/LightAir_InputCtrl.h"
 #include "../input/SpiAdcSensor.h"
 #include "../radio/LightAir_Radio.h"
@@ -122,6 +123,11 @@ public:
     // Use in onBegin to populate local totem-ID caches.
     uint8_t totemIdForRole(uint8_t roleId, uint8_t idx = 0) const;
 
+    // ---- Library inbox ----
+    // The oldest library message no ruleset handler took (LightAir_LibInbox.h),
+    // or false.  Reading consumes it.
+    bool inboxPop(LibInboxEntry& out) const { return _inbox.pop(out, millis()); }
+
     // ---- Team map ----
     // Call setTeam() from LightAir_GameSetupMenu::commitToRunner() before begin().
     // teamOf() returns the team index (0..7) or 0xFF for teamless/unassigned; 0xFF if id is out of range.
@@ -194,6 +200,11 @@ private:
     bool         _chordLatched        = false; // A+B must be released before it re-arms
     uint32_t     _restartDownAt       = 0;     // millis() A went down on the end screen
     bool         _restartSpoiled      = false; // B was down during this A press
+
+    // ---- Library inbox (LightAir_LibInbox.h) ----
+    // mutable: reading it (la.inbox) consumes it, and the Lua binding holds
+    // the runner const.
+    mutable LibInbox _inbox;
 
     // ---- Area service (see "Area effects" in the .cpp) ----
     uint32_t _areaSentAt   = 0;      // millis() of the last triggered beacon

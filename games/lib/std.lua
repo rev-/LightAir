@@ -67,8 +67,10 @@ end
 --
 -- ---- Effects ----
 --
--- With cfg.proj (the projector library) the handler honours what a beam
--- carries besides its strength (docs/projector.md §13):
+-- The handler honours what a beam carries besides its strength
+-- (docs/projector.md §13), through the projector library — found on its
+-- own, with nothing to pass, so a ruleset stays transparent to whatever
+-- projectors turn up on the field:
 --
 --   restore          the strength is GIVEN: lives go up, to this player's
 --                    starting lives at most (cfg.start_lives(vars), default
@@ -85,7 +87,8 @@ end
 -- the originator, where the policy allows): that is what makes a class's
 -- aura a buff for teammates rather than for whoever stands near.
 --
--- Without cfg.proj a beam is its strength and nothing else.
+-- cfg.proj = false opts out: a beam is then its strength and nothing
+-- else, for a ruleset that wants its hits plain whatever is shone at it.
 --
 -- ---- Classes ----
 --
@@ -101,7 +104,9 @@ function std.absorbed(pkt)
 end
 
 function std.lit_target(cfg)
-  local proj    = cfg.proj
+  local proj = cfg.proj
+  if proj == nil then proj = la.lib("projector") end
+  if proj == false then proj = nil end
   local classes = cfg.classes
   return function(vars, pkt)
     if proj and proj.beam_has(pkt, "restore") then
@@ -184,21 +189,16 @@ end
 -- The same wait, with gates (std.gates above): a player who presses the
 -- secondary trigger at the right moments is back sooner.
 --
---   local respawn = std.respawn_gates{ gates = 2, mark = "respawn_mark" }  -- once, at load
+--   local respawn = std.respawn_gates{ gates = 2 }      -- once, at load
 --   respawn.start(vars, vars.respawn_secs)              -- going out
 --   update = { [S.OUT_GAME] = function(vars) respawn.tick(vars) end },
 --   rules  = { { from = S.OUT_GAME, to = S.IN_GAME,
 --                when = function() return respawn.done() end, ... } },
 --
 -- It writes the three vars std.respawn_wait writes, moving respawn_from as
--- gates are passed or missed so the bar follows, and the var named by
--- `mark` for the bar's marker, which the game declares and names on the
--- row (without `mark` the cues are sound, light and vibration alone):
---
---   vars    = { ..., { id = "respawn_mark", default = 0 } },
---   monitor = { { var = "respawn_zero", ..., bar = true, bar_at = 0,
---                 fill_var = "respawn_ms", start_var = "respawn_from",
---                 mark_var = "respawn_mark" } },
+-- gates are passed or missed so the bar follows, and puts the gate's
+-- marker on that bar (la.bar_mark, by the wait's start var): nothing more
+-- to declare.
 --
 -- With gates = 0 it is std.respawn_wait and nothing else.  A game that
 -- also shows the wait as a number (countdown_in) will see the two
@@ -210,15 +210,20 @@ function std.respawn_gates(cfg)
     gates = cfg.gates, window_ms = cfg.window_ms, lead_ms = cfg.lead_ms,
     reward_pct = cfg.reward_pct, penalty_pct = cfg.penalty_pct,
     trigger = cfg.trigger, label = cfg.label or "RESPAWN", random = cfg.random } or nil
-  local mark = cfg.mark
-  local done_at, over = 0, true
+  local done_at, over, marked = 0, true, 0
+  local function mark(v)
+    if v ~= marked then
+      marked = v
+      la.bar_mark("respawn_from", v)
+    end
+  end
   local r = {}
 
   function r.start(vars, secs)
     done_at = std.respawn_wait(vars, secs)
     over = false
     if g then g.start(vars.respawn_from, vars.respawn_ms) end
-    if mark then vars[mark] = 0 end
+    mark(0)
     return done_at
   end
 
@@ -229,7 +234,7 @@ function std.respawn_gates(cfg)
       over = g.tick(now)
       -- Over: leave the bar full, where a plain wait would have left it.
       vars.respawn_from = over and (now - vars.respawn_ms) or g.from()
-      if mark then vars[mark] = g.mark() end
+      mark(g.mark())
     else
       over = la.now() >= done_at
     end
@@ -256,7 +261,7 @@ end
 --   g.start(la.now(), nominal_ms)      -- the wait begins
 --   if g.tick(la.now()) then ... end   -- every tick; true once it is over
 --   g.from()    the wait's start for a bar's start_var (0 = not waiting)
---   g.mark()    the bar's marker for its mark_var (0 = none showing)
+--   g.mark()    the bar's marker, for la.bar_mark (0 = none showing)
 --   g.active()  g.stop()  g.count()
 --
 -- The wait lasts nominal_ms for a player who never presses: NOT pressing
@@ -288,6 +293,30 @@ end
 -- cfg.label, when given, names each event on the tray ("RELOAD: NOW").
 -- cfg.random(lo, hi) replaces math.random, for a test.
 -- ----------------------------------------------------------------
+-- Two gated waits may run at once (a reload during some other wait): each
+-- has its own bar and its own marker, and ONE press goes to one of them.
+-- The wait whose window is open takes it; with none open it is a miss for
+-- the wait that began first.  `live` is every gated wait in progress.
+local live = {}
+-- A press is one poll long ("pressed" shows in exactly one), and the wait
+-- that took it must be the only one: a miss retires that wait's gate, and
+-- the next wait ticked in the same poll must not find itself the owner.
+-- Remembered by time as well, so a flag left set by a wait that has since
+-- ended cannot swallow a later press.
+local press_used, press_at = false, 0
+
+local function press_owner(now)
+  if press_used and now - press_at < 50 then return nil end
+  local owner
+  for _, g in ipairs(live) do
+    if g.pending() then
+      if g.open(now) then return g end
+      if not owner then owner = g end
+    end
+  end
+  return owner
+end
+
 function std.gates(cfg)
   cfg = cfg or {}
   local want    = cfg.gates or 1
@@ -331,7 +360,22 @@ function std.gates(cfg)
 
   local g = {}
 
+  local function retire()
+    on, idx = false, 0
+    for i = #live, 1, -1 do
+      if live[i] == g then table.remove(live, i) end
+    end
+  end
+
+  -- For press_owner: has this wait a gate left, and is its window open.
+  function g.pending() return on and idx > 0 end
+  function g.open(now)
+    local t = now - t0
+    return on and idx > 0 and t >= centre - window // 2 and t <= centre + window // 2
+  end
+
   function g.start(anchor, nominal_ms)
+    retire()
     t0, total = anchor, nominal_ms or 0
     misses, extra, again = 0, false, false
     count = want
@@ -340,6 +384,7 @@ function std.gates(cfg)
     if count == 1 and total < math.max(4 * window, 4 * lead) then count = 0 end
     if count < 0 then count = 0 end
     on = total > 0
+    if on then live[#live + 1] = g end
     if count > 0 and on then
       seg = total // count
       arm(1)
@@ -348,7 +393,7 @@ function std.gates(cfg)
     end
   end
 
-  function g.stop()   on, idx = false, 0 end
+  function g.stop()   retire() end
   function g.active() return on end
   function g.count()  return count end
   -- A penalty early in the wait can put the start in the future: the bar
@@ -380,6 +425,9 @@ function std.gates(cfg)
         say("NOW")
       end
       local pressed = la.trigger_state(trig) == "pressed"
+      if not pressed then press_used = false
+      elseif press_owner(now) == g then press_used, press_at = true, now
+      else pressed = false end
       if pressed and t >= open and t <= close then
         -- Passed: skip ahead, but never past the end of this segment —
         -- the next gate's lead must still be ahead of us.
@@ -421,7 +469,7 @@ function std.gates(cfg)
       arm(count)
       return false
     end
-    on, idx = false, 0
+    retire()
     return true
   end
 

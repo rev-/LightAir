@@ -90,7 +90,13 @@ local charge_ready   = nil  -- a charged beam waiting for Enlight to take it
 -- The lock: how many beams in a row landed on one target.
 --   closing  the press ended; deliver at the next result()
 --   deaf     delivered; ignore measurements until the next beam
-local lock = { target = nil, n = 0, last = 0, closing = false, deaf = false }
+--   warned   millis of the last warning sent to the target
+local lock = { target = nil, n = 0, last = 0, closing = false, deaf = false, warned = nil }
+-- A lock warns the player it is building on, and keeps warning: this
+-- often while it holds, and the warning stands this long at the target —
+-- longer than the interval, so one lost message does not blink it off.
+local LOCK_WARN_EVERY_MS = 1000
+local LOCK_WARN_HOLD_MS  = 1500
 
 -- ---- DIM (a MALUS) -----------------------------------------------
 -- While dimmed, every projector the player holds has a smaller pool, a
@@ -112,6 +118,9 @@ local mods = { energy = 1, recharge = 1, cooldown = 1, strength = 1 }
 local mute_until   = 0     -- cannot shine before this
 local expose_until = 0     -- the next beam weighs more until this
 local trace = { until_ms = 0, next_ms = 0, shiner = 0, team = 0xFF }
+local locked_until = 0     -- someone is locking on to this player until this
+-- Traced players this device may follow: [player id] = { rssi, millis }.
+local seen = {}
 
 -- ---- The game's unit ----------------------------------------------
 -- define{ game_unit = n }: what ONE standard unit of strength is worth in
@@ -211,7 +220,11 @@ local FX_FIRST_FREE, FX_LAST = 9, 15
 -- A traced player repeats a radio message; this is as often as it may.
 local TRACE_MIN_MS = 1000
 local TRACE_TO     = { shiner = 0, team = 1, all = 2 }
-local fx = {}              -- name -> resolved entry, filled by define()
+-- name -> resolved entry.  The library's own until define() retunes it
+-- for a game, so a receiver that reads a beam before any define() — a
+-- ruleset with no projector declaration of its own — still knows them.
+local fx = {}
+for name, e in pairs(FX) do fx[name] = e end
 
 local function fx_mask(list, who)
   local m = 0
@@ -606,8 +619,23 @@ function P.define(decl)
   for k, v in pairs(BASELINE) do base[k] = v end
   defs[0] = base
 
+  -- A ruleset may say which projectors exist in it: `only` lists the ids
+  -- that do, `except` the ids that do not.  One that does not exist is not
+  -- known at all — never given, never offered by a BONUS totem's menu —
+  -- which is how a game mode limits the field to a few, or keeps one out.
+  -- The baseline always exists.
+  local only, except = nil, {}
+  if cfg.only then
+    only = {}
+    for _, id in ipairs(cfg.only) do only[id] = true end
+  end
+  for _, id in ipairs(cfg.except or {}) do except[id] = true end
+  local function exists(id)
+    return id == 0 or ((not only or only[id]) and not except[id])
+  end
+
   for _, raw in ipairs(cfg.profiles or {}) do
-    local p = prepare(raw)
+    local p = exists(raw.id or 0) and prepare(raw) or nil
     if p then
       local id = p.id or 0
       if id == 0 then
@@ -624,7 +652,7 @@ function P.define(decl)
   -- may hand any of it to any game.  Known is not owned — the inventory
   -- still starts with the baseline alone.
   for _, std_p in pairs(P.standard) do
-    if not defs[std_p.id] then defs[std_p.id] = prepare(std_p) end
+    if not defs[std_p.id] and exists(std_p.id) then defs[std_p.id] = prepare(std_p) end
   end
 
   -- A profile's area is a policy for the firmware's area service, declared
@@ -752,6 +780,8 @@ end
 --   gives way to the number; timing the bar to the whole refill made it
 --   vanish a third of the way across.
 -- ================================================================
+local reload_mark = 0      -- the marker last told to the display
+
 local function reload_total_ms(vars, p)
   return stretch(val(vars, p.recharge_delay_ms, 0))
 end
@@ -759,10 +789,15 @@ end
 local function publish_reload(vars, started_at, p)
   if var.reload    then vars[var.reload]    = started_at end
   if var.reload_ms then vars[var.reload_ms] = reload_total_ms(vars, p) end
-  -- The bar's marker, for a wait with gates.  Nothing shows while there
-  -- is no wait.
-  if var.reload_mark then
-    vars[var.reload_mark] = (started_at ~= 0 and gate and gate.active()) and gate.mark() or 0
+  -- The bar's marker, for a wait with gates: on the bar that times THIS
+  -- wait, named by its start var, and on no other.  Nothing shows while
+  -- there is no wait.  Told to the display only when it changes.
+  if var.reload then
+    local mark = (started_at ~= 0 and gate and gate.active()) and gate.mark() or 0
+    if mark ~= reload_mark then
+      reload_mark = mark
+      la.bar_mark(var.reload, mark)
+    end
   end
 end
 
@@ -799,7 +834,7 @@ local function activate(vars, idx)
   ready_at = la.now() + val(vars, p.ready_ms, 0)
   -- Whatever the press was building belonged to the projector that left.
   burst_left, held_beams, charge_from, charge_ready = 0, 0, nil, nil
-  lock.target, lock.n, lock.closing = nil, 0, false
+  lock.target, lock.n, lock.closing, lock.warned = nil, 0, false, nil
   if var.lock   then vars[var.lock]   = 0 end
   if var.charge then vars[var.charge] = 0 end
   -- A shared pool's reload clock is the pool's, and a switch leaves it be.
@@ -1026,7 +1061,9 @@ function P.strip(vars)
   mute_until, expose_until, trace.until_ms = 0, 0, 0
   kind_on, fx_on = kind_on & kind_sticky, fx_on & fx_sticky
   -- Whatever a press was building is gone with the player.
-  lock.target, lock.n, lock.closing = nil, 0, false
+  lock.target, lock.n, lock.closing, lock.warned = nil, 0, false, nil
+  locked_until = 0
+  for k in pairs(seen) do seen[k] = nil end
   burst_left, held_beams, charge_from, charge_ready = 0, 0, nil, nil
   if var.lock   then vars[var.lock]   = 0 end
   if var.charge then vars[var.charge] = 0 end
@@ -1100,6 +1137,10 @@ function P.reset(vars)
   shot_units, beam_mul = nil, 1
   dim_hold, dim_until = false, 0
   mods.energy, mods.recharge, mods.cooldown, mods.strength = 1, 1, 1, 1
+  -- -1: whatever marker the display was left with, the next publish
+  -- tells it again.
+  locked_until, reload_mark = 0, -1
+  for k in pairs(seen) do seen[k] = nil end
   mute_until, expose_until, trace.until_ms = 0, 0, 0
   lock.deaf      = false
   role_tag       = 0
@@ -1170,6 +1211,13 @@ end
 --   cooldown would lose the lock between two beams that both landed: it is
 --   never taken as less than that.
 --
+--   The target is warned.  From step `warn_at` (default 1, the first
+--   beam that lands) the projector broadcasts MSG.LOCK naming the target,
+--   and again every second while the lock holds; the target's own
+--   projector library shows LOCKED and plays the Locked cue for as long as
+--   the warnings keep coming (see tick_inbox).  It never says who.
+--   warn_at = 0 is a lock that does not warn — one that restores, say.
+--
 --   vars.lock, when the game declares it, shows the step reached.
 -- ================================================================
 local function curve_step(c, n)
@@ -1192,7 +1240,7 @@ local function lock_units(vars, p, from, to)
 end
 
 local function lock_clear(vars)
-  lock.target, lock.n = nil, 0
+  lock.target, lock.n, lock.warned = nil, 0, nil
   if var.lock then vars[var.lock] = 0 end
 end
 
@@ -1214,10 +1262,16 @@ function P.result(vars)
   local beam = (p.lock.deliver == "beam")
   if status == "player" and not lock.deaf then
     lit(vars, p)
-    if lock.target ~= id then lock.target, lock.n = id, 0 end   -- someone else: start over
+    if lock.target ~= id then lock.target, lock.n, lock.warned = id, 0, nil end   -- someone else: start over
     lock.n    = lock.n + 1
     lock.last = now
     if var.lock then vars[var.lock] = lock.n end
+    local warn_at = p.lock.warn_at or 1
+    if warn_at > 0 and lock.n >= warn_at
+       and (not lock.warned or now - lock.warned >= LOCK_WARN_EVERY_MS) then
+      lock.warned = now
+      la.broadcast(la.msg.LOCK, id)
+    end
     if beam then
       shot_units = lock_units(vars, p, lock.n, lock.n)
       return id, metres
@@ -1416,16 +1470,75 @@ end
 --   [MSG.TRACE] = function(vars, pkt)
 --     local who, rssi = proj.trace(pkt)      -- nil when not meant for us
 -- `who` is the traced player (the sender), and rssi how near they are.
+local function trace_for_me(shiner, team, to)
+  if to == TRACE_TO.shiner and shiner ~= la.my_id() then return false end
+  if to == TRACE_TO.team and shiner ~= la.my_id()
+     and (team == 0xFF or team ~= la.my_team()) then return false end
+  return true
+end
+
 function P.trace(pkt)
   if not pkt.len or pkt.len < 3 then return nil end
-  local shiner, team, to = pkt:byte(1), pkt:byte(2), pkt:byte(3)
-  if to == TRACE_TO.shiner and shiner ~= la.my_id() then return nil end
-  if to == TRACE_TO.team and shiner ~= la.my_id()
-     and (team == 0xFF or team ~= la.my_team()) then return nil end
+  if not trace_for_me(pkt:byte(1), pkt:byte(2), pkt:byte(3)) then return nil end
   return pkt.sender, pkt.rssi
 end
 
+-- ================================================================
+--   The library's own messages.
+--
+--   MSG.LOCK and MSG.TRACE are the projector library's, not a ruleset's:
+--   a ruleset should not have to declare a handler for every projector
+--   that might turn up on the field.  The firmware keeps the ones no
+--   ruleset handler took (la.inbox) and tick() reads them here — so they
+--   are acted on exactly while the player is in play, because that is
+--   when a ruleset ticks the projector.  A ruleset that does declare a
+--   handler for one of them takes it instead: the handler wins.
+--
+--     proj.locked()        is someone locking on to this player now
+--     proj.trace_of(id)    rssi, age_ms of the last trace heard from that
+--                          player and meant for us; nil if none
+--     proj.nearest_trace(max_age_ms)   id, rssi of the strongest one
+-- ================================================================
+function P.locked() return la.now() < locked_until end
+
+function P.trace_of(id)
+  local t = seen[id]
+  if not t then return nil end
+  return t[1], la.now() - t[2]
+end
+
+function P.nearest_trace(max_age_ms)
+  local now, best, best_rssi = la.now(), nil, nil
+  for id, t in pairs(seen) do
+    if now - t[2] <= (max_age_ms or 3000) and (not best_rssi or t[1] > best_rssi) then
+      best, best_rssi = id, t[1]
+    end
+  end
+  return best, best_rssi
+end
+
+local function tick_inbox(now)
+  local msg, sender, team, rssi, b1, b2, b3 = la.inbox()
+  while msg do
+    if msg == la.msg.LOCK then
+      if b1 == la.my_id() then
+        -- The cue once per warning: it pulses for as long as the lock holds.
+        locked_until = now + LOCK_WARN_HOLD_MS
+        la.show("LOCKED", LOCK_WARN_HOLD_MS)
+        la.ui("Locked")
+      end
+    elseif msg == la.msg.TRACE then
+      if trace_for_me(b1, b2, b3) then
+        local t = seen[sender]
+        if t then t[1], t[2] = rssi, now else seen[sender] = { rssi, now } end
+      end
+    end
+    msg, sender, team, rssi, b1, b2, b3 = la.inbox()
+  end
+end
+
 local function tick_effects(vars, now)
+  tick_inbox(now)
   if dimmed and not dim_hold and now >= dim_until then dim_apply(vars) end
   if now < trace.until_ms and now >= trace.next_ms then
     trace.next_ms = now + fx.beacon.every_ms

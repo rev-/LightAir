@@ -162,6 +162,11 @@ private:
     int*       _drawnVars[GameDefaults::MAX_DRAWN_VARS];
     uint8_t    _drawnCount = 0;
     MonitorVar _monitorVars[LuaDefaults::MAX_MONITOR];
+    // A bar row with a start_var has a marker of its own (la.bar_mark):
+    // the value the display reads, and the slot of the start_var that
+    // names the wait it belongs to (-1 = this row has none).
+    int        _barMarks[LuaDefaults::MAX_MONITOR];
+    int8_t     _barMarkSlot[LuaDefaults::MAX_MONITOR];
     WinnerVar  _winnerVars[GameDefaults::MAX_WINNER_VARS];
     StateRule  _rules[LuaDefaults::MAX_RULES];
     StateBehavior _behaviors[LuaDefaults::MAX_STATES];
@@ -252,6 +257,7 @@ private:
     static int l_pkt_byte(lua_State* L);
     static int l_lib(lua_State* L);
     static int l_area_policy(lua_State* L);
+    static int l_bar_mark(lua_State* L);
     static int l_area_emit(lua_State* L);
     // (plain-context verbs are file-local in LightAir_LuaKernel.cpp)
 

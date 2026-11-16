@@ -91,6 +91,7 @@ void LightAir_GameRunner::begin(const LightAir_Game& game,
     // Reset state and activate the initial binding set.  A new match starts
     // with no measurement pending, whatever state the last one ended in.
     if (enlightPtr) enlightPtr->discardResult();
+    _inbox.clear();
     enterState(game.initialState);
 
     // Stamp the game's typeId on the radio layer so all outgoing packets
@@ -181,7 +182,10 @@ uint8_t LightAir_GameRunner::teamOf(uint8_t id) const {
 // deliberately NOT touched: a SHONE reply arriving after the shooter went
 // down is a point earned while in play.
 void LightAir_GameRunner::enterState(uint8_t s) {
-    if (*_game->currentState != s && enlightPtr) enlightPtr->discardResult();
+    if (*_game->currentState != s) {
+        if (enlightPtr) enlightPtr->discardResult();
+        _inbox.clear();       // what arrived in one state is not the next one's
+    }
     *_game->currentState = s;
     activateStateDisplay(s);
 }
@@ -354,7 +358,12 @@ void LightAir_GameRunner::logic(const InputReport& inputs,
         }
 
         const DirectRadioRule* r = directRuleFor(*pkt);
-        if (!r) continue;
+        if (!r) {
+            // No ruleset handler in this state.  A library message is kept
+            // for its library; a handler, had there been one, would have won.
+            if (RadioMsg::isLibraryMsg(pkt->msgType)) _inbox.push(*pkt, ev.rssi, millis());
+            continue;
+        }
         const uint8_t repliesBefore = output.radio.replyCount;
         if (r->onReceive) r->onReceive(*pkt, ev.rssi, *_display, output);
         // DYNAMIC_REPLY: the callback queued its own reply with a

@@ -77,14 +77,16 @@ did.
 |---|---|---|
 | `game_unit` above 1, `min_unit` | `projector.lua` | "game_unit" |
 | `kind`, run-time kinds and effects | `projector.lua` | "payload" |
+| the lock's warning (`MSG_LOCK`, the `Locked` cue) and `only` / `except` | `projector.lua`, the library inbox | "the lock warns", "a ruleset may say which projectors exist"; `test_luagame.cpp` "the library inbox" |
 | fire modes, `charge`, `lock`, `spinup`, `overheat_ms`, `uses`, `lifetime_ms`, `on_lit_refund`, `self_cost` | `projector.lua` | "fire modes", "charge", "the lock", "uses, lifetime, …" |
 | the receiver-side effects other than `splash` (`restore`, `dim`, `mute`, `expose`, `siphon`, `beacon`, `ignore_immunity`, `silent`) and `MSG_TRACE` | `projector.lua`, `std.lit_target` | "effects at the receiver" |
-| gates on the reload and respawn waits, the four `Gate…` UI events, the bar's marker | `std.gates`, `std.respawn_gates`, `LightAir_UICtrl`, `LightAir_DisplayCtrl` | "gates"; `test_luagame.cpp` §15, §15a |
+| gates on the reload and respawn waits, the four `Gate…` UI events, the bar's marker (`la.bar_mark`) | `std.gates`, `std.respawn_gates`, `LightAir_UICtrl`, `LightAir_DisplayCtrl` | "gates"; `test_luagame.cpp` §15, §15a, "the library inbox" |
 | player classes, weightless areas | `std.classes`, the area service | "player classes" |
 
-Two things here are **in use**, and are not parked: the `<` / `>` switch
-keys with the eviction notice (every game with pickups), and the new LIT
-layout itself.
+Three things here are **in use**, and are not parked: the `<` / `>` switch
+keys with the eviction notice (every game with pickups), the new LIT
+layout itself, and `std.lit_target` reading effects through the projector
+library with nothing passed to it.
 
 **Why it is parked.**  These are the game designer's building blocks; the
 games that use them have not been written.  Until one is, nothing here has
@@ -92,10 +94,12 @@ been played, and the four UI cues and the marker have not been seen or
 heard on a device (`docs/bench-checklist.md`).
 
 **What it costs meanwhile.**  Measured on a 64-bit host with the libraries
-stripped of debug information as on the device: **+10.3 KB of Lua per
-loaded game** against `main` (freeforall 13.9 → 24.2 KB, upkeep 36.2 →
-46.4 KB on that model).  On the 32-bit device that is an estimated 6–7 KB,
-not measured.  The display binding table grew by about 2 KB of static RAM
+stripped of debug information as on the device: **+7.7 KB of Lua per
+loaded game** against `main` (freeforall 13.9 → 21.6 KB, upkeep 36.1 →
+43.8 KB on that model).  The commit before the library inbox measured
++10.3 KB with less code, so the figure moves by a couple of KB with where
+Lua's hash tables happen to resize: read it as 8 to 10 KB.  On the 32-bit
+device that is an estimated 5–7 KB, not measured.  The display binding table grew by about 2 KB of static RAM
 for the marker.  `docs/bench-checklist.md` §1–§2 (the free heap on a real
 device) decides whether that is affordable; if it is not, the candidates
 to drop first are the ones the designer ends up not using.

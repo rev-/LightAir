@@ -100,6 +100,11 @@ LightAir_UICtrl::_actionTable[(uint8_t)UIEvent::Count] = {
   // the whole wait starts over.
   {{120,120,220,0},3,{1400,1000,600,0},{255,255,255,0},{ {255,0,0},{180,0,0},{90,0,0},{0,0,0} },3},
 
+  // Locked — two urgent high pips with a hard double buzz, in magenta.  It
+  // repeats once a second while the lock holds, so it is short, and it is
+  // unlike every combat cue: "move".
+  {{70,50,70,0},3,{3900,0,3900,0},{255,0,255,0},{ {255,0,180},{0,0,0},{255,0,180},{0,0,0} },4},
+
   // Custom1
   {{0,0,0,0},0,{0,0,0,0},{0,0,0,0},{ {0,0,0},{0,0,0},{0,0,0},{0,0,0} },2},
 

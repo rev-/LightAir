@@ -89,16 +89,36 @@ constexpr uint8_t MSG_AREA          = 0x18;
 // answered one of its own LITs with SHONE — so each game scores an area
 // knock-out exactly as it scores a direct one.
 constexpr uint8_t MSG_AREA_CREDIT   = 0x1A;
+// Next available in 0x10 block: 0x1C
 
-// Trace: a player a `beacon` beam landed on repeats this, single-hop, for
-// as long as the effect lasts (games/lib/projector.lua, at most once a
-// second), so that whoever it is meant for can follow them by its RSSI.
+// ── 0x20 block: library messages ────────────────────────────────
+// Messages that belong to a library (games/lib/), not to a ruleset.  The
+// runner keeps the ones no ruleset handler took in the library inbox
+// (src/game/LightAir_LibInbox.h) and the library reads them on its tick, so
+// a ruleset need not know which projectors will turn up on the field.  A
+// handler the ruleset does declare for one wins.  All are single-hop
+// broadcasts and none is answered; a new one needs no firmware change
+// beyond its name here.
+
+// Trace: a player a `beacon` beam landed on repeats this for as long as the
+// effect lasts (projector.lua, at most once a second), so that whoever it
+// is meant for can follow them by its RSSI.
 //   payload[0] = the player whose beam started it
 //   payload[1] = that player's team (0xFF = none)
 //   payload[2] = who may use it: 0 = that player, 1 = their team, 2 = anyone
-// The firmware only carries it; what a reading means is the ruleset's.
-constexpr uint8_t MSG_TRACE         = 0x1C;
-// Next available in 0x10 block: 0x1E
+constexpr uint8_t MSG_TRACE         = 0x20;
+
+// Lock warning: a projector with a lock (projector.lua, "The lock") tells
+// the player it is building on, at most once a second while it holds.
+//   payload[0] = the player being locked on; everyone else ignores it
+constexpr uint8_t MSG_LOCK          = 0x22;
+// Next available in 0x20 block: 0x24
+
+constexpr uint8_t LIB_MSG_FIRST     = 0x20;
+constexpr uint8_t LIB_MSG_LAST      = 0x2F;
+inline bool isLibraryMsg(uint8_t t) {
+    return t >= LIB_MSG_FIRST && t <= LIB_MSG_LAST && (t & 1) == 0;
+}
 
 // ── 0x50 block: totem-mediated game messages ────────────────────
 // Messages that travel between a player and a totem (not player→player).
