@@ -612,3 +612,66 @@ already dispatched under the current state on the tick they arrive, and a
 request with no handler in that state is dropped. There is no cross-state
 queue to clean. Replies are kept on purpose: a SHONE reply that arrives
 after the shooter went down is a point earned while in play.
+
+---
+
+## 12. What the shining side does on its own
+
+None of this travels.  A receiver sees one LIT with a strength, whatever
+the projector did to arrive at it.
+
+### Fire modes
+
+`mode = "auto"` (the default) fires while the trigger is held, `"semi"`
+fires one beam per press, `"burst"` fires `burst` beams per press — the
+burst finishes even if the trigger is let go.
+
+### Charge
+
+```lua
+charge = { ms = 1500, max = 3 }
+```
+
+Hold to charge, release to fire **one** beam: its strength grows linearly
+from 1× to `max`× over `ms`.  A game that declares `vars.charge` gets
+0..100 to show.  The recharge wait starts at the beam, because the trigger
+is already up.
+
+### The lock ("tunneling")
+
+```lua
+lock = { grace_ms = 300, curve = "fib", max = 8, deliver = "release" }
+```
+
+While the trigger is held, every beam that lands on the **same** target is
+one step.  Step *n* adds `curve(n)` standard units — `linear` 1,1,1…;
+`square` 1,3,5…; `fib` 1,1,2,3,5…; a table lists them, its last value
+repeating — times the profile's strength, and the total is capped at `max`.
+
+- `deliver = "release"`: nothing is sent until the press ends, then one LIT
+  weighing the total.  `"beam"` sends each step as it lands, weighing that
+  step alone; it needs the `ignore_immunity` effect to get past a
+  ruleset's immunity window.
+- **Lost**, with what it had built: a beam lands on someone else, or no
+  beam has landed for `grace_ms`.
+- **Delivered**: the trigger is released, or the pool runs dry.
+- Enlight shines in bursts, so "continuous" means consecutive bursts.  A
+  grace shorter than one burst plus its cooldown would lose the lock
+  between two beams that both landed, so it is never taken as less.
+- Going out loses it (`proj.strip`), as does switching projector — the
+  same "discard, not trade" as §11.
+- `vars.lock`, when declared, shows the step reached.
+
+The target is told nothing while a lock builds.  A fine game (§3) is where
+the curve has room: with 3 to 5 lives, `fib` is out by the fifth step.
+
+### The rest
+
+| Field | Meaning |
+|---|---|
+| `spinup = { to_ms, beams }` | the wait between beams goes from `cooldown_ms` to `to_ms` over that many beams of one press, and back on release |
+| `overheat_ms` | emptying the pool locks that projector for this long (doubled while dimmed) |
+| `uses` | a pickup dropped after that many beams — once the last one has been measured |
+| `lifetime_ms` | a pickup dropped that long after it was given; a re-grant restocks both |
+| `on_lit_refund` | energy back for each beam that reaches a player, capped at the pool |
+| `self_cost = { var, amount, floor }` | each beam also costs `amount` of any game var, and is refused if that would take it below `floor` (default 0); `amount = proj.units(1)` for a var counted in the game's units |

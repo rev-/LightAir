@@ -817,6 +817,269 @@ do
           "scaling a game's bands rewrote the standard catalogue")
   end
 
+  -- ---- fire modes: semi and burst ---------------------------------
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 30, name = "SEMI",  mode = "semi",  max_energy = 20, recharge = "none" },
+                                  { id = 31, name = "BURST", mode = "burst", burst = 3,
+                                    max_energy = 20, recharge = "none" } } }
+    local v = mk_vars(50)
+    P.reset(v)
+    la.trigger_down = function() return false end
+    P.grant(v, 30)
+    la.trigger_down = function() return true end
+    for _ = 1, 60 do P.tick(v); clock = clock + 10 end          -- 600 ms held
+    check(v.energy == 19, "mode", "semi fired " .. (20 - v.energy) .. " beams on one press")
+    la.trigger_down = function() return false end
+    P.tick(v); clock = clock + 200
+    la.trigger_down = function() return true end
+    P.tick(v)
+    check(v.energy == 18, "mode", "semi did not fire again on a new press")
+
+    la.trigger_down = function() return false end
+    P.tick(v); clock = clock + 200
+    P.grant(v, 31)
+    la.trigger_down = function() return true end
+    P.tick(v); clock = clock + 10
+    la.trigger_down = function() return false end              -- a tap
+    for _ = 1, 60 do P.tick(v); clock = clock + 10 end
+    check(v.energy == 17, "mode", "a tapped burst fired " .. (20 - v.energy) .. " beams, expected 3")
+    local ok = pcall(function() fresh{ vars = BASE_VARS, profiles = { { id = 1, mode = "full" } } } end)
+    check(not ok, "mode", "an unknown fire mode loaded")
+  end
+
+  -- ---- charge: hold, release, one heavier beam --------------------
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = { energy = "energy", spent = "energy_spent", charge = "chg" },
+                     game_unit = 10,
+                     profiles = { { id = 32, name = "CHARGE", max_energy = 20, recharge = "none",
+                                    charge = { ms = 1000, max = 3 } } } }
+    local v = mk_vars(50)
+    v.chg = 0
+    P.reset(v)
+    la.trigger_down = function() return false end
+    P.grant(v, 32)
+    la.trigger_down = function() return true end
+    for _ = 1, 50 do P.tick(v); clock = clock + 10 end          -- 500 ms held
+    check(v.energy == 20, "charge", "a charging projector fired while held")
+    check(v.chg >= 45 and v.chg <= 55, "charge", "half a charge reads " .. tostring(v.chg))
+    la.trigger_down = function() return false end
+    P.tick(v)
+    check(v.energy == 19, "charge", "the release did not fire the charged beam")
+    shine_result = { status = "player", id = 5, metres = 3, r = 0, ang = 0 }
+    check(P.result(v) == 5, "charge", "the charged beam's target was lost")
+    local w = P.payload(v)
+    check(w >= 19 and w <= 21, "charge", "half a charge to 3x weighs " .. tostring(w) .. ", expected about 20")
+    -- The recharge wait began at the beam: the trigger was already up.
+    clock = clock + 200
+    la.trigger_down = function() return true end
+    for _ = 1, 150 do P.tick(v); clock = clock + 10 end         -- past full
+    la.trigger_down = function() return false end
+    P.tick(v)
+    P.result(v)
+    check(P.payload(v) == 30, "charge", "a full charge is not 3x")
+    shine_result = { status = "no_hit", id = 0, metres = 0, r = 0, ang = 0 }
+  end
+
+  -- ---- the lock: beams on one target add up, one LIT on release ----
+  do
+    clock, shine_busy_until = 0, 0
+    local P = fresh{ vars = { energy = "energy", spent = "energy_spent", lock = "lk" },
+                     profiles = { { id = 33, name = "TUNNEL", max_energy = 50, recharge = "none", cooldown_ms = 0,
+                                    lock = { grace_ms = 300, curve = "fib", max = 9 } } } }
+    local v = mk_vars(50)
+    v.lk = 0
+    P.reset(v)
+    la.trigger_down = function() return false end
+    P.grant(v, 33)
+    local function hit(id)
+      shine_result = { status = id and "player" or "no_hit", id = id or 0, metres = 1, r = 0, ang = 0 }
+    end
+    -- One held beam: result() is polled, then the projector ticks.
+    local function beam(id)
+      hit(id)
+      local t = P.result(v)
+      P.tick(v)
+      clock = clock + 110
+      return t
+    end
+    la.trigger_down = function() return true end
+    P.tick(v); clock = clock + 110
+    for i = 1, 4 do
+      check(beam(5) == nil, "lock", "a locked beam was reported before the release (step " .. i .. ")")
+    end
+    check(v.lk == 4, "lock", "the step shown is " .. tostring(v.lk) .. ", expected 4")
+    la.trigger_down = function() return false end
+    hit(nil)
+    P.result(v); P.tick(v)                                      -- the release
+    local t = P.result(v)
+    check(t == 5, "lock", "the release did not deliver to the locked target")
+    check(P.payload(v) == 7, "lock",
+          "four fib steps (1+1+2+3) weigh " .. tostring(P.payload(v)) .. ", expected 7")
+    check(v.lk == 0, "lock", "the step shown was not cleared on delivery")
+    check(P.result(v) == nil and P.payload(v) == 1, "lock", "the lock was delivered twice")
+
+    -- The cap, a missed beam inside the grace, and a late measurement.
+    clock = clock + 500
+    la.trigger_down = function() return true end
+    P.tick(v); clock = clock + 110
+    beam(5); beam(5); beam(nil); beam(5); beam(5); beam(5)      -- 1+1+2+3+5 = 12, capped at 9
+    la.trigger_down = function() return false end
+    hit(nil); P.result(v); P.tick(v)
+    check(P.result(v) == 5 and P.payload(v) == 9, "lock",
+          "one missed beam inside the grace broke the lock, or the cap did not hold")
+    hit(5)
+    check(P.result(v) == nil, "lock", "a measurement after delivery started a lock of its own")
+
+    -- Lost: another target, and the grace running out.
+    clock = clock + 500
+    la.trigger_down = function() return true end
+    P.tick(v); clock = clock + 110
+    beam(5); beam(5); beam(7)
+    la.trigger_down = function() return false end
+    hit(nil); P.result(v); P.tick(v)
+    check(P.result(v) == 7 and P.payload(v) == 1, "lock",
+          "a beam on someone else did not start the lock over")
+    clock = clock + 500
+    la.trigger_down = function() return true end
+    P.tick(v); clock = clock + 110
+    beam(5); beam(5)
+    clock = clock + 400                                         -- unlit past the grace
+    beam(nil)
+    la.trigger_down = function() return false end
+    hit(nil); P.result(v); P.tick(v)
+    check(P.result(v) == nil, "lock", "a lock unlit past its grace was still delivered")
+
+    -- An empty pool delivers what was built.
+    clock = clock + 500
+    v.energy = 3
+    la.trigger_down = function() return true end
+    P.tick(v); clock = clock + 110
+    beam(5); beam(5)
+    check(v.energy == 0, "lock", "the pool did not run dry as set up")
+    hit(5)                                                      -- the last beam's own measurement
+    check(P.result(v) == 5 and P.payload(v) == 4, "lock",
+          "a dry pool did not deliver the lock (three steps = 4)")
+    la.trigger_down = function() return false end
+    P.tick(v)
+
+    -- deliver = "beam": each step goes out, weighing that step alone.
+    clock = clock + 20000
+    local B = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 34, name = "STEP", max_energy = 50, recharge = "none", cooldown_ms = 0,
+                                    lock = { curve = { 1, 2, 4 }, deliver = "beam" } } } }
+    B.reset(v)
+    la.trigger_down = function() return false end
+    B.grant(v, 34)
+    la.trigger_down = function() return true end
+    B.tick(v); clock = clock + 110
+    local got_w = {}
+    for i = 1, 4 do
+      hit(5)
+      check(B.result(v) == 5, "lock", "deliver = beam held a step back")
+      got_w[i] = B.payload(v)
+      B.tick(v); clock = clock + 110
+    end
+    check(got_w[1] == 1 and got_w[2] == 2 and got_w[3] == 4 and got_w[4] == 4, "lock",
+          "a table curve's steps were " .. table.concat(got_w, ","))
+    la.trigger_down = function() return false end
+    hit(nil); B.result(v); B.tick(v)
+    check(B.result(v) == nil, "lock", "deliver = beam sent a total on release as well")
+    local ok = pcall(function()
+      fresh{ vars = BASE_VARS, profiles = { { id = 1, lock = { curve = "cubic" } } } }
+    end)
+    check(not ok, "lock", "an unknown curve loaded")
+    shine_result = { status = "no_hit", id = 0, metres = 0, r = 0, ang = 0 }
+  end
+
+  -- ---- uses, lifetime, overheat, refund, self cost, spin-up ---------
+  do
+    clock, shine_busy_until = 0, 0
+    local pushed = {}
+    local real_config = la.shine_config
+    la.shine_config = function(t) pushed[#pushed + 1] = t.cooldown_ms end
+    local P = fresh{ vars = BASE_VARS,
+                     profiles = { { id = 35, name = "TWO",  uses = 2, max_energy = 20, recharge = "none" },
+                                  { id = 36, name = "TIME", lifetime_ms = 1000, max_energy = 20, recharge = "none" },
+                                  { id = 37, name = "HOT",  overheat_ms = 2000, max_energy = 2,
+                                    recharge = "ramp", recharge_delay_ms = 0, recharge_step_ms = 10 },
+                                  { id = 38, name = "BACK", on_lit_refund = 2, max_energy = 20, recharge = "none" },
+                                  { id = 39, name = "PRICE", max_energy = 20, recharge = "none",
+                                    self_cost = { var = "lives", amount = 2, floor = 1 } },
+                                  { id = 40, name = "SPIN", max_energy = 50, recharge = "none", cooldown_ms = 400,
+                                    spinup = { to_ms = 100, beams = 3 } } } }
+    local v = mk_vars(50)
+    v.lives = 4
+    P.reset(v)
+    la.trigger_down = function() return false end
+    local function hold(ticks)
+      la.trigger_down = function() return true end
+      for _ = 1, ticks do P.tick(v); clock = clock + 10 end
+      la.trigger_down = function() return false end
+      P.tick(v)
+    end
+
+    P.grant(v, 35)
+    hold(5); clock = clock + 300; P.tick(v)
+    check(P.active_id() == 35, "uses", "a projector with 2 uses went after one")
+    hold(5)
+    check(P.active_id() == 35 and v.energy == 18, "uses",
+          "the second beam did not fire, or the projector went before it was measured")
+    hold(5)
+    check(v.energy == 18, "uses", "a spent projector fired a third beam")
+    clock = clock + 300; P.tick(v)
+    check(P.active_id() == 0, "uses", "a projector with 2 uses was still in hand after them")
+
+    clock = clock + 1000
+    P.grant(v, 36)
+    hold(20)
+    check(P.active_id() == 36, "lifetime", "a timed projector went before its time")
+    clock = clock + 1000
+    P.tick(v)
+    check(P.active_id() == 0, "lifetime", "a timed projector outlived its time")
+
+    clock = clock + 1000
+    P.grant(v, 37)
+    local spent0 = v.energy_spent
+    hold(100)                                   -- 1 s: empties at once, then locked
+    check(v.energy_spent - spent0 == 2, "overheat",
+          "an overheated projector fired " .. (v.energy_spent - spent0) .. " beams, expected 2")
+    clock = clock + 2000
+    hold(5)
+    check(v.energy_spent - spent0 == 3, "overheat", "it never cooled down")
+
+    clock = clock + 1000
+    P.grant(v, 38)
+    hold(5)
+    check(v.energy == 19, "refund", "set-up: one beam")
+    shine_result = { status = "player", id = 5, metres = 1, r = 0, ang = 0 }
+    P.result(v)
+    check(v.energy == 20, "refund", "a beam that reached a player gave back " ..
+          (v.energy - 19) .. ", expected 1 (capped at the pool)")
+    shine_result = { status = "no_hit", id = 0, metres = 0, r = 0, ang = 0 }
+
+    clock = clock + 1000
+    P.grant(v, 39)
+    hold(5)
+    check(v.lives == 2, "self_cost", "a beam did not cost 2 lives")
+    clock = clock + 1000
+    local e0 = v.energy
+    hold(5)
+    check(v.lives == 2 and v.energy == e0, "self_cost",
+          "a beam was fired that would have taken lives below the floor")
+
+    clock = clock + 1000
+    P.grant(v, 40)
+    pushed = {}
+    hold(200)
+    check(pushed[1] == 300 and pushed[2] == 200 and pushed[3] == 100, "spinup",
+          "the cooldown went " .. table.concat(pushed, ",") .. ", expected 300,200,100,…")
+    check(pushed[#pushed] == 400, "spinup", "the release did not wind the cooldown back")
+    la.shine_config = real_config
+  end
+
   -- ---- clamps bite at load ---------------------------------------
   do
     local P = fresh{ vars = BASE_VARS,

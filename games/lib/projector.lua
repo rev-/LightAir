@@ -67,6 +67,20 @@ local awaiting_release = false
 local ready_at     = 0     -- millis before which trigger() refuses
 local evicted_name = nil
 
+-- ---- The beam in flight, and what the press is building ----------
+-- All of this is the shining side's own business: none of it travels,
+-- only the strength the beam ends up with.
+local shot_units     = nil  -- strength of the hit result() just returned; nil = the profile's
+local beam_mul       = 1    -- what the beam in flight was charged to
+local held_beams     = 0    -- beams accepted during this press (spinup)
+local burst_left     = 0    -- beams this press still owes (semi / burst)
+local charge_from    = nil  -- millis the charge began
+local charge_ready   = nil  -- a charged beam waiting for Enlight to take it
+-- The lock: how many beams in a row landed on one target.
+--   closing  the press ended; deliver at the next result()
+--   deaf     delivered; ignore measurements until the next beam
+local lock = { target = nil, n = 0, last = 0, closing = false, deaf = false }
+
 -- ---- DIM (a MALUS) -----------------------------------------------
 -- While dimmed, every projector the player holds has a smaller pool, a
 -- slower recharge and a longer cooldown.  Fixed factors: retune here.
@@ -122,6 +136,11 @@ local LIM = {
   recharge_ms       = { 0, 60000 },
   recharge_step_ms  = { 1, 60000 },
   max_owned         = { 1,  8 },
+  burst             = { 1,  10 },
+  overheat_ms       = { 0,  60000 },
+  uses              = { 0,  1000 },    -- 0 = no limit
+  lifetime_ms       = { 0,  3600000 }, -- 0 = no limit
+  on_lit_refund     = { 0,  200 },
 }
 
 -- Fields that were renamed, and what replaced them.  Named rather than
@@ -181,6 +200,9 @@ local function fx_mask(list, who)
 end
 
 local RECHARGE = { refill = true, ramp = true, none = true }
+local MODE     = { auto = true, semi = true, burst = true }
+local CURVE    = { linear = true, square = true, fib = true }
+local DELIVER  = { release = true, beam = true }
 
 local function clamp(v, lo, hi)
   if v < lo then return lo end
@@ -504,6 +526,24 @@ local function prepare(raw)
     error("projector profile '" .. who ..
           "': recharge must be \"refill\", \"ramp\" or \"none\"", 0)
   end
+  if p.mode ~= nil and not MODE[p.mode] then
+    error("projector profile '" .. who ..
+          "': mode must be \"auto\", \"semi\" or \"burst\"", 0)
+  end
+  local L = p.lock
+  if L then
+    if L.curve ~= nil and type(L.curve) ~= "table" and not CURVE[L.curve] then
+      error("projector profile '" .. who ..
+            "': lock.curve must be \"linear\", \"square\", \"fib\" or a table", 0)
+    end
+    if L.deliver ~= nil and not DELIVER[L.deliver] then
+      error("projector profile '" .. who ..
+            "': lock.deliver must be \"release\" or \"beam\"", 0)
+    end
+  end
+  if p.self_cost and type(p.self_cost.var) ~= "string" then
+    error("projector profile '" .. who .. "': self_cost needs a var", 0)
+  end
   for k in pairs(LIM) do clamp_field(p, k) end
   return p
 end
@@ -709,6 +749,11 @@ local function activate(vars, idx)
   end
 
   ready_at = la.now() + val(vars, p.ready_ms, 0)
+  -- Whatever the press was building belonged to the projector that left.
+  burst_left, held_beams, charge_from, charge_ready = 0, 0, nil, nil
+  lock.target, lock.n, lock.closing = nil, 0, false
+  if var.lock   then vars[var.lock]   = 0 end
+  if var.charge then vars[var.charge] = 0 end
   -- A shared pool's reload clock is the pool's, and a switch leaves it be.
   if not shared then publish_reload(vars, 0, p) end
 end
@@ -753,16 +798,28 @@ function P.give(vars, id)
 
   local held = find_slot(id)
   if held and shared then return true end
+  -- A limited pickup counts from the moment it is given, and a re-grant
+  -- restocks it.
+  local p   = defs[id]
+  local now = la.now()
+  local uses = val(vars, p.uses, 0)
+  local life = val(vars, p.lifetime_ms, 0)
+  local function limit(s)
+    s.uses       = (uses > 0) and uses or nil
+    s.expires_at = (life > 0) and (now + life) or nil
+    s.drop_at    = nil
+  end
   if held then
-    slots[held].energy = max_energy(vars, defs[id])
+    slots[held].energy = max_energy(vars, p)
+    limit(slots[held])
     if held == active_idx then set_energy(vars, slots[held].energy) end
     return true
   end
 
   if #slots - 1 >= cfg.max_owned then evict_oldest(vars) end
-  local now = la.now()
-  slots[#slots + 1] = { id = id, energy = max_energy(vars, defs[id]),
-                        acquired_at = now, ramp_at = now }
+  local s = { id = id, energy = max_energy(vars, p), acquired_at = now, ramp_at = now }
+  limit(s)
+  slots[#slots + 1] = s
   return true
 end
 
@@ -880,6 +937,11 @@ end
 function P.strip(vars)
   P.set_dim(vars, false)
   kind_on, fx_on = kind_on & kind_sticky, fx_on & fx_sticky
+  -- Whatever a press was building is gone with the player.
+  lock.target, lock.n, lock.closing = nil, 0, false
+  burst_left, held_beams, charge_from, charge_ready = 0, 0, nil, nil
+  if var.lock   then vars[var.lock]   = 0 end
+  if var.charge then vars[var.charge] = 0 end
   local in_hand = slots[active_idx].id
   slots[active_idx].energy = get_energy(vars)      -- bank before reshuffling
   for i = #slots, 2, -1 do
@@ -924,6 +986,8 @@ function P.reset(vars)
   awaiting_release = false
   evicted_name   = nil
   dimmed         = false
+  shot_units, beam_mul = nil, 1
+  lock.deaf      = false
   role_tag       = 0
   kind_on, kind_sticky = 0, 0
   fx_on,   fx_sticky   = 0, 0
@@ -947,11 +1011,122 @@ end
 --   Nothing gates on distance.  A profile's range_m is a label for now:
 --   the estimate is not trustworthy enough to refuse a hit on (see
 --   docs/projector.md §2), and reach is what a profile's cycles buy.
+--
+--   A profile with a `lock` does not report each beam: it counts the
+--   beams that land on one target in a row and reports once, when the
+--   press ends (see "The lock" below).
 -- ================================================================
+
+-- What a beam of the projector in hand weighs, in the game's currency.
+local function strength_of(vars, p)
+  return clamp(math.floor(val(vars, p.strength, 1) * unit + 0.5), 0, 255)
+end
+
+-- A beam reached a player: on_lit_refund gives energy back.
+local function lit(vars, p)
+  local back = val(vars, p.on_lit_refund, 0)
+  if back > 0 then
+    local m = max_energy(vars, pool_profile())
+    local e = get_energy(vars) + back
+    set_energy(vars, (m > 0 and e > m) and m or e)
+  end
+end
+
+-- ================================================================
+--   The lock ("tunneling").
+--
+--     lock = { grace_ms = 300,     -- the lock survives this long unlit
+--              curve    = "fib",   -- "linear", "square", "fib", or a table
+--              max      = 8,       -- cap, in standard units
+--              deliver  = "release" }   -- or "beam"
+--
+--   While the trigger is held, every beam that lands on the SAME target
+--   is one step.  Step n adds curve(n) standard units (linear 1,1,1…;
+--   square 1,3,5…; fib 1,1,2,3,5…; a table lists them, its last value
+--   repeating), times the profile's strength, and the total is capped at
+--   `max`.  With deliver = "release" nothing is sent until the press ends:
+--   one LIT, weighing the total.  With "beam" each step is sent as it
+--   lands, weighing that step alone — which needs ignore_immunity to get
+--   past a ruleset's immunity window.
+--
+--   The lock is lost, with what it had built, when a beam lands on
+--   someone else or when no beam has landed for grace_ms.  It is
+--   delivered when the trigger is released and when the pool runs dry.
+--   Enlight shines in bursts, so a grace shorter than one burst and its
+--   cooldown would lose the lock between two beams that both landed: it is
+--   never taken as less than that.
+--
+--   vars.lock, when the game declares it, shows the step reached.
+-- ================================================================
+local function curve_step(c, n)
+  if type(c) == "table" then return c[n] or c[#c] or 0 end
+  if c == "fib" then
+    local a, b = 1, 1
+    for _ = 3, n do a, b = b, a + b end
+    return b
+  end
+  if c == "square" then return 2 * n - 1 end
+  return 1
+end
+
+local function lock_units(vars, p, from, to)
+  local sum = 0
+  for i = from, to do sum = sum + curve_step(p.lock.curve, i) end
+  local cap = clamp(p.lock.max or LIM.strength[2], 1, 25) * unit
+  if cap > 255 then cap = 255 end
+  return clamp(math.floor(sum * val(vars, p.strength, 1) * unit + 0.5), 0, cap)
+end
+
+local function lock_clear(vars)
+  lock.target, lock.n = nil, 0
+  if var.lock then vars[var.lock] = 0 end
+end
+
 function P.result(vars)
+  local p = active()
   local status, id, metres = la.shine_result()
-  if status ~= "player" then return nil, status end
-  return id, metres
+  shot_units = nil
+
+  if not p.lock then
+    if status ~= "player" then return nil, status end
+    lit(vars, p)
+    if beam_mul ~= 1 then
+      shot_units = clamp(math.floor(strength_of(vars, p) * beam_mul + 0.5), 0, 255)
+    end
+    return id, metres
+  end
+
+  local now  = la.now()
+  local beam = (p.lock.deliver == "beam")
+  if status == "player" and not lock.deaf then
+    lit(vars, p)
+    if lock.target ~= id then lock.target, lock.n = id, 0 end   -- someone else: start over
+    lock.n    = lock.n + 1
+    lock.last = now
+    if var.lock then vars[var.lock] = lock.n end
+    if beam then
+      shot_units = lock_units(vars, p, lock.n, lock.n)
+      return id, metres
+    end
+  end
+
+  if lock.target then
+    local grace = val(vars, p.lock.grace_ms, 0)
+    local floor = la.shine_ms() + cooldown_of(vars, p)
+    if grace < floor then grace = floor end
+    if now - lock.last > grace then lock_clear(vars) end
+  end
+
+  if lock.closing then
+    lock.closing, lock.deaf = false, true
+    local target, n = lock.target, lock.n
+    lock_clear(vars)
+    if target and n > 0 and not beam then
+      shot_units = lock_units(vars, p, 1, n)
+      return target, 0
+    end
+  end
+  return nil, status
 end
 
 -- ================================================================
@@ -968,16 +1143,13 @@ end
 --   No projector id travels: a receiver acts on what a beam IS (its kind,
 --   its effects), never on which projector produced it.
 -- ================================================================
--- What a beam of the projector in hand weighs, in the game's currency.
-local function strength_of(vars, p)
-  return clamp(math.floor(val(vars, p.strength, 1) * unit + 0.5), 0, 255)
-end
-
 function P.payload(vars, spare1, spare2)
   local p = active()
   local gate = val(vars, p.rssi_min, 0)
   local e = (p.fx or 0) | fx_on
-  return strength_of(vars, p),
+  -- shot_units: the hit result() just returned was charged, or is a
+  -- lock's total — not what one plain beam of this profile weighs.
+  return shot_units or strength_of(vars, p),
          val(vars, p.kind, 0) | kind_on,
          role_tag,
          (gate < 0) and -gate or 0,
@@ -1092,6 +1264,77 @@ local function tick_recharge(vars, p, now)
 end
 
 -- ================================================================
+--   Fire modes, charge, spin-up, overheat, limited use, self cost.
+--
+--     mode = "auto"            fires while the trigger is held (default)
+--     mode = "semi"            one beam per press
+--     mode = "burst", burst = 3    that many beams per press
+--
+--     charge = { ms = 1500, max = 3 }
+--         Hold to charge, release to fire ONE beam: its strength grows
+--         linearly from 1x to `max`x over `ms`.  vars.charge, when the
+--         game declares it, shows 0..100.
+--
+--     spinup = { to_ms = 50, beams = 8 }
+--         The wait between beams goes from the profile's cooldown_ms to
+--         to_ms over that many beams of one press, and back on release.
+--
+--     overheat_ms      emptying the pool locks the projector for this long
+--     uses             dropped after that many beams          } a pickup,
+--     lifetime_ms      dropped that long after it was given   } never the baseline
+--     on_lit_refund    energy back for each beam that reaches a player
+--     self_cost = { var = "lives", amount = proj.units(1), floor = 1 }
+--         Each beam also costs `amount` of any game var, and is refused
+--         if that would take the var below `floor` (default 0).
+-- ================================================================
+local function charge_mul(vars, p, now)
+  local c = p.charge
+  local ms  = val(vars, c.ms, 1000)
+  local top = val(vars, c.max, 2)
+  local held = now - (charge_from or now)
+  if ms <= 0 or held >= ms then return top end
+  return 1 + (top - 1) * held / ms
+end
+
+local function spin_cooldown(vars, p, beams)
+  local from, sp = cooldown_of(vars, p), p.spinup
+  local to = val(vars, sp.to_ms, from)
+  if dimmed then to = to * DIM.cooldown_mul end
+  local n = val(vars, sp.beams, 1)
+  if n < 1 or beams >= n then return to end
+  return from + (to - from) * beams // n
+end
+
+local function can_pay(vars, p)
+  local sc = p.self_cost
+  if not sc then return true end
+  return (vars[sc.var] or 0) - val(vars, sc.amount, 1) >= val(vars, sc.floor, 0)
+end
+
+-- What the press ends: the lock closes, the spin-up winds down.
+local function end_press(vars, p)
+  if p.lock then lock.closing = true end
+  if p.spinup and held_beams > 0 then
+    la.shine_config{ cooldown_ms = cooldown_of(vars, p) }
+  end
+  held_beams = 0
+end
+
+-- Limited use and limited time: a pickup that has run out is dropped.  One
+-- that fired its last beam is kept (and refuses to fire) until that beam
+-- has been measured — the hit must go out as this projector's, not the
+-- baseline's.
+local function expire(vars, now)
+  for i = #slots, 2, -1 do
+    local s = slots[i]
+    if (s.drop_at and now >= s.drop_at)
+       or (s.expires_at and now >= s.expires_at) then
+      P.drop(vars, s.id)
+    end
+  end
+end
+
+-- ================================================================
 --   tick(vars) — the whole trigger-to-beam path, once per cycle
 --
 --   Energy is spent ONLY on a run Enlight actually accepted.  la.shine()
@@ -1102,28 +1345,85 @@ end
 --   Returns true while the trigger is down, for a ruleset that cares.
 -- ================================================================
 function P.tick(vars)
-  local p      = active()
   local now    = la.now()
+  expire(vars, now)
+  local p      = active()
+  local s      = slots[active_idx]
   local active_trigger = la.trigger_down(1)
+  local pressed  = active_trigger and not was_active
+  local released = was_active and not active_trigger
+
+  -- What this tick would fire, by mode.
+  local want
+  if p.charge then
+    if pressed then charge_from, charge_ready = now, nil end
+    if released and charge_from then
+      charge_ready = charge_mul(vars, p, now)
+      charge_from  = nil
+    end
+    if var.charge then
+      vars[var.charge] = charge_from
+        and math.floor((charge_mul(vars, p, now) - 1) * 100 /
+                       math.max(val(vars, p.charge.max, 2) - 1, 0.001)) or 0
+    end
+    want = charge_ready ~= nil
+  elseif (p.mode or "auto") == "auto" then
+    want = active_trigger
+  else
+    if pressed then burst_left = (p.mode == "burst") and val(vars, p.burst, 3) or 1 end
+    want = burst_left > 0
+  end
 
   local cost = val(vars, p.cost, 1)
-  if active_trigger
+  if want
      and now >= ready_at
+     and now >= (s.hot_until or 0)         -- overheated: this projector only
+     and not s.drop_at
      and get_energy(vars) >= cost
+     and can_pay(vars, p)
      and la.shine() then
     set_energy(vars, get_energy(vars) - cost)
     if var.spent then vars[var.spent] = (vars[var.spent] or 0) + cost end
+    local sc = p.self_cost
+    if sc then vars[sc.var] = (vars[sc.var] or 0) - val(vars, sc.amount, 1) end
     la.ui_enlight(la.shine_ms())
     pool_slot().ramp_at = now
-    awaiting_release    = true
+    lock.deaf = false
+    beam_mul  = charge_ready or 1
+    charge_ready = nil
+    if burst_left > 0 then burst_left = burst_left - 1 end
+    -- The recharge wait starts at the release that follows a beam.  A beam
+    -- fired with the trigger already up (a charged one, the tail of a
+    -- burst) has had its release.
+    if active_trigger then awaiting_release = true
+    else release_at, awaiting_release = now, false end
+
+    held_beams = held_beams + 1
+    if p.spinup then
+      la.shine_config{ cooldown_ms = spin_cooldown(vars, p, held_beams) }
+    end
+    if s.uses then
+      s.uses = s.uses - 1
+      if s.uses <= 0 then s.drop_at = now + la.shine_ms() + cooldown_of(vars, p) + 20 end
+    end
+    if get_energy(vars) < cost then
+      local hot = val(vars, p.overheat_ms, 0)
+      if hot > 0 then s.hot_until = now + stretch(hot) end
+    end
   end
+
+  -- A lock whose pool has run dry delivers what it built.
+  if p.lock and active_trigger and lock.target and get_energy(vars) < cost then
+    lock.closing = true
+  end
+  if released then end_press(vars, p) end
 
   -- The wait is anchored by the release that FOLLOWS a beam.  A press that
   -- spends nothing — an empty pool — neither re-anchors it nor holds it
   -- back: once started, the wait runs to completion, so leaning on a dead
   -- trigger still gets the energy back on time.  Only a press that actually
   -- fires restarts the clock, and it does so from its own release.
-  if was_active and not active_trigger and awaiting_release then
+  if released and awaiting_release then
     release_at       = now
     awaiting_release = false
   end
